@@ -1,5 +1,5 @@
 from mcp.server.fastmcp import FastMCP
-from utils import read_prompt
+from nxs.utils import read_prompt
 
 mcp = FastMCP("DocumentMCP", log_level="ERROR")
 

@@ -11,7 +11,10 @@
       "Bash(find . -name \"*.py\" -path \"./tui/*\" -exec grep -l \"border_title\\|Border\\|title\" {} ;)",
       "Bash(sed -n '127,160p' /Users/fperez/dev/nxs/.pixi/envs/default/lib/python3.13/site-packages/rich/markdown.py)",
       "Bash(git init)",
-      "Bash(git add -A)"
+      "Bash(git add -A)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nInitial commit: Nexus TUI chat application\n\nNexus is a full-screen TUI chat application integrating Claude AI with\ndocument retrieval and MCP tool support. Built with Textual and Rich.\n\nFeatures:\n- Real-time streaming chat interface\n- Document retrieval with @ mentions\n- Command execution with / prefix\n- Auto-completion for resources and commands\n- MCP (Model Context Protocol) integration\n- Beautiful markdown rendering\n- Syntax highlighting for code blocks\nEOF\n)\")",
+      "Bash(PYTHONPATH=/Users/fperez/dev/nxs/src pixi run python -m nxs --help)",
+      "Bash(rm -f check_theme.py debug_input_styles.py test_input.py test_input_visibility.py input_styles_debug.txt theme_colors.txt visibility_test.log)"
     ],
     "deny": [],
     "ask": []

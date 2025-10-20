@@ -1,7 +1,7 @@
 import json
 from typing import Optional, Literal, List
 from mcp.types import CallToolResult, Tool, TextContent
-from mcp_client import MCPClient
+from nxs.mcp_client import MCPClient
 from anthropic.types import Message, ToolResultBlockParam
 
 

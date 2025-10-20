@@ -2,10 +2,10 @@ from typing import List, Tuple
 from mcp.types import Prompt, PromptMessage
 from anthropic.types import MessageParam
 
-from core.chat import AgentLoop
-from core.claude import Claude
-from mcp_client import MCPClient
-from core.logger import get_logger
+from nxs.core.chat import AgentLoop
+from nxs.core.claude import Claude
+from nxs.mcp_client import MCPClient
+from nxs.core.logger import get_logger
 
 logger = get_logger("command_control")
 

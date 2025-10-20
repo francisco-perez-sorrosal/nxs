@@ -5,11 +5,11 @@ from dotenv import load_dotenv
 from contextlib import AsyncExitStack
 
 # Import logger setup first to ensure logging is configured
-from core.logger import get_logger, setup_logger
-from mcp_client import MCPClient
-from core.claude import Claude
-from core.command_control import CommandControlAgent
-from tui.app import NexusApp
+from nxs.core.logger import get_logger, setup_logger
+from nxs.mcp_client import MCPClient
+from nxs.core.claude import Claude
+from nxs.core.command_control import CommandControlAgent
+from nxs.tui.app import NexusApp
 
 # Ensure logging is set up
 logger = get_logger("main")
@@ -32,11 +32,20 @@ async def main():
     clients = {}
 
     command, args = (
-        ("uv", ["run", "mcp_server.py"]) if os.getenv("USE_UV", "0") == "1" else ("python", ["mcp_server.py"])
+        ("uv", ["run", "-m", "nxs.mcp_server"]) if os.getenv("USE_UV", "0") == "1" else ("python", ["-m", "nxs.mcp_server"])
     )
 
+    # Set up environment for MCP server subprocess
+    server_env = os.environ.copy()
+    # Ensure PYTHONPATH includes src directory
+    src_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "src")
+    if "PYTHONPATH" in server_env:
+        server_env["PYTHONPATH"] = f"{src_path}:{server_env['PYTHONPATH']}"
+    else:
+        server_env["PYTHONPATH"] = src_path
+
     async with AsyncExitStack() as stack:
-        doc_client = await stack.enter_async_context(MCPClient(command=command, args=args))
+        doc_client = await stack.enter_async_context(MCPClient(command=command, args=args, env=server_env))
         clients["doc_client"] = doc_client
 
         for i, server_script in enumerate(server_scripts):
