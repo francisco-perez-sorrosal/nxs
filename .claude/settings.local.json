@@ -16,7 +16,8 @@
       "Bash(PYTHONPATH=/Users/fperez/dev/nxs/src pixi run python -m nxs --help)",
       "Bash(rm -f check_theme.py debug_input_styles.py test_input.py test_input_visibility.py input_styles_debug.txt theme_colors.txt visibility_test.log)",
       "Bash(git commit -m \"$(cat <<''EOF''\nrefactor: reorganize project under src/ layout\n\nReorganized the entire project structure to follow Python best practices\nwith a src/ layout for better packaging and distribution.\n\nChanges:\n- Moved all source code to src/nxs/ directory\n- Renamed main.py to __main__.py for proper module execution\n- Updated all imports to use nxs.* namespace\n- Updated pyproject.toml for src-layout packaging\n- Updated pixi tasks with PYTHONPATH environment variable\n- Modified __main__.py to pass PYTHONPATH to MCP server subprocess\n- Updated tests to import from nxs.* namespace\n- Removed temporary debug files\n\nProject structure:\n  src/nxs/\n    ├── __init__.py\n    ├── __main__.py          (entry point)\n    ├── core/                (agent logic)\n    ├── tui/                 (UI components)\n    ├── prompts/             (prompt templates)\n    ├── mcp_client.py\n    ├── mcp_server.py\n    └── utils.py\n\nBenefits:\n- Cleaner package namespace (nxs.core, nxs.tui)\n- Easier to install as editable package\n- Better separation of source code and project files\n- Follows PEP 420 and modern Python packaging standards\nEOF\n)\")",
-      "Bash(tree -L 3 src/ -I \"__pycache__\")"
+      "Bash(tree -L 3 src/ -I \"__pycache__\")",
+      "Bash(wasmer:*)"
     ],
     "deny": [],
     "ask": []
