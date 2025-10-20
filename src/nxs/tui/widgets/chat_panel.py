@@ -178,6 +178,11 @@ class ChatPanel(RichLog):
         Returns:
             A Group containing left-aligned headers and markdown content
         """
+        # BUGFIX: Ensure markdown headers start on new lines
+        # Sometimes Claude streams text like "...text:# Header" without line breaks
+        # This regex adds a newline before any # that follows non-whitespace
+        markdown_text = re.sub(r'(\S)(#+\s+)', r'\1\n\n\2', markdown_text)
+
         # Split the markdown into lines and process headers separately
         lines = markdown_text.split('\n')
         renderables = []
