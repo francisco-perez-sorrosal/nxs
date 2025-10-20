@@ -1,0 +1,135 @@
+/* Nexus TUI Styles - Textual CSS */
+
+/* Global app styling */
+Screen {
+    background: $surface;
+}
+
+/* Header styling */
+Header {
+    background: $primary;
+    color: $text;
+    dock: top;
+    height: 1;
+}
+
+/* Footer styling */
+Footer {
+    background: $panel;
+    color: $text;
+    dock: bottom;
+    height: 1;
+}
+
+/* Main container */
+#app-container {
+    height: 100%;
+    layout: vertical;
+}
+
+/* Main content area (chat + status) */
+#main-content {
+    height: 1fr;
+    layout: vertical;
+}
+
+/* Chat panel - takes most of the space */
+#chat {
+    height: 3fr;
+    border: solid $primary;
+    border-title-color: $accent;
+    border-title-align: left;
+    padding: 1;  /* Equal padding on all sides */
+    scrollbar-gutter: stable;
+    background: $surface;
+}
+
+#chat:focus {
+    border: solid $accent;
+}
+
+/* Status panel - smaller, shows tool execution */
+#status {
+    height: 1fr;
+    min-height: 8;
+    border: solid $warning;
+    border-title-color: $warning;
+    border-title-align: left;
+    padding: 1;  /* Equal padding on all sides */
+    scrollbar-gutter: stable;
+    background: $surface;
+}
+
+#status:focus {
+    border: solid $warning-darken-1;
+}
+
+/* Input field - part of vertical layout */
+#input {
+    height: 3;
+    border: solid $success;
+}
+
+#input:focus {
+    border: solid $accent;
+}
+
+/* AutoComplete overlay styling */
+AutoComplete {
+    background: $surface;
+    border: solid $primary;
+}
+
+/* AutoComplete dropdown list */
+AutoCompleteList {
+    background: $surface;
+    border: solid $primary;
+    color: $text;
+}
+
+/* Dropdown item styling */
+Dropdown {
+    background: $panel;
+    border: solid $primary;
+}
+
+DropdownItem {
+    background: $panel;
+    color: $text;
+}
+
+DropdownItem:hover {
+    background: $accent;
+    color: $text;
+}
+
+DropdownItem.-selected {
+    background: $accent;
+    color: $text;
+}
+
+/* Scrollbar styling */
+Scrollbar {
+    background: $panel;
+}
+
+Scrollbar:hover {
+    background: $panel-lighten-1;
+}
+
+Scrollbar.-vertical {
+    width: 1;
+}
+
+Scrollbar.-horizontal {
+    height: 1;
+}
+
+/* Container styling */
+Container {
+    background: $surface;
+}
+
+Vertical {
+    background: $surface;
+}

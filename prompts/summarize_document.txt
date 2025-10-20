@@ -1,0 +1,10 @@
+Please provide a concise summary of the following document.
+
+Document ID: {doc_id}
+
+Create a summary that includes:
+- Main topics covered
+- Key points and findings
+- Important conclusions or recommendations
+
+Keep the summary to 2-3 paragraphs maximum.

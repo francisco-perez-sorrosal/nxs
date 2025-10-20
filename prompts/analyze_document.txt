@@ -1,0 +1,11 @@
+Analyze the following document and provide insights on its content, structure, and quality.
+
+Document ID: {doc_id}
+
+Please analyze:
+1. Document structure and organization
+2. Content quality and completeness
+3. Areas for improvement
+4. Key strengths and weaknesses
+
+Provide actionable recommendations for enhancement.

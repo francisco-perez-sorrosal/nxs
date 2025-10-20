@@ -1,0 +1,170 @@
+# Ruff configuration file
+# This file contains all ruff linting rules and settings
+
+target-version = "py311"
+line-length = 120
+exclude = [".git", ".pixi", "__pycache__", ".pytest_cache", ".mypy_cache", "dist", "build"]
+
+[lint]
+# Reasonable rule set - balance between code quality and practicality
+select = [
+    "E",     # pycodestyle errors (syntax errors, indentation, etc.)
+    "W",     # pycodestyle warnings (style issues)
+    "F",     # pyflakes (unused imports, variables, etc.)
+    "I",     # isort (import sorting)
+    "N",     # pep8-naming (naming conventions)
+    "UP",    # pyupgrade (modernize Python syntax)
+    "S",     # flake8-bandit (security issues)
+    "B",     # flake8-bugbear (common bugs and design problems)
+    "A",     # flake8-builtins (builtin name shadowing)
+    "COM",   # flake8-commas (comma consistency)
+    "C4",    # flake8-comprehensions (comprehension improvements)
+    "DTZ",   # flake8-datetimez (datetime timezone issues)
+    "T10",   # flake8-debugger (debugger statements)
+    "EM",    # flake8-errmsg (error message formatting)
+    "EXE",   # flake8-executable (executable permissions)
+    "FA",    # flake8-future-annotations (future annotations)
+    "ISC",   # flake8-implicit-str-concat (string concatenation)
+    "ICN",   # flake8-import-conventions (import conventions)
+    "G",     # flake8-logging-format (logging format)
+    "INP",   # flake8-no-pep420 (namespace packages)
+    "PIE",   # flake8-pie (miscellaneous lints)
+    "T20",   # flake8-print (print statements)
+    "PYI",   # flake8-pyi (stub files)
+    "PT",    # flake8-pytest-style (pytest style)
+    "Q",     # flake8-quotes (quote consistency)
+    "RSE",   # flake8-raise (raise statements)
+    "RET",   # flake8-return (return statements)
+    "SLF",   # flake8-self (self usage)
+    "SLOT",  # flake8-slots (slots usage)
+    "SIM",   # flake8-simplify (simplification suggestions)
+    "TID",   # flake8-tidy-imports (import tidiness)
+    "TCH",   # flake8-type-checking (type checking imports)
+    "INT",   # flake8-gettext (internationalization)
+    "ARG",   # flake8-unused-arguments (unused arguments)
+    "PTH",   # flake8-use-pathlib (pathlib usage)
+    "ERA",   # eradicate (commented-out code)
+    "PD",    # pandas-vet (pandas best practices)
+    "PGH",   # pygrep-hooks (miscellaneous checks)
+    "PL",    # pylint (pylint rules)
+    "TRY",   # tryceratops (try/except best practices)
+    "FLY",   # flynt (f-string conversion)
+    "NPY",   # numpy (numpy best practices)
+    "AIR",   # airflow (airflow best practices)
+    "PERF",  # perflint (performance issues)
+    "FURB",  # refurb (code suggestions)
+    "LOG",   # flake8-logging (logging best practices)
+    "RUF",   # ruff-specific rules
+]
+
+# Ignore rules that are too strict or not practical for development
+ignore = [
+    # Style preferences (let formatters handle these)
+    "Q000",      # Single quotes vs double quotes (let black handle this)
+    "E501",      # Line too long (let black handle this)
+    "COM812",    # Missing trailing comma (let black handle this)
+    "W292",      # No newline at end of file (let formatters handle this)
+    "W291",      # Trailing whitespace (let formatters handle this)
+    
+    # Complexity rules (too strict for most projects)
+    "PLR0913",   # Too many arguments (allow reasonable number)
+    "PLR0912",   # Too many branches (allow reasonable complexity)
+    "PLR0915",   # Too many statements (allow reasonable function length)
+    "PLR0911",   # Too many return statements
+    "PLR0916",   # Too many boolean expressions
+    "PLR0914",   # Too many locals
+    "PLR0904",   # Too many public methods
+    "PLR0917",   # Too many positional arguments
+    "C901",      # Function is too complex
+    
+    # Common development patterns
+    "S101",      # Use of assert (allow in tests and development)
+    "T201",      # print statements (allow for debugging)
+    "B008",      # Function calls in argument defaults (common pattern)
+    "B006",      # Mutable data structures in argument defaults (common pattern)
+    "B904",      # Raise without from inside except (sometimes necessary)
+    
+    # Boolean and type hints
+    "FBT001",    # Boolean positional arg in function definition
+    "FBT002",    # Boolean default arg in function definition
+    "FBT003",    # Boolean positional value in function call
+    
+    # Exception handling (can be too opinionated)
+    "EM101",     # String literal in exception (sometimes appropriate)
+    "EM102",     # f-string literal in exception
+    "EM103",     # Dot format in exception
+    "TRY003",    # Long messages outside exception class
+    "TRY201",    # Raise without from inside except
+    "TRY301",    # Abstract raise to an inner function
+    "TRY302",    # Consider moving statement to else block
+    
+    # Return statements (can be too opinionated)
+    "RET504",    # Unnecessary assignment before return
+    "RET505",    # Unnecessary else after return
+    "RET506",    # Unnecessary else after raise
+    "RET507",    # Unnecessary else after continue
+    "RET508",    # Unnecessary else after break
+    
+    # Simplification suggestions (can be too opinionated)
+    "SIM108",    # Use ternary operator instead of if-else-block
+    "SIM115",    # Use context manager for opening files
+    "SIM117",    # Use single with statement with multiple contexts
+    
+    # Path handling (allow both os.path and pathlib)
+    "PTH110",    # os.path.exists() should be replaced by Path.exists()
+    "PTH118",    # os.path.join() should be replaced by Path with / operator
+    "PTH123",    # open() should be replaced by Path.open()
+    
+    # Miscellaneous rules that are too strict
+    "PLR2004",   # Magic value used in comparison
+    "ERA001",    # Found commented-out code (allow for development)
+    "PLW2901",   # for loop variable overwritten by assignment target
+    "PLC0415",   # import should be at the top-level of a file
+    "PLW1641",   # Object does not implement __hash__ method
+    "RUF012",    # Mutable class attributes should be annotated with typing.ClassVar
+    "RUF023",    # __slots__ is not sorted
+    "ISC003",    # Explicitly concatenated string should be implicitly concatenated
+    "ISC001",    # Implicit string concatenation
+    "FURB132",   # Use discard() instead of check and remove
+    "B905",      # zip() without an explicit strict= parameter
+    "DTZ001",    # datetime.datetime() called without a tzinfo argument
+    "BLE001",    # Do not catch blind exception: Exception
+    "SLF001",    # Private member accessed (sometimes necessary)
+    "N801",      # Class name should use CapWords convention (allow exceptions)
+    "TC001",     # Import typing.TYPE_CHECKING blocks (updated from TCH001)
+    "TC002",     # Import typing.TYPE_CHECKING blocks (updated from TCH002)
+    "TC003",     # Import typing.TYPE_CHECKING blocks (updated from TCH003)
+    # Additional relaxed rules for common patterns
+    "I001",      # Import block is un-sorted or un-formatted
+    "UP035",     # typing.List/Tuple is deprecated
+    "UP006",     # Use list/tuple instead of List/Tuple
+    "UP045",     # Use X | None for type annotations
+    "ARG002",    # Unused method arguments
+    "A001",      # Variable shadowing Python builtins
+    "PYI030",    # Multiple literal members in union
+    "RET503",    # Missing explicit return
+    "E402",      # Module level import not at top of file
+    "F401",      # Imported but unused
+]
+
+# Per-file rule relaxations
+[lint.per-file-ignores]
+# Test files can be more relaxed
+"tests/*" = [
+    "S101",      # Allow assert statements
+    "T201",      # Allow print statements for debugging
+    "F401",      # Allow unused imports for test fixtures
+    "F811",      # Allow redefinition for test setup
+    "ARG002",    # Allow unused arguments for test methods
+    "PLR2004",   # Allow magic values in tests
+]
+# __init__.py files can have unused imports
+"__init__.py" = [
+    "F401",      # Allow unused imports for __all__ exports
+]
+# Allow more flexibility in example/demo files
+"examples/*" = [
+    "T201",      # Allow print statements
+    "S101",      # Allow assert statements
+    "F401",      # Allow unused imports
+]
