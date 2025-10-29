@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from contextlib import AsyncExitStack
 
 # Import logger setup first to ensure logging is configured
-from nxs.core.logger import get_logger, setup_logger
+from nxs.logger import get_logger, setup_logger
 from nxs.mcp_client import MCPClient
 from nxs.core.claude import Claude
 from nxs.core.command_control import CommandControlAgent

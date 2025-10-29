@@ -10,7 +10,7 @@ from textual.binding import Binding
 from .widgets.chat_panel import ChatPanel
 from .widgets.status_panel import StatusPanel
 from .widgets.input_field import NexusInput, NexusAutoComplete
-from nxs.core.logger import get_logger
+from nxs.logger import get_logger
 
 logger = get_logger("nexus_tui")
 

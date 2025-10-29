@@ -5,7 +5,7 @@ from anthropic.types import MessageParam
 from nxs.core.chat import AgentLoop
 from nxs.core.claude import Claude
 from nxs.mcp_client import MCPClient
-from nxs.core.logger import get_logger
+from nxs.logger import get_logger
 
 logger = get_logger("command_control")
 

@@ -10,11 +10,12 @@ requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.71.0",
     "loguru>=0.7.2",
-    "mcp[cli]>=1.18.0",
     "python-dotenv>=1.1.1",
     "textual>=0.50.0",
     "rich>=13.7.0",
     "textual-autocomplete>=2.0.0",
+    "typer>=0.20.0,<0.21", 
+    "mcp[cli]>=1.19.0,<2",
 ]
 
 [project.optional-dependencies]
@@ -37,10 +38,14 @@ include = ["src/nxs/**"]
 channels = ["conda-forge"]
 platforms = ["osx-arm64", "osx-64", "linux-64"]
 
+[tool.pixi.pypi-dependencies]
+nxs = { path = ".", editable = true }
+
 [tool.pixi.tasks]
 # Main application tasks
 start = { cmd = "python -m nxs", env = { PYTHONPATH = "src" } }
 chat = { cmd = "python -m nxs", env = { PYTHONPATH = "src" } }
+mcp_client = { cmd = "python -m nxs.mcp_client", env = { PYTHONPATH = "src" } }
 server = { cmd = "python -m nxs.mcp_server", env = { PYTHONPATH = "src" } }
 client = { cmd = "python -m nxs.mcp_client", env = { PYTHONPATH = "src" } }
 
@@ -67,7 +72,6 @@ lint-fix = "ruff check --fix ."
 format = "black ."
 type-check = "mypy ."
 ci = { depends-on = ["format", "lint", "type-check", "test"] }
-
 
 [tool.black]
 line-length = 120

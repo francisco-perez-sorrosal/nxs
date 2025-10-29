@@ -116,6 +116,13 @@ pixi run --environment dev format
 
 # Run full quality pipeline
 pixi run --environment dev ci
+
+# Run mcp client without Oauth
+pixi run mcp_client --server-url https://syn-executor.wasmer.app 
+
+# Run mcp client test with Oauth
+pixi run mcp_client --server-url https://synx-francisco-perez-sorrosal.wasmer.app 
+
 ```
 
 ### Configuration Files

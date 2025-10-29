@@ -1,7 +1,7 @@
 from nxs.core.claude import Claude
 from nxs.mcp_client import MCPClient
 from nxs.core.tools import ToolManager
-from nxs.core.logger import get_logger
+from nxs.logger import get_logger
 from anthropic.types import MessageParam
 
 logger = get_logger("agent_loop")

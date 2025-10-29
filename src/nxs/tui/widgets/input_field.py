@@ -4,7 +4,7 @@ NexusInput - Input field with AutoComplete overlay for commands and resources.
 
 from textual.widgets import Input
 from textual_autocomplete import AutoComplete, DropdownItem, TargetState
-from nxs.core.logger import get_logger
+from nxs.logger import get_logger
 
 logger = get_logger("nexus_input")
 
