@@ -6,11 +6,13 @@ Connects to an MCP server with OAuth.
 
 import asyncio
 import os
+from mcp import types
 import typer
 import webbrowser
 from datetime import timedelta
 from typing import Any
 
+from mcp.types import CallToolResult
 from mcp.client.auth import OAuthClientProvider
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
@@ -18,8 +20,7 @@ from mcp.client.streamable_http import streamablehttp_client
 from mcp.shared.auth import OAuthClientMetadata
 
 from nxs.logger import get_logger
-from nxs.mcp_client.storage import InMemoryTokenStorage
-from nxs.mcp_client.callback import CallbackServer
+from nxs.mcp_client.auth import oauth_context
 
 
 class AuthClient:
@@ -35,70 +36,30 @@ class AuthClient:
         logger.info(f"🔗 Starting connection to {self.server_url}")
         logger.info(f"🔗 Transport type: {self.transport_type}")
 
-        callback_server = None
         try:
-            callback_server = CallbackServer(port=3030)
-            callback_server.start()
-
-            async def callback_handler() -> tuple[str, str | None]:
-                """Wait for OAuth callback and return auth code and state."""
-                # CRITICAL: Reset callback server state before each OAuth flow
-                # This prevents returning stale auth codes from previous flows
-                logger.info(f"🔄 callback_handler: Resetting callback server state for fresh OAuth flow")
-                callback_server.reset()
-
-                print("⏳ Waiting for authorization callback...")
-                logger.info(f"⏳ callback_handler: Waiting for OAuth callback...")
-                auth_code = callback_server.wait_for_callback(timeout=300)
-                state = callback_server.get_state()
-                print(f"🔑 Authorization code: {auth_code}, CB server state: {state}")
-                logger.info(f"🔑 callback_handler: Received auth code (prefix: {auth_code[:15]}...), state: {state}")
-                logger.info(f"🔄 callback_handler: Returning auth code to SDK for token exchange")
-                return auth_code, state
-
-            client_metadata_dict = {
-                "client_name": "Nexus MCP Client",
-                "redirect_uris": ["http://localhost:3030/callback"],
-                "grant_types": ["authorization_code", "refresh_token"],
-                "response_types": ["code"],
-                "token_endpoint_auth_method": "none",  # Public client with PKCE
-            }
-
-            async def _default_redirect_handler(authorization_url: str) -> None:
-                """Default redirect handler that opens the URL in a browser."""
-                print(f"Opening browser for authorization: {authorization_url}")
-                logger.info(f"🌐 redirect_handler: OAuth flow triggered, opening browser")
-                logger.info(f"🌐 redirect_handler: Authorization URL: {authorization_url[:100]}...")
-                webbrowser.open(authorization_url)
-
             # Create transport with auth handler based on transport type
             if self.transport_type == "sse":
                 raise ValueError("SSE transport is not supported")
-            else:
-                print("📡 Opening StreamableHTTP transport connection with auth...")
+
+            print("📡 Opening StreamableHTTP transport connection...")
+
+            if use_auth:
                 logger.info(f"🔗 Opening StreamableHTTP transport with OAuth")
-                logger.info(f"📝 Note: OAuth may be triggered on first unauthorized request")
-
-                # Let the SDK handle OAuth naturally - it will trigger on first 401
-                if use_auth:
-                    # Create OAuth authentication handler using the new interface
-                    storage = InMemoryTokenStorage()
-                    logger.info(f"📦 Creating OAuthClientProvider for {self.server_url.replace('/mcp', '')}")
-
-                    oauth_auth = OAuthClientProvider(
-                        server_url=self.server_url.replace("/mcp", ""),
-                        client_metadata=OAuthClientMetadata.model_validate(client_metadata_dict),
-                        storage=storage,
-                        redirect_handler=_default_redirect_handler,
-                        callback_handler=callback_handler,
-                    )
-                else:
-                    logger.warning(f"🔐 No OAuth authentication required for {self.server_url}")
-                    oauth_auth = None
-
+                # Use OAuth context manager which handles callback server lifecycle
+                async with oauth_context(self.server_url) as oauth_provider:
+                    async with streamablehttp_client(
+                        url=self.server_url,
+                        auth=oauth_provider,
+                        timeout=timedelta(seconds=60),
+                    ) as (read_stream, write_stream, get_session_id):
+                        logger.info(f"✅ StreamableHTTP transport connected, starting session")
+                        await self._run_session(read_stream, write_stream, get_session_id)
+            else:
+                logger.info(f"🔗 Opening StreamableHTTP transport without OAuth")
+                # No auth, simpler flow
                 async with streamablehttp_client(
                     url=self.server_url,
-                    auth=oauth_auth,  # SDK will trigger OAuth on first 401 and retry
+                    auth=None,
                     timeout=timedelta(seconds=60),
                 ) as (read_stream, write_stream, get_session_id):
                     logger.info(f"✅ StreamableHTTP transport connected, starting session")
@@ -110,11 +71,6 @@ class AuthClient:
             import traceback
 
             traceback.print_exc()
-        finally:
-            # Clean up callback server
-            if callback_server:
-                logger.info(f"🧹 Stopping callback server")
-                callback_server.stop()
 
     async def _run_session(self, read_stream, write_stream, get_session_id):
         """Run the MCP session with the given streams."""
@@ -164,7 +120,7 @@ class AuthClient:
         except Exception as e:
             print(f"❌ Failed to list tools: {e}")
 
-    async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None):
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> types.CallToolResult | None:
         """Call a specific tool."""
         if not self.session:
             print("❌ Not connected to server")

@@ -29,7 +29,9 @@
       "Bash(timeout 5 pixi run python:*)",
       "WebFetch(domain:github.com)",
       "Bash(pixi list:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(lsof:*)",
+      "Bash(xargs kill:*)"
     ],
     "deny": [],
     "ask": []
