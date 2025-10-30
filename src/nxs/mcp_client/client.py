@@ -31,46 +31,130 @@ class AuthClient:
         self.transport_type = transport_type
         self.session: ClientSession | None = None
 
+        # Lifecycle management for background connection
+        self._connection_task: asyncio.Task | None = None  # Background task keeping connection alive
+        self._stop_event: asyncio.Event | None = None      # Event to signal shutdown
+        self._ready_event: asyncio.Event | None = None     # Event to signal session is ready
+
     async def connect(self, use_auth: bool = False):
+        """
+        Connect to MCP server and keep connection alive in background.
+
+        This method returns once the session is ready but doesn't block.
+        The connection is maintained in a background task, allowing external
+        code to use the session via self.session.
+
+        Args:
+            use_auth: Whether to use OAuth authentication
+        """
         print(f"🔗 Attempting to connect to {self.server_url}...")
-        logger.info(f"🔗 Starting connection to {self.server_url}")
+        logger.info(f"🔗 Starting non-blocking connection to {self.server_url}")
         logger.info(f"🔗 Transport type: {self.transport_type}")
 
-        try:
-            # Create transport with auth handler based on transport type
-            if self.transport_type == "sse":
-                raise ValueError("SSE transport is not supported")
+        # Check transport type
+        if self.transport_type == "sse":
+            raise ValueError("SSE transport is not supported")
 
-            print("📡 Opening StreamableHTTP transport connection...")
+        # Create events for lifecycle coordination
+        self._stop_event = asyncio.Event()
+        self._ready_event = asyncio.Event()
+
+        # Start background task to maintain connection
+        logger.info(f"🚀 Starting background connection maintenance task")
+        self._connection_task = asyncio.create_task(self._maintain_connection(use_auth))
+
+        # Wait for session to be ready
+        logger.info(f"⏳ Waiting for session to be ready...")
+        print("📡 Opening StreamableHTTP transport connection...")
+
+        try:
+            await self._ready_event.wait()
+            logger.info(f"✅ Connection ready, returning control to caller")
+            print(f"✅ Connection established! Session is ready for use.\n")
+        except Exception as e:
+            logger.error(f"❌ Failed to establish connection: {e}")
+            # Clean up if connection failed
+            if self._connection_task:
+                self._connection_task.cancel()
+                try:
+                    await self._connection_task
+                except asyncio.CancelledError:
+                    pass
+            raise
+
+    async def _maintain_connection(self, use_auth: bool):
+        """Background task that maintains the connection by keeping all context managers alive."""
+        try:
+            logger.info(f"🔄 Starting connection maintenance task (auth={use_auth})")
 
             if use_auth:
-                logger.info(f"🔗 Opening StreamableHTTP transport with OAuth")
-                # Use OAuth context manager which handles callback server lifecycle
+                logger.info(f"🔐 Using OAuth context")
                 async with oauth_context(self.server_url) as oauth_provider:
                     async with streamablehttp_client(
                         url=self.server_url,
                         auth=oauth_provider,
                         timeout=timedelta(seconds=60),
                     ) as (read_stream, write_stream, get_session_id):
-                        logger.info(f"✅ StreamableHTTP transport connected, starting session")
-                        await self._run_session(read_stream, write_stream, get_session_id)
+                        logger.info(f"✅ StreamableHTTP transport connected (with auth)")
+                        await self._setup_session(read_stream, write_stream, get_session_id)
             else:
-                logger.info(f"🔗 Opening StreamableHTTP transport without OAuth")
-                # No auth, simpler flow
+                logger.info(f"🔓 No OAuth context")
                 async with streamablehttp_client(
                     url=self.server_url,
                     auth=None,
                     timeout=timedelta(seconds=60),
                 ) as (read_stream, write_stream, get_session_id):
-                    logger.info(f"✅ StreamableHTTP transport connected, starting session")
-                    await self._run_session(read_stream, write_stream, get_session_id)
+                    logger.info(f"✅ StreamableHTTP transport connected (no auth)")
+                    await self._setup_session(read_stream, write_stream, get_session_id)
 
         except Exception as e:
-            logger.error(f"❌ Connection failed with error: {e}")
-            print(f"❌ Failed to connect: {e}")
-            import traceback
+            logger.error(f"❌ Connection maintenance task failed: {e}")
+            # If ready event wasn't set yet, set it so connect() doesn't hang
+            if self._ready_event and not self._ready_event.is_set():
+                self._ready_event.set()
+            raise
+        finally:
+            logger.info(f"🧹 Connection maintenance task exiting")
+            self.session = None
 
-            traceback.print_exc()
+    async def _setup_session(self, read_stream, write_stream, get_session_id):
+        """Initialize session and keep it alive until stop signal."""
+        print("🤝 Initializing MCP session...")
+        logger.info(f"🤝 Creating ClientSession")
+
+        async with ClientSession(read_stream, write_stream) as session:
+            self.session = session
+            print("⚡ Starting session initialization...")
+            logger.info(f"⚡ Calling session.initialize()")
+
+            try:
+                await session.initialize()
+                logger.info(f"✅ Session initialization completed successfully")
+                print("✨ Session initialization complete!")
+            except Exception as e:
+                logger.error(f"❌ Session initialization failed: {e}")
+                raise
+
+            print(f"\n✅ Connected to MCP server at {self.server_url}")
+            logger.info(f"✅ Full connection established to {self.server_url}")
+
+            if get_session_id:
+                session_id = get_session_id()
+                if session_id:
+                    print(f"Session ID: {session_id}")
+                    logger.info(f"📋 Session ID: {session_id}")
+
+            # Signal that session is ready for use
+            if self._ready_event:
+                self._ready_event.set()
+                logger.info(f"✅ Session ready - signaled ready event")
+
+            # Keep session alive until stop signal
+            logger.info(f"⏳ Session active, waiting for stop signal...")
+            if self._stop_event:
+                await self._stop_event.wait()
+
+            logger.info(f"🛑 Stop signal received, cleaning up session...")
 
     async def _run_session(self, read_stream, write_stream, get_session_id):
         """Run the MCP session with the given streams."""
@@ -193,6 +277,53 @@ class AuthClient:
             except EOFError:
                 break
 
+    async def disconnect(self):
+        """
+        Disconnect from the MCP server and clean up resources.
+
+        This signals the background connection task to stop and waits for it to complete.
+        """
+        logger.info(f"🛑 Disconnect requested")
+        print("\n🛑 Disconnecting from server...")
+
+        if self._stop_event:
+            # Signal background task to stop
+            self._stop_event.set()
+            logger.info(f"📤 Stop event set, waiting for connection task to finish")
+
+        if self._connection_task:
+            try:
+                # Wait for background task to complete
+                await self._connection_task
+                logger.info(f"✅ Connection task completed")
+            except Exception as e:
+                logger.error(f"⚠️  Error during disconnect: {e}")
+
+        # Clean up
+        self.session = None
+        self._connection_task = None
+        self._stop_event = None
+        self._ready_event = None
+
+        print("👋 Disconnected successfully!")
+        logger.info(f"👋 Disconnect complete")
+
+    async def run_interactive(self):
+        """
+        Run the interactive command loop.
+
+        This is optional - call this method if you want to use the interactive CLI.
+        Otherwise, just use the session directly via self.session.
+
+        Raises:
+            RuntimeError: If not connected to server
+        """
+        if not self.session:
+            raise RuntimeError("Not connected to server. Call connect() first.")
+
+        logger.info(f"🎮 Starting interactive mode")
+        await self.interactive_loop()
+
 app = typer.Typer()
 logger = get_logger("mcp_client")
 
@@ -202,6 +333,11 @@ def main(
     transport_type: str = typer.Option(os.getenv("MCP_TRANSPORT_TYPE", "streamable_http"), "--transport-type", help="MCP transport type"),
     use_auth: bool = typer.Option(os.getenv("MCP_USE_AUTH", "false").lower() == "true", "--use-auth", help="Use OAuth authentication"),
 ):
+    """
+    MCP Client CLI - Connect to an MCP server and run interactive commands.
+
+    The client now supports both interactive mode (default) and programmatic access.
+    """
     server_url = f"{server_url}/mcp" if transport_type == "streamable_http" else f"{server_url}"
 
     logger.info(f"🚀 MCP Client")
@@ -209,8 +345,30 @@ def main(
     logger.info(f"Transport type: {transport_type}")
     logger.info(f"Use OAuth authentication: {use_auth}")
 
-    client = AuthClient(server_url, transport_type)
-    asyncio.run(client.connect(use_auth))
+    async def run():
+        client = AuthClient(server_url, transport_type)
+        try:
+            # Connect (non-blocking, returns when session is ready)
+            await client.connect(use_auth)
+
+            # Run interactive loop (blocks here)
+            await client.run_interactive()
+            
+            await client.call_tool("run", {"code": "print(1+1)", "session_id": None})
+
+        except KeyboardInterrupt:
+            print("\n\n⚠️  Interrupted by user")
+            logger.info(f"⚠️  User interrupt")
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
+            logger.error(f"❌ Fatal error: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            # Always clean up
+            await client.disconnect()
+
+    asyncio.run(run())
 
 if __name__ == "__main__":
     app()
