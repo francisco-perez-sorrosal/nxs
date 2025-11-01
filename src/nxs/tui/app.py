@@ -10,6 +10,7 @@ from textual.binding import Binding
 from .widgets.chat_panel import ChatPanel
 from .widgets.status_panel import StatusPanel
 from .widgets.input_field import NexusInput, NexusAutoComplete
+from nxs.core.artifact_manager import ArtifactManager
 from nxs.logger import get_logger
 
 logger = get_logger("nexus_tui")
@@ -53,21 +54,20 @@ class NexusApp(App):
     def __init__(
         self,
         agent_loop,
-        resources: list[str] | None = None,
-        commands: list[str] | None = None,
+        artifact_manager: ArtifactManager,
     ):
         """
         Initialize the Nexus TUI application.
 
         Args:
             agent_loop: The agent loop instance (core.chat.AgentLoop)
-            resources: List of available document/resource IDs
-            commands: List of available command names
+            artifact_manager: The ArtifactManager instance for accessing resources and commands
         """
         super().__init__()
         self.agent_loop = agent_loop
-        self.resources = resources or []
-        self.commands = commands or []
+        self.artifact_manager = artifact_manager
+        self.resources: list[str] = []
+        self.commands: list[str] = []
         self._processing = False  # Track if we're processing a query
 
     def compose(self) -> ComposeResult:
@@ -89,9 +89,22 @@ class NexusApp(App):
 
         yield Footer()
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         """Called when the app is mounted."""
         logger.info("Nexus TUI mounted and ready")
+
+        # Load resources and commands from ArtifactManager
+        try:
+            self.resources = await self.artifact_manager.get_resource_list()
+            self.commands = await self.artifact_manager.get_command_names()
+            logger.info(f"Loaded {len(self.resources)} resources and {len(self.commands)} commands")
+            
+            # Update the input widget with loaded resources and commands
+            input_widget = self.query_one("#input", NexusInput)
+            input_widget.update_resources(self.resources)
+            input_widget.update_commands(self.commands)
+        except Exception as e:
+            logger.error(f"Failed to load resources and commands: {e}")
 
         # Show welcome message in chat
         chat = self.query_one("#chat", ChatPanel)

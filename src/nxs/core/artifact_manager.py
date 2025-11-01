@@ -184,6 +184,51 @@ class ArtifactManager:
         logger.info(f"Retrieved {len(all_tools)} tool(s) from all servers")
         return all_tools
 
+    async def get_resource_list(self) -> list[str]:
+        """
+        Get all resources from all connected MCP servers as a flattened list.
+
+        Returns:
+            Flat list of resource URIs from all servers. This is the format
+            expected by NexusApp for auto-completion.
+
+        Example:
+            [
+                "mcp://synx_mcp_fps/document1.md",
+                "mcp://synx_mcp_fps/document2.md",
+                "mcp://fps_cv_mcp/image1.jpg",
+                ...
+            ]
+        """
+        resources_dict = await self.get_resources()
+        # Flatten the dict into a single list
+        resources = []
+        for server_name, resource_uris in resources_dict.items():
+            resources.extend(resource_uris)
+        logger.debug(f"Flattened {len(resources)} resources from {len(resources_dict)} server(s)")
+        return resources
+
+    async def get_command_names(self) -> list[str]:
+        """
+        Get all command names from all connected MCP servers.
+
+        Returns:
+            Flat list of command names from all prompts. This is the format
+            expected by NexusApp for auto-completion.
+
+        Example:
+            [
+                "analyze_document",
+                "summarize_document",
+                "format_document",
+                ...
+            ]
+        """
+        prompts = await self.get_prompts()
+        command_names = [p.name for p in prompts]
+        logger.debug(f"Extracted {len(command_names)} command names from {len(prompts)} prompt(s)")
+        return command_names
+
     @property
     def clients(self) -> dict[str, MCPAuthClient]:
         """

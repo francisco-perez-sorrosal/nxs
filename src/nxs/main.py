@@ -48,36 +48,16 @@ async def main(
     try:
         await artifact_manager.initialize()
 
-        # Get clients from ArtifactManager for CommandControlAgent
-        mcp_clients = artifact_manager.clients
-
+        # Create CommandControlAgent with ArtifactManager
         command_control = CommandControlAgent(
-            clients=mcp_clients,
+            artifact_manager=artifact_manager,
             claude_service=claude_service,
         )
 
-        # Get resources and prompts from ArtifactManager
-        resources_dict = await artifact_manager.get_resources()
-        prompts = await artifact_manager.get_prompts()
-        
-        # Flatten resources dict into a list of resource URIs for NexusApp
-        # NexusApp expects a flat list of strings, not a dict
-        resources = []
-        for server_name, resource_uris in resources_dict.items():
-            resources.extend(resource_uris)
-        
-        # Extract command names from prompts
-        commands = [p.name for p in prompts]
-        
-        # Debug: Log resources and commands
-        logger.info(f"Loaded {len(resources)} resources from {len(resources_dict)} server(s): {resources_dict}")
-        logger.info(f"Loaded {len(commands)} commands: {commands}")
-
-        # Launch Textual TUI
+        # Launch Textual TUI with ArtifactManager
         app = NexusApp(
             agent_loop=command_control,
-            resources=resources,
-            commands=commands
+            artifact_manager=artifact_manager,
         )
         await app.run_async()
     finally:

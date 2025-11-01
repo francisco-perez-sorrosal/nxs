@@ -4,7 +4,7 @@ from anthropic.types import MessageParam
 
 from nxs.core.chat import AgentLoop
 from nxs.core.claude import Claude
-from nxs.mcp_client.client import MCPAuthClient
+from nxs.core.artifact_manager import ArtifactManager
 from nxs.logger import get_logger
 
 logger = get_logger("main")
@@ -13,34 +13,19 @@ logger = get_logger("main")
 class CommandControlAgent(AgentLoop):
     def __init__(
         self,
-        clients: dict[str, MCPAuthClient],
+        artifact_manager: ArtifactManager,
         claude_service: Claude,
         callbacks=None,
     ):
+        # Get clients from ArtifactManager for the base AgentLoop
+        clients = artifact_manager.clients
         super().__init__(clients=clients, llm=claude_service, callbacks=callbacks)
-
-    async def list_prompts(self) -> list[Prompt]:
-        all_prompts = []
-        for mcp_name, mcp_client in self.tool_clients.items():
-            logger.info(f"Listing prompts for {mcp_name}")
-            prompts = await mcp_client.list_prompts()
-            all_prompts.extend(prompts)
-        return all_prompts
-
-    async def list_resource_ids(self) -> dict[str, list[str]]:
-        all_resource_ids = {}
-        for mcp_name, mcp_client in self.tool_clients.items():
-            logger.info(f"Listing resource IDs for {mcp_name}")
-            resource_ids = await mcp_client.list_resources()
-            if isinstance(resource_ids, list) and len(resource_ids) > 0:
-                logger.info(f"Resource IDs{type(resource_ids[0])}: {resource_ids[0]}")
-            all_resource_ids[mcp_name] = [r.uri for r in resource_ids]
-        return all_resource_ids
+        self.artifact_manager = artifact_manager
 
     async def _extract_resources(self, query: str) -> str:
         mentions = [word[1:] for word in query.split() if word.startswith("@")]
 
-        resource_ids = await self.list_resource_ids()
+        resource_ids = await self.artifact_manager.get_resources()
         mentioned_docs: list[Tuple[str, str, str]] = []
 
         for mcp_name, resource_ids in resource_ids.items():
@@ -65,7 +50,8 @@ class CommandControlAgent(AgentLoop):
             mcp_name, resource_id = words[1].split(":")
             mcp_name = mcp_name[1:]
             resource_id = resource_id[1:]
-            messages = await self.tool_clients[mcp_name].get_prompt(command, resource_id)
+            # get_prompt expects a dict of args, not a single string
+            messages = await self.tool_clients[mcp_name].get_prompt(command, {"resource_id": resource_id})
             self.messages += convert_prompt_messages_to_message_params(messages)
             return True
         else:

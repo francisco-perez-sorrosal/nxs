@@ -190,6 +190,10 @@ class MCPAuthClient:
         if not self.session:
             raise RuntimeError("❌ Not connected to server")
 
+    # -------------------------------------------------------------------------
+    # Tools
+    # -------------------------------------------------------------------------
+
     async def list_tools(self) -> list[types.Tool]:
         """List available tools from the server."""
         try:
