@@ -1,18 +1,15 @@
 import asyncio
-import sys
 import os
 from dotenv import load_dotenv
-from contextlib import AsyncExitStack
+
+import typer
 
 # Import logger setup first to ensure logging is configured
 from nxs.logger import get_logger, setup_logger
-from nxs.mcp_client import MCPClient
 from nxs.core.claude import Claude
 from nxs.core.command_control import CommandControlAgent
+from nxs.core.artifact_manager import ArtifactManager
 from nxs.tui.app import NexusApp
-
-# Ensure logging is set up
-logger = get_logger("main")
 
 load_dotenv()
 
@@ -24,48 +21,56 @@ anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
 assert claude_model, "Error: CLAUDE_MODEL cannot be empty. Update .env"
 assert anthropic_api_key, "Error: ANTHROPIC_API_KEY cannot be empty. Update .env"
 
+cli = typer.Typer(
+    name="nxs",
+    help="Nexus command control with Claude integration and MCP-based CLI",
+    epilog="""
+    Examples:
+    $ nxs --server-url https://fps-cv.onrender.com/mcp --transport-type streamable_http --use-auth
+    """,
+    add_completion=False,
+)
 
-async def main():
+
+@cli.command()
+async def main(
+    debug: bool = typer.Option(os.getenv("DEBUG", "false").lower() == "true", "--debug", help="Enable debug mode"),
+):
+
+    # Ensure logging is set up
+    setup_logger(log_level="DEBUG" if debug else "INFO")
+    logger = get_logger("main")
+
     claude_service = Claude(model=claude_model)
 
-    server_scripts = sys.argv[1:]
-    clients = {}
+    # Initialize ArtifactManager to load MCP servers and artifacts
+    artifact_manager = ArtifactManager()
+    try:
+        await artifact_manager.initialize()
 
-    command, args = (
-        ("uv", ["run", "-m", "nxs.mcp_server"]) if os.getenv("USE_UV", "0") == "1" else ("python", ["-m", "nxs.mcp_server"])
-    )
-
-    # Set up environment for MCP server subprocess
-    server_env = os.environ.copy()
-    # Ensure PYTHONPATH includes src directory
-    src_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "src")
-    if "PYTHONPATH" in server_env:
-        server_env["PYTHONPATH"] = f"{src_path}:{server_env['PYTHONPATH']}"
-    else:
-        server_env["PYTHONPATH"] = src_path
-
-    async with AsyncExitStack() as stack:
-        doc_client = await stack.enter_async_context(MCPClient(command=command, args=args, env=server_env))
-        clients["doc_client"] = doc_client
-
-        for i, server_script in enumerate(server_scripts):
-            client_id = f"client_{i}_{server_script}"
-            client = await stack.enter_async_context(MCPClient(command="uv", args=["run", server_script]))
-            clients[client_id] = client
+        # Get clients from ArtifactManager for CommandControlAgent
+        mcp_clients = artifact_manager.clients
 
         command_control = CommandControlAgent(
-            doc_client=doc_client,
-            clients=clients,
+            clients=mcp_clients,
             claude_service=claude_service,
         )
 
-        # Get resources and commands for auto-completion
-        resources = await command_control.list_docs_ids()
-        prompts = await command_control.list_prompts()
+        # Get resources and prompts from ArtifactManager
+        resources_dict = await artifact_manager.get_resources()
+        prompts = await artifact_manager.get_prompts()
+        
+        # Flatten resources dict into a list of resource URIs for NexusApp
+        # NexusApp expects a flat list of strings, not a dict
+        resources = []
+        for server_name, resource_uris in resources_dict.items():
+            resources.extend(resource_uris)
+        
+        # Extract command names from prompts
         commands = [p.name for p in prompts]
         
         # Debug: Log resources and commands
-        logger.info(f"Loaded {len(resources)} resources: {resources}")
+        logger.info(f"Loaded {len(resources)} resources from {len(resources_dict)} server(s): {resources_dict}")
         logger.info(f"Loaded {len(commands)} commands: {commands}")
 
         # Launch Textual TUI
@@ -75,6 +80,9 @@ async def main():
             commands=commands
         )
         await app.run_async()
+    finally:
+        # Clean up ArtifactManager connections
+        await artifact_manager.cleanup()
 
 
 def run():

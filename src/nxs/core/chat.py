@@ -1,5 +1,5 @@
 from nxs.core.claude import Claude
-from nxs.mcp_client import MCPClient
+from nxs.mcp_client.client import AuthClient
 from nxs.core.tools import ToolManager
 from nxs.logger import get_logger
 from anthropic.types import MessageParam
@@ -8,9 +8,9 @@ logger = get_logger("agent_loop")
 
 
 class AgentLoop:
-    def __init__(self, llm: Claude, clients: dict[str, MCPClient], callbacks=None):
+    def __init__(self, llm: Claude, clients: dict[str, AuthClient], callbacks=None):
         self.llm: Claude = llm
-        self.clients: dict[str, MCPClient] = clients
+        self.tool_clients: dict[str, AuthClient] = clients
         self.messages: list[MessageParam] = []
         self.callbacks = callbacks or {}
 
@@ -36,7 +36,7 @@ class AgentLoop:
             logger.debug("Sending request to LLM")
             response = self.llm.chat(
                 messages=self.messages,
-                tools=await ToolManager.get_all_tools(self.clients),
+                tools=await ToolManager.get_all_tools(self.tool_clients),
             )
 
             self.llm.add_assistant_message(self.messages, response)
@@ -64,7 +64,7 @@ class AgentLoop:
                                 block.input
                             )
 
-                tool_result_parts = await ToolManager.execute_tool_requests(self.clients, response)
+                tool_result_parts = await ToolManager.execute_tool_requests(self.tool_clients, response)
                 logger.debug(f"Tool execution completed, {len(tool_result_parts)} result parts")
                 
                 # Notify tool results

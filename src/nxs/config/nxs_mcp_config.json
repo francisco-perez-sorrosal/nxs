@@ -1,0 +1,18 @@
+{
+    "mcpServers": {
+        "synx_mcp_fps": {
+            "command": "npx",
+            "args": [
+                "mcp-remote",
+                "https://syn-executor.wasmer.app/mcp"
+            ]
+        },
+        "fps_cv_mcp": {
+            "command": "npx",
+            "args": [
+                "mcp-remote",
+                "https://fps-cv.onrender.com/mcp"
+            ]
+        }
+    }
+}

@@ -4,48 +4,54 @@ from anthropic.types import MessageParam
 
 from nxs.core.chat import AgentLoop
 from nxs.core.claude import Claude
-from nxs.mcp_client import MCPClient
+from nxs.mcp_client.client import AuthClient
 from nxs.logger import get_logger
 
-logger = get_logger("command_control")
+logger = get_logger("main")
 
 
 class CommandControlAgent(AgentLoop):
     def __init__(
         self,
-        doc_client: MCPClient,
-        clients: dict[str, MCPClient],
+        clients: dict[str, AuthClient],
         claude_service: Claude,
         callbacks=None,
     ):
         super().__init__(clients=clients, llm=claude_service, callbacks=callbacks)
 
-        self.doc_client: MCPClient = doc_client
-
     async def list_prompts(self) -> list[Prompt]:
-        return await self.doc_client.list_prompts()
+        all_prompts = []
+        for mcp_name, mcp_client in self.tool_clients.items():
+            logger.info(f"Listing prompts for {mcp_name}")
+            prompts = await mcp_client.list_prompts()
+            all_prompts.extend(prompts)
+        return all_prompts
 
-    async def list_docs_ids(self) -> list[str]:
-        return await self.doc_client.read_resource("docs://documents")
-
-    async def get_doc_content(self, doc_id: str) -> str:
-        return await self.doc_client.read_resource(f"docs://documents/{doc_id}")
-
-    async def get_prompt(self, command: str, doc_id: str) -> list[PromptMessage]:
-        return await self.doc_client.get_prompt(command, {"doc_id": doc_id})
+    async def list_resource_ids(self) -> dict[str, list[str]]:
+        all_resource_ids = {}
+        for mcp_name, mcp_client in self.tool_clients.items():
+            logger.info(f"Listing resource IDs for {mcp_name}")
+            resource_ids = await mcp_client.list_resources()
+            if isinstance(resource_ids, list) and len(resource_ids) > 0:
+                logger.info(f"Resource IDs{type(resource_ids[0])}: {resource_ids[0]}")
+            all_resource_ids[mcp_name] = [r.uri for r in resource_ids]
+        return all_resource_ids
 
     async def _extract_resources(self, query: str) -> str:
         mentions = [word[1:] for word in query.split() if word.startswith("@")]
 
-        doc_ids = await self.list_docs_ids()
-        mentioned_docs: list[Tuple[str, str]] = []
+        resource_ids = await self.list_resource_ids()
+        mentioned_docs: list[Tuple[str, str, str]] = []
 
-        for doc_id in doc_ids:
-            if doc_id in mentions:
-                content = await self.get_doc_content(doc_id)
-                mentioned_docs.append((doc_id, content))
+        for mcp_name, resource_ids in resource_ids.items():
+            for resource_id in resource_ids:
+                if resource_id in mentions:
+                    content = await self.tool_clients[mcp_name].read_resource(resource_id)
+                    mentioned_docs.append((mcp_name, resource_id, content))
 
-        return "".join(f'\n<document id="{doc_id}">\n{content}\n</document>\n' for doc_id, content in mentioned_docs)
+        resource_context = "".join(f'\n<resource id="{mcp_name}:{resource_id}">\n{content}\n</resource>\n' for mcp_name, resource_id, content in mentioned_docs)
+        logger.info(f"Extracted esource context: {resource_context}")
+        return resource_context
 
     async def _process_command(self, query: str) -> bool:
         if not query.startswith("/"):
@@ -55,14 +61,15 @@ class CommandControlAgent(AgentLoop):
         command = words[0].replace("/", "")
 
         # Strip @ prefix from resource name if present (e.g., @report.pdf -> report.pdf)
-        doc_id = words[1]
-        if doc_id.startswith('@'):
-            doc_id = doc_id[1:]
-
-        messages = await self.doc_client.get_prompt(command, {"doc_id": doc_id})
-
-        self.messages += convert_prompt_messages_to_message_params(messages)
-        return True
+        if words[1].startswith('@'):
+            mcp_name, resource_id = words[1].split(":")
+            mcp_name = mcp_name[1:]
+            resource_id = resource_id[1:]
+            messages = await self.tool_clients[mcp_name].get_prompt(command, resource_id)
+            self.messages += convert_prompt_messages_to_message_params(messages)
+            return True
+        else:
+            return False
 
     async def _process_query(self, query: str):
         logger.info(f"CommandControlAgent processing query: '{query[:50]}{'...' if len(query) > 50 else ''}'")

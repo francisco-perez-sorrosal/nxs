@@ -5,12 +5,14 @@ Connects to an MCP server with OAuth.
 """
 
 import asyncio
+import json
 import os
 from mcp import types
 import typer
 import webbrowser
 from datetime import timedelta
 from typing import Any
+from pydantic import AnyUrl
 
 from mcp.types import CallToolResult
 from mcp.client.auth import OAuthClientProvider
@@ -184,33 +186,27 @@ class AuthClient:
             logger.info(f"🎮 Starting interactive loop")
             await self.interactive_loop()
 
-    async def list_tools(self):
-        """List available tools from the server."""
+    def _check_session_or_raise(self):
         if not self.session:
-            print("❌ Not connected to server")
-            return
+            raise RuntimeError("❌ Not connected to server")
 
+    async def list_tools(self) -> list[types.Tool]:
+        """List available tools from the server."""
         try:
+            self._check_session_or_raise()
             result = await self.session.list_tools()
             if hasattr(result, "tools") and result.tools:
-                print("\n📋 Available tools:")
-                for i, tool in enumerate(result.tools, 1):
-                    print(f"{i}. {tool.name}")
-                    if tool.description:
-                        print(f"   Description: {tool.description}")
-                    print()
-            else:
-                print("No tools available")
+                return result.tools
+            return []
         except Exception as e:
             print(f"❌ Failed to list tools: {e}")
+            return []
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> types.CallToolResult | None:
         """Call a specific tool."""
-        if not self.session:
-            print("❌ Not connected to server")
-            return
 
         try:
+            self._check_session_or_raise()
             logger.info(f"Arguments: {arguments} {type(arguments)}")
             result = await self.session.call_tool(tool_name, arguments or {})
             print(f"\n🔧 Tool '{tool_name}' result:")
@@ -224,6 +220,61 @@ class AuthClient:
                 print(result)
         except Exception as e:
             print(f"❌ Failed to call tool '{tool_name}': {e}")
+
+    # -------------------------------------------------------------------------
+    # Prompts
+    # -------------------------------------------------------------------------
+
+    async def list_prompts(self) -> list[types.Prompt]:
+        try:
+            self._check_session_or_raise()
+            result = await self.session.list_prompts() if self.session else None
+            return result.prompts if result else []
+        except Exception as e:
+            print(f"❌ Failed to list prompts: {e}")
+            return []
+        
+    async def get_prompt(self, prompt_name: str, args: dict[str, str]) -> list[types.PromptMessage]:
+        try:
+            self._check_session_or_raise()
+            result = await self.session.get_prompt(prompt_name, args) if self.session else None
+            return result.messages if result else []
+        except Exception as e:
+            print(f"❌ Failed to get prompt: {e}")
+            return []
+
+    # -------------------------------------------------------------------------
+    # Resources
+    # -------------------------------------------------------------------------
+
+    async def list_resources(self) -> list[types.Resource]:
+        try:
+            self._check_session_or_raise()
+            result = await self.session.list_resources()
+            return result.resources
+        except Exception as e:
+            print(f"❌ Failed to list resources: {e}")
+            return []
+
+
+    async def read_resource(self, uri: str) -> Any:
+        try:
+            self._check_session_or_raise()
+            result = await self.session.read_resource(AnyUrl(uri))
+            resource = result.contents[0]
+
+            if isinstance(resource, types.TextResourceContents):
+                if resource.mimeType == "application/json":
+                    return json.loads(resource.text)
+
+                return resource.text
+        except Exception as e:
+            print(f"❌ Failed to read resource: {e}")
+            return None
+
+    # -------------------------------------------------------------------------
+    # Main Interactive Loop !!!
+    # -------------------------------------------------------------------------
 
     async def interactive_loop(self):
         """Run interactive command loop."""
@@ -241,35 +292,39 @@ class AuthClient:
                 if not command:
                     continue
 
-                if command == "quit":
-                    break
+                match command:
+                    case "quit":
+                        break
 
-                elif command == "list":
-                    await self.list_tools()
+                    case "resources":
+                        await self.list_resources()
 
-                elif command.startswith("call "):
-                    parts = command.split(maxsplit=2)
-                    tool_name = parts[1] if len(parts) > 1 else ""
+                    case "list":
+                        await self.list_tools()
 
-                    if not tool_name:
-                        print("❌ Please specify a tool name")
-                        continue
+                    case cmd if cmd.startswith("call "):
+                        parts = cmd.split(maxsplit=2)
+                        tool_name = parts[1] if len(parts) > 1 else ""
 
-                    # Parse arguments (simple JSON-like format)
-                    arguments = {}
-                    if len(parts) > 2:
-                        import json
-                        logger.info(f"🔍 Parsing arguments: {parts[2]}")
-                        try:
-                            arguments = json.loads(parts[2])
-                        except json.JSONDecodeError:
-                            print("❌ Invalid arguments format (expected JSON)")
+                        if not tool_name:
+                            print("❌ Please specify a tool name")
                             continue
 
-                    await self.call_tool(tool_name, arguments)
+                        # Parse arguments (simple JSON-like format)
+                        arguments = {}
+                        if len(parts) > 2:
+                            import json
+                            logger.info(f"🔍 Parsing arguments: {parts[2]}")
+                            try:
+                                arguments = json.loads(parts[2])
+                            except json.JSONDecodeError:
+                                print("❌ Invalid arguments format (expected JSON)")
+                                continue
 
-                else:
-                    print("❌ Unknown command. Try 'list', 'call <tool_name>', or 'quit'")
+                        await self.call_tool(tool_name, arguments)
+
+                    case _:
+                        print("❌ Unknown command. Try 'list', 'call <tool_name>', or 'quit'")
 
             except KeyboardInterrupt:
                 print("\n\n👋 Goodbye!")
