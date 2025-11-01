@@ -25,7 +25,7 @@ from nxs.logger import get_logger
 from nxs.mcp_client.auth import oauth_context
 
 
-class AuthClient:
+class MCPAuthClient:
     """MCP Auth Client with OAuth support."""
 
     def __init__(self, server_url: str, transport_type: str = "streamable_http"):
@@ -401,7 +401,7 @@ def main(
     logger.info(f"Use OAuth authentication: {use_auth}")
 
     async def run():
-        client = AuthClient(server_url, transport_type)
+        client = MCPAuthClient(server_url, transport_type)
         try:
             # Connect (non-blocking, returns when session is ready)
             await client.connect(use_auth)

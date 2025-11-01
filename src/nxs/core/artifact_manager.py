@@ -19,7 +19,7 @@ from nxs.core.mcp_config import (
     get_server_config,
     load_mcp_config,
 )
-from nxs.mcp_client.client import AuthClient
+from nxs.mcp_client.client import MCPAuthClient
 from nxs.logger import get_logger
 
 logger = get_logger("artifact_manager")
@@ -36,7 +36,7 @@ class ArtifactManager:
             config: MCP servers configuration. If None, loads from default location.
         """
         self.config = config or load_mcp_config()
-        self.mcp_clients: dict[str, AuthClient] = {}
+        self.mcp_clients: dict[str, MCPAuthClient] = {}
         self._exit_stack: Optional[AsyncExitStack] = None
 
     async def initialize(self, use_auth: bool = False) -> None:
@@ -60,7 +60,7 @@ class ArtifactManager:
                 url = server.remote_url()
                 if url:
                     logger.info(f"Connecting to remote MCP server: {server_name} at {url}")
-                    mcp_client = AuthClient(url)
+                    mcp_client = MCPAuthClient(url)
                     self.mcp_clients[server_name] = mcp_client
 
                     try:
@@ -185,7 +185,7 @@ class ArtifactManager:
         return all_tools
 
     @property
-    def clients(self) -> dict[str, AuthClient]:
+    def clients(self) -> dict[str, MCPAuthClient]:
         """
         Get the dictionary of MCP clients.
 

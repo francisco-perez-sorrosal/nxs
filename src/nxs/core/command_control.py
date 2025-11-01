@@ -4,7 +4,7 @@ from anthropic.types import MessageParam
 
 from nxs.core.chat import AgentLoop
 from nxs.core.claude import Claude
-from nxs.mcp_client.client import AuthClient
+from nxs.mcp_client.client import MCPAuthClient
 from nxs.logger import get_logger
 
 logger = get_logger("main")
@@ -13,7 +13,7 @@ logger = get_logger("main")
 class CommandControlAgent(AgentLoop):
     def __init__(
         self,
-        clients: dict[str, AuthClient],
+        clients: dict[str, MCPAuthClient],
         claude_service: Claude,
         callbacks=None,
     ):
