@@ -229,6 +229,30 @@ class ArtifactManager:
         logger.debug(f"Extracted {len(command_names)} command names from {len(prompts)} prompt(s)")
         return command_names
 
+    async def find_prompt(self, prompt_name: str) -> tuple[Prompt, str] | None:
+        """
+        Find a prompt by name across all MCP servers.
+
+        Args:
+            prompt_name: Name of the prompt to find
+
+        Returns:
+            Tuple of (Prompt, server_name) if found, None otherwise.
+            This allows calling get_prompt on the correct server.
+        """
+        for mcp_name, mcp_client in self.mcp_clients.items():
+            try:
+                prompts = await mcp_client.list_prompts()
+                for prompt in prompts:
+                    if prompt.name == prompt_name:
+                        logger.debug(f"Found prompt '{prompt_name}' in server '{mcp_name}'")
+                        return (prompt, mcp_name)
+            except Exception as e:
+                logger.error(f"Failed to search prompts in {mcp_name}: {e}")
+        
+        logger.warning(f"Prompt '{prompt_name}' not found in any MCP server")
+        return None
+
     @property
     def clients(self) -> dict[str, MCPAuthClient]:
         """

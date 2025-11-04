@@ -85,7 +85,13 @@ class MCPAuthClient:
             raise
 
     async def _maintain_connection(self, use_auth: bool):
-        """Background task that maintains the connection by keeping all context managers alive."""
+        """
+        Background task that maintains the connection by keeping all context managers alive.
+        
+        CRITICAL: This method catches all exceptions to prevent them from blocking the application.
+        Connection failures are logged but do not crash the app - the TUI should continue working
+        even if MCP connections fail.
+        """
         try:
             logger.info(f"🔄 Starting connection maintenance task (auth={use_auth})")
 
@@ -109,12 +115,20 @@ class MCPAuthClient:
                     logger.info(f"✅ StreamableHTTP transport connected (no auth)")
                     await self._setup_session(read_stream, write_stream, get_session_id)
 
+        except asyncio.CancelledError:
+            # Task was cancelled - this is expected during shutdown
+            logger.info(f"🛑 Connection maintenance task cancelled")
+            raise  # Re-raise cancellation so asyncio knows task was cancelled
         except Exception as e:
+            # Log the error but DON'T re-raise - we don't want this to block the app
+            import traceback
             logger.error(f"❌ Connection maintenance task failed: {e}")
-            # If ready event wasn't set yet, set it so connect() doesn't hang
+            logger.debug(f"Connection error traceback:\n{traceback.format_exc()}")
+            
+            # CRITICAL: Always set ready_event even on failure, so connect() doesn't hang
             if self._ready_event and not self._ready_event.is_set():
                 self._ready_event.set()
-            raise
+                logger.info(f"✅ Set ready_event despite connection failure (non-blocking mode)")
         finally:
             logger.info(f"🧹 Connection maintenance task exiting")
             self.session = None
@@ -197,20 +211,23 @@ class MCPAuthClient:
     async def list_tools(self) -> list[types.Tool]:
         """List available tools from the server."""
         try:
-            self._check_session_or_raise()
+            if not self.session:
+                logger.warning("⚠️  Cannot list tools: session is None (connection may have failed)")
+                return []
             result = await self.session.list_tools()
             if hasattr(result, "tools") and result.tools:
                 return result.tools
             return []
         except Exception as e:
-            print(f"❌ Failed to list tools: {e}")
-            return []
+            logger.error(f"❌ Failed to list tools: {e}")
+            return []  # Return empty list instead of raising - allow app to continue
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> types.CallToolResult | None:
         """Call a specific tool."""
-
         try:
-            self._check_session_or_raise()
+            if not self.session:
+                logger.warning(f"⚠️  Cannot call tool '{tool_name}': session is None (connection may have failed)")
+                return None
             logger.info(f"Arguments: {arguments} {type(arguments)}")
             result = await self.session.call_tool(tool_name, arguments or {})
             print(f"\n🔧 Tool '{tool_name}' result:")
@@ -222,48 +239,62 @@ class MCPAuthClient:
                         print(content)
             else:
                 print(result)
+            return result
         except Exception as e:
-            print(f"❌ Failed to call tool '{tool_name}': {e}")
+            logger.error(f"❌ Failed to call tool '{tool_name}': {e}")
+            return None  # Return None instead of raising - allow app to continue
 
     # -------------------------------------------------------------------------
     # Prompts
     # -------------------------------------------------------------------------
 
     async def list_prompts(self) -> list[types.Prompt]:
+        """List available prompts from the server."""
         try:
-            self._check_session_or_raise()
-            result = await self.session.list_prompts() if self.session else None
+            if not self.session:
+                logger.warning("⚠️  Cannot list prompts: session is None (connection may have failed)")
+                return []
+            result = await self.session.list_prompts()
             return result.prompts if result else []
         except Exception as e:
-            print(f"❌ Failed to list prompts: {e}")
-            return []
+            logger.error(f"❌ Failed to list prompts: {e}")
+            return []  # Return empty list instead of raising - allow app to continue
         
     async def get_prompt(self, prompt_name: str, args: dict[str, str]) -> list[types.PromptMessage]:
+        """Get a prompt with the given arguments."""
         try:
-            self._check_session_or_raise()
-            result = await self.session.get_prompt(prompt_name, args) if self.session else None
+            if not self.session:
+                logger.warning(f"⚠️  Cannot get prompt '{prompt_name}': session is None (connection may have failed)")
+                return []
+            result = await self.session.get_prompt(prompt_name, args)
             return result.messages if result else []
         except Exception as e:
-            print(f"❌ Failed to get prompt: {e}")
-            return []
+            logger.error(f"❌ Failed to get prompt '{prompt_name}': {e}")
+            return []  # Return empty list instead of raising - allow app to continue
 
     # -------------------------------------------------------------------------
     # Resources
     # -------------------------------------------------------------------------
 
     async def list_resources(self) -> list[types.Resource]:
+        """List available resources from the server."""
         try:
-            self._check_session_or_raise()
+            if not self.session:
+                logger.warning("⚠️  Cannot list resources: session is None (connection may have failed)")
+                return []
             result = await self.session.list_resources()
-            return result.resources
+            return result.resources if result else []
         except Exception as e:
-            print(f"❌ Failed to list resources: {e}")
-            return []
+            logger.error(f"❌ Failed to list resources: {e}")
+            return []  # Return empty list instead of raising - allow app to continue
 
 
     async def read_resource(self, uri: str) -> Any:
+        """Read a resource by URI."""
         try:
-            self._check_session_or_raise()
+            if not self.session:
+                logger.warning(f"⚠️  Cannot read resource '{uri}': session is None (connection may have failed)")
+                return None
             result = await self.session.read_resource(AnyUrl(uri))
             resource = result.contents[0]
 
@@ -272,9 +303,10 @@ class MCPAuthClient:
                     return json.loads(resource.text)
 
                 return resource.text
-        except Exception as e:
-            print(f"❌ Failed to read resource: {e}")
             return None
+        except Exception as e:
+            logger.error(f"❌ Failed to read resource '{uri}': {e}")
+            return None  # Return None instead of raising - allow app to continue
 
     # -------------------------------------------------------------------------
     # Main Interactive Loop !!!

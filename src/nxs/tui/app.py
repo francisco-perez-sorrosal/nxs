@@ -2,6 +2,7 @@
 NexusApp - Main Textual application for the Nexus TUI.
 """
 
+import asyncio
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer
 from textual.containers import Container, Vertical
@@ -82,6 +83,7 @@ class NexusApp(App):
                 yield NexusInput(
                     resources=self.resources,
                     commands=self.commands,
+                    artifact_manager=self.artifact_manager,
                     id="input"
                 )
                 
@@ -103,6 +105,10 @@ class NexusApp(App):
             input_widget = self.query_one("#input", NexusInput)
             input_widget.update_resources(self.resources)
             input_widget.update_commands(self.commands)
+            
+            # Preload prompt information for all commands BEFORE showing the UI
+            # This ensures arguments are available when dropdown is shown
+            await self._preload_all_prompt_info()
         except Exception as e:
             logger.error(f"Failed to load resources and commands: {e}")
 
@@ -123,6 +129,75 @@ class NexusApp(App):
         
         # Focus the input field after the first render
         self.call_after_refresh(self._focus_input)
+    
+    async def _preload_all_prompt_info(self) -> None:
+        """Preload prompt argument information for all commands directly."""
+        try:
+            logger.info(f"Preloading prompt information for {len(self.commands)} commands...")
+            if not hasattr(self, '_prompt_info_cache'):
+                self._prompt_info_cache = {}
+            if not hasattr(self, '_prompt_schema_cache'):
+                self._prompt_schema_cache = {}
+                
+            for command in self.commands:
+                prompt_info = await self.artifact_manager.find_prompt(command)
+                if prompt_info:
+                    prompt, server_name = prompt_info
+                    # Store full prompt object for argument expansion
+                    self._prompt_schema_cache[command] = (prompt, server_name)
+                    # Extract argument info string for display
+                    arg_info = self._format_prompt_arguments(prompt)
+                    self._prompt_info_cache[command] = arg_info
+                    logger.debug(f"Preloaded info for '{command}': {arg_info}")
+            logger.info(f"Successfully preloaded prompt information for {len(getattr(self, '_prompt_info_cache', {}))} commands")
+        except Exception as e:
+            logger.error(f"Failed to preload prompt info: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
+    def _format_prompt_arguments(self, prompt) -> str | None:
+        """Format prompt arguments into a readable string (helper method)."""
+        if not hasattr(prompt, 'arguments') or not prompt.arguments:
+            return None
+        
+        schema = prompt.arguments
+        arg_names: list[str] = []
+        required_args: list[str] = []
+        
+        # Handle different schema formats
+        if isinstance(schema, list):
+            for arg in schema:
+                if hasattr(arg, 'name'):
+                    arg_names.append(arg.name)
+                    if hasattr(arg, 'required') and arg.required:
+                        required_args.append(arg.name)
+                elif isinstance(arg, dict):
+                    arg_name = arg.get('name', '')
+                    if arg_name:
+                        arg_names.append(arg_name)
+                        if arg.get('required', False):
+                            required_args.append(arg_name)
+        elif isinstance(schema, dict):
+            properties = schema.get('properties', {})
+            arg_names = list(properties.keys())
+            required_args = schema.get('required', [])
+        else:
+            if hasattr(schema, 'properties'):
+                properties = getattr(schema, 'properties', {})
+                if isinstance(properties, dict):
+                    arg_names = list(properties.keys())
+            if hasattr(schema, 'required'):
+                required_args = getattr(schema, 'required', [])
+        
+        if not arg_names:
+            return None
+        
+        arg_str = ", ".join(arg_names)
+        if required_args:
+            req_str = ", ".join(required_args)
+            return f"{arg_str} | Required: {req_str}"
+        
+        return arg_str
 
     def _mount_autocomplete(self) -> None:
         """Mount the AutoComplete overlay after the app is mounted."""
@@ -132,6 +207,14 @@ class NexusApp(App):
             autocomplete = NexusAutoComplete(input_widget)
             self.mount(autocomplete)
             logger.info("AutoComplete overlay mounted successfully")
+            
+            # Copy preloaded prompt info cache to autocomplete
+            if hasattr(self, '_prompt_info_cache'):
+                autocomplete._prompt_cache = self._prompt_info_cache.copy()
+                logger.info(f"Copied {len(self._prompt_info_cache)} cached prompt info items to autocomplete")
+            if hasattr(self, '_prompt_schema_cache'):
+                autocomplete._prompt_schema_cache = self._prompt_schema_cache.copy()
+                logger.info(f"Copied {len(self._prompt_schema_cache)} cached prompt schemas to autocomplete")
         except Exception as e:
             logger.error(f"Failed to mount AutoComplete overlay: {e}")
 
