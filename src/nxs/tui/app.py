@@ -2,7 +2,6 @@
 NexusApp - Main Textual application for the Nexus TUI.
 """
 
-import asyncio
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer
 from textual.containers import Container, Vertical
@@ -11,6 +10,7 @@ from textual.binding import Binding
 from .widgets.chat_panel import ChatPanel
 from .widgets.status_panel import StatusPanel
 from .widgets.input_field import NexusInput, NexusAutoComplete
+from .query_manager import QueryManager
 from nxs.core.artifact_manager import ArtifactManager
 from nxs.logger import get_logger
 
@@ -69,7 +69,8 @@ class NexusApp(App):
         self.artifact_manager = artifact_manager
         self.resources: list[str] = []
         self.commands: list[str] = []
-        self._processing = False  # Track if we're processing a query
+        # Initialize QueryManager with the processor function
+        self.query_manager = QueryManager(processor=self._process_query)
 
     def compose(self) -> ComposeResult:
         """Create the UI layout."""
@@ -94,6 +95,9 @@ class NexusApp(App):
     async def on_mount(self) -> None:
         """Called when the app is mounted."""
         logger.info("Nexus TUI mounted and ready")
+
+        # Start the QueryManager to begin processing queries
+        await self.query_manager.start()
 
         # Load resources and commands from ArtifactManager
         try:
@@ -235,11 +239,6 @@ class NexusApp(App):
         """
         logger.debug(f"Input submitted event received: id={event.input.id}, value='{event.value}'")
 
-        # Prevent processing if already processing
-        if self._processing:
-            logger.warning("Already processing a query, ignoring new submission")
-            return
-
         # Get the query text
         query = event.value.strip()
 
@@ -250,34 +249,52 @@ class NexusApp(App):
             logger.debug("Empty query, ignoring")
             return
 
-        # Clear the input field
+        # Clear the input field immediately so user can continue typing
         event.input.value = ""
 
-        # Process the query
-        await self._process_query(query)
+        # Refocus the input field immediately
+        self._focus_input()
 
-    async def _process_query(self, query: str):
+        # Add user message to chat immediately (in submission order)
+        chat = self.query_one("#chat", ChatPanel)
+        chat.add_user_message(query)
+
+        # Enqueue the query for processing
+        # Note: Assistant message start will be added when processing begins
+        # to ensure correct buffer assignment for each query
+        # The worker will process queries sequentially and display results in order
+        try:
+            query_id = await self.query_manager.enqueue(query)
+            logger.debug(f"Added user message to chat panel (query_id={query_id})")
+        except RuntimeError as e:
+            logger.error(f"QueryManager not running: {e}")
+            chat.add_panel(
+                "[bold red]Error:[/] Query manager not initialized",
+                title="Error",
+                style="red"
+            )
+
+    async def _process_query(self, query: str, query_id: int):
         """
         Process a user query through the agent loop.
 
         Args:
             query: User's input text
+            query_id: Sequential ID of the query for ordering
         """
-        logger.info(f"Starting to process query: '{query[:50]}{'...' if len(query) > 50 else ''}'")
-        self._processing = True
+        logger.info(f"Starting to process query (query_id={query_id}): '{query[:50]}{'...' if len(query) > 50 else ''}'")
 
         try:
-            # Add user message to chat
+            # Add assistant message start marker when processing begins
+            # This ensures the correct buffer is active when chunks arrive
             chat = self.query_one("#chat", ChatPanel)
-            chat.add_user_message(query)
-            logger.debug("Added user message to chat panel")
-
-            # Add assistant message start marker
             chat.add_assistant_message_start()
-            logger.debug("Added assistant message start marker")
+            logger.debug(f"Added assistant message start marker (query_id={query_id})")
 
             # Run the agent loop with UI callbacks
-            logger.info(f"Running agent loop with query: {query[:100]}...")
+            # Note: User message was already added in on_input_submitted to ensure
+            # it appears in submission order
+            logger.info(f"Running agent loop with query (query_id={query_id}): {query[:100]}...")
 
             await self.agent_loop.run(query, callbacks={
                 'on_stream_chunk': self._on_stream_chunk,
@@ -287,22 +304,20 @@ class NexusApp(App):
                 'on_start': self._on_start,
             })
 
-            logger.info("Query processing completed successfully")
+            logger.info(f"Query processing completed successfully (query_id={query_id})")
 
         except Exception as e:
-            logger.error(f"Error processing query: {e}", exc_info=True)
+            logger.error(f"Error processing query (query_id={query_id}): {e}", exc_info=True)
             chat = self.query_one("#chat", ChatPanel)
             chat.add_panel(
                 f"[bold red]Error:[/] {str(e)}",
                 title="Error",
                 style="red"
             )
-
         finally:
-            logger.debug("Cleaning up after query processing")
-            self._processing = False
-
-            # Refocus the input field
+            logger.debug(f"Cleaning up after query processing (query_id={query_id})")
+            
+            # Refocus the input field so user can continue typing
             self._focus_input()
 
     async def _on_start(self):
@@ -352,6 +367,16 @@ class NexusApp(App):
         logger.info(f"Tool result: {tool_name} - success={success}, result length={len(str(result))}")
         status = self.query_one("#status", StatusPanel)
         status.add_tool_result(tool_name, result, success)
+
+    async def action_quit(self) -> None:
+        """Handle app quit - cleanup background tasks."""
+        logger.info("Quitting application, cleaning up...")
+        
+        # Stop the QueryManager
+        await self.query_manager.stop()
+        
+        # Exit the app
+        self.exit()
 
     def action_clear_chat(self) -> None:
         """Clear the chat panel (Ctrl+L)."""
