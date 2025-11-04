@@ -11,6 +11,7 @@ from .widgets.chat_panel import ChatPanel
 from .widgets.status_panel import StatusPanel
 from .widgets.input_field import NexusInput, NexusAutoComplete
 from .query_manager import QueryManager
+from .status_queue import StatusQueue
 from nxs.core.artifact_manager import ArtifactManager
 from nxs.logger import get_logger
 
@@ -71,6 +72,8 @@ class NexusApp(App):
         self.commands: list[str] = []
         # Initialize QueryManager with the processor function
         self.query_manager = QueryManager(processor=self._process_query)
+        # Initialize StatusQueue for asynchronous status updates
+        self.status_queue = StatusQueue(status_panel_getter=self._get_status_panel)
 
     def compose(self) -> ComposeResult:
         """Create the UI layout."""
@@ -98,6 +101,8 @@ class NexusApp(App):
 
         # Start the QueryManager to begin processing queries
         await self.query_manager.start()
+        # Start the StatusQueue for asynchronous status updates
+        await self.status_queue.start()
 
         # Load resources and commands from ArtifactManager
         try:
@@ -230,6 +235,10 @@ class NexusApp(App):
         except Exception as e:
             logger.warning(f"Could not focus input field: {e}")
 
+    def _get_status_panel(self) -> StatusPanel:
+        """Helper to get the status panel widget."""
+        return self.query_one("#status", StatusPanel)
+
     async def on_input_submitted(self, event) -> None:
         """
         Handle input submission (Enter key pressed).
@@ -323,8 +332,7 @@ class NexusApp(App):
     async def _on_start(self):
         """Called when agent loop starts processing."""
         logger.debug("Agent loop started processing")
-        status = self.query_one("#status", StatusPanel)
-        status.add_info_message("Processing query...")
+        await self.status_queue.add_info_message("Processing query...")
 
     async def _on_stream_chunk(self, chunk: str):
         """
@@ -352,8 +360,7 @@ class NexusApp(App):
             params: Tool parameters
         """
         logger.info(f"Tool call: {tool_name} with params: {params}")
-        status = self.query_one("#status", StatusPanel)
-        status.add_tool_call(tool_name, params)
+        await self.status_queue.add_tool_call(tool_name, params)
 
     async def _on_tool_result(self, tool_name: str, result: str, success: bool = True):
         """
@@ -365,15 +372,15 @@ class NexusApp(App):
             success: Whether the tool executed successfully
         """
         logger.info(f"Tool result: {tool_name} - success={success}, result length={len(str(result))}")
-        status = self.query_one("#status", StatusPanel)
-        status.add_tool_result(tool_name, result, success)
+        await self.status_queue.add_tool_result(tool_name, result, success)
 
     async def action_quit(self) -> None:
         """Handle app quit - cleanup background tasks."""
         logger.info("Quitting application, cleaning up...")
         
-        # Stop the QueryManager
+        # Stop the QueryManager and StatusQueue
         await self.query_manager.stop()
+        await self.status_queue.stop()
         
         # Exit the app
         self.exit()
