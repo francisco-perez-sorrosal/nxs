@@ -27,10 +27,34 @@ Footer {
     layout: vertical;
 }
 
+/* Horizontal split container */
+#main-horizontal {
+    width: 100%;
+    height: 1fr;
+    layout: horizontal;
+}
+
 /* Main content area (chat + status) */
 #main-content {
-    height: 1fr;
+    width: 3fr;
+    height: 100%;
     layout: vertical;
+}
+
+/* MCP panel - right column */
+#mcp-panel {
+    width: 1fr;
+    min-width: 30;
+    border: solid $accent;
+    border-title-color: $accent;
+    border-title-align: left;
+    padding: 1;
+    scrollbar-gutter: stable;
+    background: $surface;
+}
+
+#mcp-panel:focus {
+    border: solid $accent-darken-1;
 }
 
 /* Chat panel - takes most of the space */

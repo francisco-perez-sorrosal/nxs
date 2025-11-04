@@ -5,12 +5,13 @@ NexusApp - Main Textual application for the Nexus TUI.
 import asyncio
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer
-from textual.containers import Container, Vertical
+from textual.containers import Container, Vertical, Horizontal
 from textual.binding import Binding
 
 from .widgets.chat_panel import ChatPanel
 from .widgets.status_panel import StatusPanel
 from .widgets.input_field import NexusInput, NexusAutoComplete
+from .widgets.mcp_panel import MCPPanel
 from .query_manager import QueryManager
 from .status_queue import StatusQueue
 from nxs.core.artifact_manager import ArtifactManager
@@ -24,21 +25,21 @@ class NexusApp(App):
     The main Nexus TUI application.
 
     Layout:
-    ┌─────────────────────────────┐
-    │         Header              │
-    ├─────────────────────────────┤
-    │                             │
-    │      Chat Panel             │
-    │     (scrollable)            │
-    │                             │
-    ├─────────────────────────────┤
-    │    Status Panel             │
-    │     (scrollable)            │
-    ├─────────────────────────────┤
-    │      Input Field            │
-    ├─────────────────────────────┤
-    │         Footer              │
-    └─────────────────────────────┘
+    ┌─────────────────────────────┬──────────┐
+    │         Header              │          │
+    ├─────────────────────────────┼──────────┤
+    │                             │          │
+    │      Chat Panel             │   MCP    │
+    │     (scrollable)            │  Panel   │
+    │                             │(servers, │
+    ├─────────────────────────────┤ artifacts│
+    │    Status Panel             │)         │
+    │     (scrollable)            │          │
+    ├─────────────────────────────┤          │
+    │      Input Field            │          │
+    ├─────────────────────────────┼──────────┤
+    │         Footer              │          │
+    └─────────────────────────────┴──────────┘
     """
 
     TITLE = "Nexus"
@@ -82,18 +83,22 @@ class NexusApp(App):
         yield Header()
 
         with Container(id="app-container"):
-            with Vertical(id="main-content"):
-                yield ChatPanel(id="chat")
+            with Horizontal(id="main-horizontal"):
+                with Vertical(id="main-content"):
+                    yield ChatPanel(id="chat")
+                    
+                    # Create input widget
+                    yield NexusInput(
+                        resources=self.resources,
+                        commands=self.commands,
+                        artifact_manager=self.artifact_manager,
+                        id="input"
+                    )
+                    
+                    yield StatusPanel(id="status")
                 
-                # Create input widget
-                yield NexusInput(
-                    resources=self.resources,
-                    commands=self.commands,
-                    artifact_manager=self.artifact_manager,
-                    id="input"
-                )
-                
-                yield StatusPanel(id="status")
+                # MCP servers panel on the right
+                yield MCPPanel(id="mcp-panel")
 
         yield Footer()
 
@@ -187,6 +192,9 @@ class NexusApp(App):
             self._mcp_initialized = True
             logger.info("MCP connection initialization completed")
             
+            # Update MCP panel with server information
+            await self._update_mcp_panel()
+            
         except Exception as e:
             logger.error(f"Error during MCP connection initialization: {e}", exc_info=True)
             await self.status_queue.add_error_message(f"MCP initialization error: {str(e)}")
@@ -201,6 +209,64 @@ class NexusApp(App):
                 input_widget.update_commands(self.commands)
             except Exception as load_error:
                 logger.error(f"Failed to load resources after initialization error: {load_error}")
+            
+            # Try to update MCP panel even if initialization had errors
+            try:
+                await self._update_mcp_panel()
+            except Exception as panel_error:
+                logger.error(f"Failed to update MCP panel: {panel_error}")
+    
+    async def _update_mcp_panel(self) -> None:
+        """
+        Collect MCP server data and update the MCP panel.
+        
+        This method gathers tools, prompts, and resources from each connected
+        server and updates the MCP panel display.
+        """
+        try:
+            servers_data: dict[str, dict[str, list[str]]] = {}
+            
+            # Iterate through all connected MCP clients
+            for server_name, client in self.artifact_manager.clients.items():
+                artifacts: dict[str, list[str]] = {
+                    "tools": [],
+                    "prompts": [],
+                    "resources": []
+                }
+                
+                try:
+                    # Get tools
+                    tools = await client.list_tools()
+                    if tools:
+                        artifacts["tools"] = [tool.name for tool in tools]
+                    
+                    # Get prompts
+                    prompts = await client.list_prompts()
+                    if prompts:
+                        artifacts["prompts"] = [prompt.name for prompt in prompts]
+                    
+                    # Get resources
+                    resources = await client.list_resources()
+                    if resources:
+                        artifacts["resources"] = [str(resource.uri) for resource in resources]
+                    
+                    servers_data[server_name] = artifacts
+                    logger.debug(f"Collected artifacts for {server_name}: "
+                               f"{len(artifacts['tools'])} tools, "
+                               f"{len(artifacts['prompts'])} prompts, "
+                               f"{len(artifacts['resources'])} resources")
+                except Exception as e:
+                    logger.error(f"Failed to collect artifacts for {server_name}: {e}")
+                    # Still add the server entry even if artifact collection failed
+                    servers_data[server_name] = artifacts
+            
+            # Update the MCP panel
+            mcp_panel = self.query_one("#mcp-panel", MCPPanel)
+            mcp_panel.update_servers(servers_data)
+            logger.info(f"Updated MCP panel with {len(servers_data)} server(s)")
+            
+        except Exception as e:
+            logger.error(f"Error updating MCP panel: {e}", exc_info=True)
     
     async def _preload_all_prompt_info(self) -> None:
         """Preload prompt argument information for all commands directly."""
