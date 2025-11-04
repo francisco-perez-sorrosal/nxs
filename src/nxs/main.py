@@ -43,22 +43,22 @@ async def main(
 
     claude_service = Claude(model=claude_model)
 
-    # Initialize ArtifactManager to load MCP servers and artifacts
+    # Create ArtifactManager (will be initialized asynchronously in the TUI)
     artifact_manager = ArtifactManager()
+
+    # Create CommandControlAgent with ArtifactManager
+    command_control = CommandControlAgent(
+        artifact_manager=artifact_manager,
+        claude_service=claude_service,
+    )
+
+    # Launch Textual TUI with ArtifactManager
+    # MCP connections will be initialized asynchronously after the TUI appears
+    app = NexusApp(
+        agent_loop=command_control,
+        artifact_manager=artifact_manager,
+    )
     try:
-        await artifact_manager.initialize()
-
-        # Create CommandControlAgent with ArtifactManager
-        command_control = CommandControlAgent(
-            artifact_manager=artifact_manager,
-            claude_service=claude_service,
-        )
-
-        # Launch Textual TUI with ArtifactManager
-        app = NexusApp(
-            agent_loop=command_control,
-            artifact_manager=artifact_manager,
-        )
         await app.run_async()
     finally:
         # Clean up ArtifactManager connections

@@ -2,6 +2,7 @@
 NexusApp - Main Textual application for the Nexus TUI.
 """
 
+import asyncio
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer
 from textual.containers import Container, Vertical
@@ -70,6 +71,7 @@ class NexusApp(App):
         self.artifact_manager = artifact_manager
         self.resources: list[str] = []
         self.commands: list[str] = []
+        self._mcp_initialized = False  # Track MCP initialization status
         # Initialize QueryManager with the processor function
         self.query_manager = QueryManager(processor=self._process_query)
         # Initialize StatusQueue for asynchronous status updates
@@ -104,24 +106,7 @@ class NexusApp(App):
         # Start the StatusQueue for asynchronous status updates
         await self.status_queue.start()
 
-        # Load resources and commands from ArtifactManager
-        try:
-            self.resources = await self.artifact_manager.get_resource_list()
-            self.commands = await self.artifact_manager.get_command_names()
-            logger.info(f"Loaded {len(self.resources)} resources and {len(self.commands)} commands")
-            
-            # Update the input widget with loaded resources and commands
-            input_widget = self.query_one("#input", NexusInput)
-            input_widget.update_resources(self.resources)
-            input_widget.update_commands(self.commands)
-            
-            # Preload prompt information for all commands BEFORE showing the UI
-            # This ensures arguments are available when dropdown is shown
-            await self._preload_all_prompt_info()
-        except Exception as e:
-            logger.error(f"Failed to load resources and commands: {e}")
-
-        # Show welcome message in chat
+        # Show welcome message immediately (TUI is ready)
         chat = self.query_one("#chat", ChatPanel)
         chat.add_panel(
             "[bold]Welcome to Nexus![/]\n\n"
@@ -133,11 +118,89 @@ class NexusApp(App):
             style="green"
         )
 
+        # Show loading message in status panel
+        await self.status_queue.add_info_message("Initializing MCP connections...")
+
+        # Initialize MCP connections asynchronously in the background
+        # This allows the TUI to appear immediately without blocking
+        asyncio.create_task(self._initialize_mcp_connections_async())
+
         # Mount AutoComplete overlay after the app is fully mounted
         self.call_after_refresh(self._mount_autocomplete)
         
         # Focus the input field after the first render
         self.call_after_refresh(self._focus_input)
+
+    async def _initialize_mcp_connections_async(self) -> None:
+        """
+        Initialize MCP connections asynchronously in the background.
+        
+        This runs after the TUI is displayed, allowing the UI to appear
+        immediately without blocking on MCP connection setup.
+        """
+        logger.info("Starting asynchronous MCP connection initialization")
+        
+        try:
+            # Initialize MCP connections
+            await self.status_queue.add_info_message("Connecting to MCP servers...")
+            await self.artifact_manager.initialize()
+            
+            server_count = len(self.artifact_manager.clients)
+            if server_count > 0:
+                await self.status_queue.add_success_message(
+                    f"Connected to {server_count} MCP server(s)"
+                )
+            else:
+                await self.status_queue.add_info_message("No MCP servers configured")
+            
+            # Load resources and commands from ArtifactManager
+            await self.status_queue.add_info_message("Loading resources and commands...")
+            
+            try:
+                self.resources = await self.artifact_manager.get_resource_list()
+                self.commands = await self.artifact_manager.get_command_names()
+                logger.info(f"Loaded {len(self.resources)} resources and {len(self.commands)} commands")
+                
+                # Update the input widget with loaded resources and commands
+                input_widget = self.query_one("#input", NexusInput)
+                input_widget.update_resources(self.resources)
+                input_widget.update_commands(self.commands)
+                
+                # Preload prompt information for all commands
+                # This ensures arguments are available when dropdown is shown
+                await self._preload_all_prompt_info()
+                
+                if self.resources or self.commands:
+                    await self.status_queue.add_success_message(
+                        f"Loaded {len(self.resources)} resource(s) and {len(self.commands)} command(s)"
+                    )
+                else:
+                    await self.status_queue.add_info_message("No resources or commands found")
+                    
+            except Exception as e:
+                logger.error(f"Failed to load resources and commands: {e}")
+                await self.status_queue.add_error_message(
+                    f"Failed to load resources/commands: {str(e)}"
+                )
+            
+            # Mark MCP as initialized
+            self._mcp_initialized = True
+            logger.info("MCP connection initialization completed")
+            
+        except Exception as e:
+            logger.error(f"Error during MCP connection initialization: {e}", exc_info=True)
+            await self.status_queue.add_error_message(f"MCP initialization error: {str(e)}")
+            
+            # Still try to update UI even if initialization failed
+            # (some servers might have connected successfully)
+            try:
+                self.resources = await self.artifact_manager.get_resource_list()
+                self.commands = await self.artifact_manager.get_command_names()
+                input_widget = self.query_one("#input", NexusInput)
+                input_widget.update_resources(self.resources)
+                input_widget.update_commands(self.commands)
+            except Exception as load_error:
+                logger.error(f"Failed to load resources after initialization error: {load_error}")
     
     async def _preload_all_prompt_info(self) -> None:
         """Preload prompt argument information for all commands directly."""
@@ -272,6 +335,18 @@ class NexusApp(App):
         # Note: Assistant message start will be added when processing begins
         # to ensure correct buffer assignment for each query
         # The worker will process queries sequentially and display results in order
+        
+        # Check if MCP connections are ready (non-blocking check)
+        if not self._mcp_initialized:
+            # MCP connections are still initializing - show message but allow queuing
+            # The query will wait in queue until connections are ready
+            chat.add_panel(
+                "[yellow]⏳ MCP connections are still initializing...[/]\n"
+                "Your query will be processed once connections are ready.",
+                title="Initializing",
+                style="yellow"
+            )
+        
         try:
             query_id = await self.query_manager.enqueue(query)
             logger.debug(f"Added user message to chat panel (query_id={query_id})")
@@ -292,6 +367,26 @@ class NexusApp(App):
             query_id: Sequential ID of the query for ordering
         """
         logger.info(f"Starting to process query (query_id={query_id}): '{query[:50]}{'...' if len(query) > 50 else ''}'")
+
+        # Wait for MCP connections to be ready if they're still initializing
+        if not self._mcp_initialized:
+            logger.info("MCP connections not ready yet, waiting...")
+            await self.status_queue.add_info_message("Waiting for MCP connections to be ready...")
+            # Wait up to 30 seconds for MCP initialization
+            for _ in range(300):  # 300 * 0.1s = 30s timeout
+                await asyncio.sleep(0.1)
+                if self._mcp_initialized:
+                    break
+            
+            if not self._mcp_initialized:
+                logger.warning("MCP connections still not ready after timeout")
+                chat = self.query_one("#chat", ChatPanel)
+                chat.add_panel(
+                    "[bold red]Error:[/] MCP connections not ready. Please try again.",
+                    title="Error",
+                    style="red"
+                )
+                return
 
         try:
             # Add assistant message start marker when processing begins
