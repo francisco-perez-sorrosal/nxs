@@ -69,9 +69,11 @@ class AgentLoop:
                 
                 # Notify tool results
                 if 'on_tool_result' in callbacks:
+                    # Convert to JSON string for consistent formatting
+                    import json
                     await callbacks['on_tool_result'](
                         tool_name='multiple',
-                        result=str(tool_result_parts),
+                        result=json.dumps(tool_result_parts, default=str),
                         success=True
                     )
 

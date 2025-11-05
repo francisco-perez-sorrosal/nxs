@@ -7,6 +7,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.json import JSON
 import json
+from typing import Any
 
 
 class StatusPanel(RichLog):
@@ -42,14 +43,9 @@ class StatusPanel(RichLog):
             name: Tool name
             params: Tool parameters as a dictionary
         """
-        # Create a panel for the tool call
-        try:
-            # Try to format params as JSON for better readability
-            params_str = json.dumps(params, indent=2)
-            params_display = JSON(params_str)
-        except:
-            # Fallback to string representation
-            params_display = str(params)
+        # Format params with content truncation (same pipeline as tool results)
+        formatted_params = self._format_json_data(params)
+        params_display = self._create_json_display(formatted_params)
 
         panel = Panel(
             params_display,
@@ -60,21 +56,108 @@ class StatusPanel(RichLog):
         self.write(panel)
         self.write("\n")
 
-    def add_tool_result(self, tool_name: str, result: str, success: bool = True):
+    def _truncate_content_fields(self, obj: Any) -> Any:
+        """
+        Recursively truncate 'content' fields in JSON objects/arrays to 100 characters.
+        
+        Args:
+            obj: Data structure (dict, list, or primitive)
+            
+        Returns:
+            Data structure with truncated content fields
+        """
+        if isinstance(obj, dict):
+            new_obj = {}
+            for key, value in obj.items():
+                if key == "content" and isinstance(value, str):
+                    # Truncate content to 100 chars
+                    if len(value) > 100:
+                        new_obj[key] = value[:100] + "... (truncated)"
+                    else:
+                        new_obj[key] = value
+                else:
+                    # Recursively process nested structures
+                    new_obj[key] = self._truncate_content_fields(value)
+            return new_obj
+        elif isinstance(obj, list):
+            # Process each element in the array
+            return [self._truncate_content_fields(item) for item in obj]
+        else:
+            # Return primitive values as-is
+            return obj
+    
+    def _format_json_data(self, data: str | list | dict) -> Any:
+        """
+        Format JSON data with parsing and content truncation.
+        
+        Handles different input types (JSON strings, Python repr strings, dicts, lists),
+        parses them, and truncates content fields for display.
+        
+        Args:
+            data: Data that may be a string (JSON or Python repr), list, or dict
+            
+        Returns:
+            Formatted data structure (dict/list) with truncated content fields, or original string if not parseable
+        """
+        # Handle different input types
+        if isinstance(data, (dict, list)):
+            # Already a data structure, truncate and return
+            return self._truncate_content_fields(data)
+        elif isinstance(data, str):
+            # Try to parse as JSON first
+            try:
+                parsed_data = json.loads(data)
+                return self._truncate_content_fields(parsed_data)
+            except json.JSONDecodeError:
+                # Not JSON, try to parse as Python repr (e.g., "[{...}, {...}]")
+                try:
+                    import ast
+                    parsed_data = ast.literal_eval(data)
+                    return self._truncate_content_fields(parsed_data)
+                except (ValueError, SyntaxError):
+                    # Not parseable, return as-is
+                    return data
+        else:
+            # Unknown type, return as-is
+            return data
+    
+    def _create_json_display(self, formatted_data: Any) -> Any:
+        """
+        Create Rich JSON display object from formatted data.
+        
+        Args:
+            formatted_data: Formatted data structure (dict/list) or string
+            
+        Returns:
+            Rich JSON object for display, or plain string if not a data structure
+        """
+        if isinstance(formatted_data, (dict, list)):
+            # It's a data structure, use Rich JSON for pretty formatting
+            json_str = json.dumps(formatted_data, indent=2, ensure_ascii=False)
+            return JSON(json_str)
+        else:
+            # It's a string, display as plain text
+            return formatted_data
+
+    def add_tool_result(self, tool_name: str, result: str | list | dict, success: bool = True):
         """
         Display a tool execution result.
 
         Args:
             tool_name: Name of the tool that was executed
-            result: Result text or data
+            result: Result text or data (may be JSON string, Python repr string, or data structure)
             success: Whether the tool executed successfully
         """
         status_icon = "✓" if success else "✗"
         status_color = "green" if success else "red"
         border_color = "green" if success else "red"
 
+        # Format the result with pretty JSON and truncated content (same pipeline as tool calls)
+        formatted_result = self._format_json_data(result)
+        result_display = self._create_json_display(formatted_result)
+
         panel = Panel(
-            result,
+            result_display,
             title=f"[{status_color}]{status_icon} Result: {tool_name}[/]",
             border_style=border_color,
             expand=False
