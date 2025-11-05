@@ -164,28 +164,90 @@ class ChatPanel(RichLog):
 
     def _create_left_aligned_markdown(self, markdown_text: str):
         """
-        Create a renderable with left-aligned headers.
+        Create a renderable with left-aligned headers and syntax-highlighted code blocks.
 
-        This is a workaround for Rich's Markdown class which hardcodes
-        center-alignment for headers (h1, h2, etc.) in the source.
-
-        We parse the markdown and render headers as styled Text objects
-        with left alignment, while still using Markdown for the rest.
+        This method:
+        1. Extracts code blocks (triple backticks) and renders them with Syntax highlighting
+        2. Processes headers separately to ensure left alignment
+        3. Renders remaining markdown normally
+        4. Combines everything in a Group renderable
 
         Args:
             markdown_text: The markdown text to render
 
         Returns:
-            A Group containing left-aligned headers and markdown content
+            A Group containing left-aligned headers, markdown content, and syntax-highlighted code blocks
         """
         # BUGFIX: Ensure markdown headers start on new lines
         # Sometimes Claude streams text like "...text:# Header" without line breaks
         # This regex adds a newline before any # that follows non-whitespace
         markdown_text = re.sub(r'(\S)(#+\s+)', r'\1\n\n\2', markdown_text)
 
-        # Split the markdown into lines and process headers separately
-        lines = markdown_text.split('\n')
+        # Extract code blocks with their positions and language
+        # Pattern matches: ```language\ncode\n``` or ```\ncode\n```
+        # Handles cases with/without language specifier and optional whitespace
+        code_block_pattern = r'```(\w+)?\s*\n(.*?)```'
+        code_blocks = []
+        for match in re.finditer(code_block_pattern, markdown_text, re.DOTALL):
+            language = match.group(1) or "python"  # Default to python if no language specified
+            code = match.group(2)
+            # Remove leading/trailing newlines from code content
+            code = code.strip('\n')
+            start_pos = match.start()
+            end_pos = match.end()
+            code_blocks.append((start_pos, end_pos, code, language))
+
+        # Sort code blocks by position
+        code_blocks.sort(key=lambda x: x[0])
+
+        # Split markdown text at code block boundaries
         renderables = []
+        last_pos = 0
+
+        for start_pos, end_pos, code, language in code_blocks:
+            # Process markdown before this code block
+            if start_pos > last_pos:
+                markdown_section = markdown_text[last_pos:start_pos]
+                if markdown_section.strip():
+                    renderables.extend(self._process_markdown_section(markdown_section))
+
+            # Render code block with Syntax highlighting
+            # Note: Padding is applied at the Group level in finish_assistant_message()
+            syntax = Syntax(code, language, theme="monokai", line_numbers=True)
+            renderables.append(syntax)
+            renderables.append(Text())  # Add spacing after code block
+
+            last_pos = end_pos
+
+        # Process remaining markdown after last code block
+        if last_pos < len(markdown_text):
+            markdown_section = markdown_text[last_pos:]
+            if markdown_section.strip():
+                renderables.extend(self._process_markdown_section(markdown_section))
+
+        # If no code blocks were found, process entire text normally
+        if not code_blocks:
+            renderables = self._process_markdown_section(markdown_text)
+
+        # If we only have one renderable and it's Markdown, just return it
+        if len(renderables) == 1 and isinstance(renderables[0], Markdown):
+            return renderables[0]
+
+        # Otherwise, return a Group of all renderables
+        return Group(*renderables) if renderables else Markdown(markdown_text, justify="left")
+
+    def _process_markdown_section(self, markdown_text: str):
+        """
+        Process a markdown section, handling headers with left alignment.
+
+        Args:
+            markdown_text: The markdown text to process
+
+        Returns:
+            List of renderables (Text headers, Markdown content, etc.)
+        """
+        renderables = []
+        lines = markdown_text.split('\n')
         current_chunk = []
 
         for line in lines:
@@ -193,8 +255,10 @@ class ChatPanel(RichLog):
             if re.match(r'^#+\s+', line):
                 # First, flush any accumulated non-header lines as markdown
                 if current_chunk:
-                    md = Markdown('\n'.join(current_chunk), justify="left")
-                    renderables.append(md)
+                    chunk_text = '\n'.join(current_chunk)
+                    if chunk_text.strip():
+                        md = Markdown(chunk_text, justify="left")
+                        renderables.append(md)
                     current_chunk = []
 
                 # Render header as styled Text with left alignment
@@ -218,12 +282,9 @@ class ChatPanel(RichLog):
 
         # Flush any remaining non-header content
         if current_chunk:
-            md = Markdown('\n'.join(current_chunk), justify="left")
-            renderables.append(md)
+            chunk_text = '\n'.join(current_chunk)
+            if chunk_text.strip():
+                md = Markdown(chunk_text, justify="left")
+                renderables.append(md)
 
-        # If we only have one renderable and it's Markdown, just return it
-        if len(renderables) == 1 and isinstance(renderables[0], Markdown):
-            return renderables[0]
-
-        # Otherwise, return a Group of all renderables
-        return Group(*renderables) if renderables else Markdown(markdown_text, justify="left")
+        return renderables if renderables else [Markdown(markdown_text, justify="left")]
