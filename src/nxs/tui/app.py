@@ -3,6 +3,7 @@ NexusApp - Main Textual application for the Nexus TUI.
 """
 
 import asyncio
+from typing import Callable
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer
 from textual.containers import Container, Vertical, Horizontal
@@ -244,13 +245,36 @@ class NexusApp(App):
             mcp_panel.update_server_status(server_name, status)
             
             # Refresh the panel with current data
-            # We need to get the current servers_data and statuses
-            asyncio.create_task(self._refresh_mcp_panel_with_status())
+            # For CONNECTED status, add a small delay to ensure session is fully ready
+            # This is especially important during reconnection when artifacts need to be re-fetched
+            if status == ConnectionStatus.CONNECTED:
+                # Delay refresh slightly to ensure session is ready after initialization
+                asyncio.create_task(self._refresh_mcp_panel_with_status_delayed())
+            else:
+                # For other statuses, refresh immediately
+                asyncio.create_task(self._refresh_mcp_panel_with_status())
         except Exception as e:
             logger.error(f"Error updating MCP panel status: {e}")
 
-    async def _refresh_mcp_panel_with_status(self) -> None:
-        """Refresh the MCP panel with current server data and statuses."""
+    async def _refresh_mcp_panel_with_status_delayed(self) -> None:
+        """
+        Refresh the MCP panel with a small delay to ensure session is ready.
+        
+        This is used when status changes to CONNECTED to give the session
+        time to be fully ready before fetching artifacts.
+        """
+        # Small delay to ensure session is ready after initialization
+        await asyncio.sleep(0.5)
+        await self._refresh_mcp_panel_with_status(retry_on_empty=True)
+
+    async def _refresh_mcp_panel_with_status(self, retry_on_empty: bool = False) -> None:
+        """
+        Refresh the MCP panel with current server data and statuses.
+        
+        Args:
+            retry_on_empty: If True, retry fetching artifacts if they come back empty
+                           for connected servers. This helps with reconnection scenarios.
+        """
         try:
             # Get current server statuses
             server_statuses = self.artifact_manager.get_server_statuses()
@@ -269,22 +293,59 @@ class NexusApp(App):
                 # Only try to get artifacts if connected
                 if client.is_connected:
                     try:
-                        # Get tools
-                        tools = await client.list_tools()
+                        # Get tools with retry logic
+                        tools = await self._fetch_artifacts_with_retry(
+                            client.list_tools, 
+                            server_name, 
+                            "tools",
+                            retry_on_empty=retry_on_empty
+                        )
                         if tools:
                             artifacts["tools"] = [tool.name for tool in tools]
                         
-                        # Get prompts
-                        prompts = await client.list_prompts()
+                        # Get prompts with retry logic
+                        prompts = await self._fetch_artifacts_with_retry(
+                            client.list_prompts,
+                            server_name,
+                            "prompts",
+                            retry_on_empty=retry_on_empty
+                        )
                         if prompts:
                             artifacts["prompts"] = [prompt.name for prompt in prompts]
                         
-                        # Get resources
-                        resources = await client.list_resources()
+                        # Get resources with retry logic
+                        resources = await self._fetch_artifacts_with_retry(
+                            client.list_resources,
+                            server_name,
+                            "resources",
+                            retry_on_empty=retry_on_empty
+                        )
                         if resources:
                             artifacts["resources"] = [str(resource.uri) for resource in resources]
+                        
+                        logger.debug(f"Collected artifacts for {server_name}: "
+                                   f"{len(artifacts['tools'])} tools, "
+                                   f"{len(artifacts['prompts'])} prompts, "
+                                   f"{len(artifacts['resources'])} resources")
                     except Exception as e:
                         logger.error(f"Failed to collect artifacts for {server_name}: {e}")
+                        # If retry_on_empty is True and we got an error, try once more after a delay
+                        if retry_on_empty:
+                            logger.info(f"Retrying artifact fetch for {server_name} after error...")
+                            await asyncio.sleep(1.0)
+                            try:
+                                tools = await client.list_tools()
+                                if tools:
+                                    artifacts["tools"] = [tool.name for tool in tools]
+                                prompts = await client.list_prompts()
+                                if prompts:
+                                    artifacts["prompts"] = [prompt.name for prompt in prompts]
+                                resources = await client.list_resources()
+                                if resources:
+                                    artifacts["resources"] = [str(resource.uri) for resource in resources]
+                                logger.info(f"Successfully fetched artifacts for {server_name} on retry")
+                            except Exception as retry_error:
+                                logger.error(f"Retry also failed for {server_name}: {retry_error}")
                 
                 servers_data[server_name] = artifacts
             
@@ -294,6 +355,55 @@ class NexusApp(App):
             logger.debug(f"Refreshed MCP panel with {len(servers_data)} server(s)")
         except Exception as e:
             logger.error(f"Error refreshing MCP panel: {e}")
+    
+    async def _fetch_artifacts_with_retry(
+        self,
+        fetch_func: Callable,
+        server_name: str,
+        artifact_type: str,
+        retry_on_empty: bool = False,
+        max_retries: int = 2,
+        retry_delay: float = 0.5
+    ) -> list:
+        """
+        Fetch artifacts with retry logic for reconnection scenarios.
+        
+        Args:
+            fetch_func: Async function to fetch artifacts (list_tools, list_prompts, list_resources)
+            server_name: Name of the server (for logging)
+            artifact_type: Type of artifact being fetched (for logging)
+            retry_on_empty: If True, retry if result is empty
+            max_retries: Maximum number of retries
+            retry_delay: Delay between retries in seconds
+            
+        Returns:
+            List of artifacts (tools, prompts, or resources)
+        """
+        for attempt in range(max_retries + 1):
+            try:
+                result = await fetch_func()
+                if result or not retry_on_empty or attempt == max_retries:
+                    return result or []
+                
+                # If result is empty and we should retry, wait and try again
+                if attempt < max_retries:
+                    logger.debug(
+                        f"Empty {artifact_type} for {server_name} (attempt {attempt + 1}), "
+                        f"retrying in {retry_delay}s..."
+                    )
+                    await asyncio.sleep(retry_delay)
+            except Exception as e:
+                if attempt < max_retries:
+                    logger.debug(
+                        f"Error fetching {artifact_type} for {server_name} (attempt {attempt + 1}): {e}, "
+                        f"retrying in {retry_delay}s..."
+                    )
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.warning(f"Failed to fetch {artifact_type} for {server_name} after {max_retries + 1} attempts: {e}")
+                    raise
+        
+        return []
 
     async def _update_mcp_panel(self) -> None:
         """
