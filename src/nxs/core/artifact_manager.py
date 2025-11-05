@@ -128,6 +128,10 @@ class ArtifactManager:
         all_resource_ids: dict[str, list[str]] = {}
 
         for mcp_name, mcp_client in self.mcp_clients.items():
+            # Only fetch from connected clients
+            if not mcp_client.is_connected:
+                continue
+                
             try:
                 logger.debug(f"Listing resources from {mcp_name}")
                 resource_list: list[Resource] = await mcp_client.list_resources()
@@ -169,6 +173,10 @@ class ArtifactManager:
         all_prompts: list[Prompt] = []
 
         for mcp_name, mcp_client in self.mcp_clients.items():
+            # Only fetch from connected clients
+            if not mcp_client.is_connected:
+                continue
+                
             try:
                 logger.debug(f"Listing prompts from {mcp_name}")
                 prompts = await mcp_client.list_prompts()
@@ -198,6 +206,10 @@ class ArtifactManager:
         all_tools: list[Tool] = []
 
         for mcp_name, mcp_client in self.mcp_clients.items():
+            # Only fetch from connected clients
+            if not mcp_client.is_connected:
+                continue
+                
             try:
                 logger.debug(f"Listing tools from {mcp_name}")
                 tools = await mcp_client.list_tools()
@@ -272,6 +284,10 @@ class ArtifactManager:
             This allows calling get_prompt on the correct server.
         """
         for mcp_name, mcp_client in self.mcp_clients.items():
+            # Only check connected clients
+            if not mcp_client.is_connected:
+                continue
+                
             try:
                 prompts = await mcp_client.list_prompts()
                 for prompt in prompts:

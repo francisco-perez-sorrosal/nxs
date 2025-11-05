@@ -12,7 +12,8 @@ from textual.binding import Binding
 
 from .widgets.chat_panel import ChatPanel
 from .widgets.status_panel import StatusPanel
-from .widgets.input_field import NexusInput, NexusAutoComplete
+from .widgets.input_field import NexusInput
+from .widgets.autocomplete import NexusAutoComplete
 from .widgets.mcp_panel import MCPPanel
 from .query_manager import QueryManager
 from .status_queue import StatusQueue
@@ -436,6 +437,22 @@ class NexusApp(App):
                     self._prompt_info_cache[command] = arg_info
                     logger.debug(f"Preloaded info for '{command}': {arg_info}")
             logger.info(f"Successfully preloaded prompt information for {len(getattr(self, '_prompt_info_cache', {}))} commands")
+            
+            # Update autocomplete widget cache if it's already mounted
+            try:
+                # Use query to find autocomplete widget
+                from nxs.tui.widgets.autocomplete import NexusAutoComplete
+                autocomplete_list = self.query(NexusAutoComplete)
+                if autocomplete_list:
+                    autocomplete = autocomplete_list[0]
+                    if hasattr(self, '_prompt_info_cache') and self._prompt_info_cache:
+                        autocomplete._prompt_cache = self._prompt_info_cache.copy()
+                        logger.info(f"Updated autocomplete prompt cache with {len(self._prompt_info_cache)} items")
+                    if hasattr(self, '_prompt_schema_cache') and self._prompt_schema_cache:
+                        autocomplete._prompt_schema_cache = self._prompt_schema_cache.copy()
+                        logger.info(f"Updated autocomplete prompt schema cache with {len(self._prompt_schema_cache)} items")
+            except Exception as e:
+                logger.debug(f"Autocomplete widget not found yet, will copy cache when mounted: {e}")
         except Exception as e:
             logger.error(f"Failed to preload prompt info: {e}")
             import traceback
@@ -494,13 +511,19 @@ class NexusApp(App):
             self.mount(autocomplete)
             logger.info("AutoComplete overlay mounted successfully")
             
-            # Copy preloaded prompt info cache to autocomplete
-            if hasattr(self, '_prompt_info_cache'):
+            # Copy preloaded prompt info cache to autocomplete (if available)
+            # This may be called before prompts are loaded, so we check if cache exists
+            if hasattr(self, '_prompt_info_cache') and self._prompt_info_cache:
                 autocomplete._prompt_cache = self._prompt_info_cache.copy()
                 logger.info(f"Copied {len(self._prompt_info_cache)} cached prompt info items to autocomplete")
-            if hasattr(self, '_prompt_schema_cache'):
+            else:
+                logger.debug("Prompt info cache not available yet when mounting autocomplete")
+                
+            if hasattr(self, '_prompt_schema_cache') and self._prompt_schema_cache:
                 autocomplete._prompt_schema_cache = self._prompt_schema_cache.copy()
                 logger.info(f"Copied {len(self._prompt_schema_cache)} cached prompt schemas to autocomplete")
+            else:
+                logger.warning("Prompt schema cache not available yet when mounting autocomplete - cache will be empty!")
         except Exception as e:
             logger.error(f"Failed to mount AutoComplete overlay: {e}")
 
