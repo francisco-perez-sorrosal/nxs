@@ -3,6 +3,7 @@ Utility functions for the Nexus application.
 """
 
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -58,3 +59,20 @@ def list_prompt_files(prompts_dir: str = "prompts") -> list[str]:
     
     # Return all .txt files in the prompts directory
     return [f.name for f in prompts_path.glob("*.txt")]
+
+
+def format_time_hhmmss(timestamp: float) -> str:
+    """
+    Format a Unix timestamp as HH:MM:ss.
+    
+    Args:
+        timestamp: Unix timestamp (float)
+        
+    Returns:
+        Formatted string like "14:30:45" or "--:--:--" if timestamp is 0
+    """
+    if timestamp == 0:
+        return "--:--:--"
+    
+    dt = datetime.fromtimestamp(timestamp)
+    return dt.strftime("%H:%M:%S")

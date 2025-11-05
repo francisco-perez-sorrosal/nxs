@@ -214,6 +214,7 @@ class MCPAuthClient:
                 if self._reconnect_attempts >= self._max_reconnect_attempts:
                     logger.error(f"❌ Max reconnection attempts ({self._max_reconnect_attempts}) reached, giving up")
                     self._set_status(ConnectionStatus.ERROR)
+                    # The status callback will notify the UI about the error
                     break
                 
                 # Attempt reconnection with exponential backoff
@@ -226,21 +227,36 @@ class MCPAuthClient:
                 self._set_status(ConnectionStatus.RECONNECTING)
                 
                 # Wait before reconnecting (but check stop_event periodically)
+                # Show periodic progress updates during the wait
                 try:
                     if self._stop_event is not None:
-                        await asyncio.wait_for(self._stop_event.wait(), timeout=delay)
+                        # Show progress every 2 seconds during reconnection delay
+                        elapsed = 0.0
+                        update_interval = 2.0
+                        while elapsed < delay:
+                            remaining = delay - elapsed
+                            if remaining > update_interval:
+                                await asyncio.sleep(update_interval)
+                                elapsed += update_interval
+                                logger.debug(f"⏳ Reconnection in {remaining:.1f}s... (attempt {self._reconnect_attempts}/{self._max_reconnect_attempts})")
+                            else:
+                                await asyncio.sleep(remaining)
+                                elapsed = delay
+                        
+                        # Check if stop_event was set during wait
+                        if self._stop_event.is_set():
+                            logger.info(f"🛑 Stop event set during reconnect delay")
+                            self._set_status(ConnectionStatus.DISCONNECTED)
+                            break
                     else:
                         await asyncio.sleep(delay)
-                    # If stop_event was set, break the loop
-                    logger.info(f"🛑 Stop event set during reconnect delay")
-                    self._set_status(ConnectionStatus.DISCONNECTED)
-                    break
                 except asyncio.TimeoutError:
                     # Timeout is expected - continue to reconnect
                     pass
             finally:
                 # Clean up session if connection was lost
                 if self.session:
+                    logger.info(f"🧹 Connection lost - cleaning up session and artifacts")
                     self.session = None
                     logger.info(f"🧹 Session cleaned up")
         
@@ -314,6 +330,7 @@ class MCPAuthClient:
                         logger.warning(f"⚠️ Connection status says CONNECTED but session is None, triggering reconnection")
                         # Trigger reconnection by breaking out of _setup_session
                         # The _maintain_connection loop will handle reconnection
+                        self._set_status(ConnectionStatus.RECONNECTING)
                     continue
                 
                 # Try to perform a lightweight operation to check connection health
@@ -322,11 +339,11 @@ class MCPAuthClient:
                     await asyncio.wait_for(self.session.list_tools(), timeout=5.0)
                     logger.debug(f"✅ Health check passed: connection is healthy")
                 except asyncio.TimeoutError:
-                    logger.warning(f"⚠️ Health check timed out, connection may be lost")
+                    logger.warning(f"⚠️ Health check timed out after 5s, connection may be lost - triggering reconnection")
                     self.session = None
                     self._set_status(ConnectionStatus.RECONNECTING)
                 except Exception as e:
-                    logger.warning(f"⚠️ Health check failed: {e}, connection may be lost")
+                    logger.warning(f"⚠️ Health check failed: {e}, connection may be lost - triggering reconnection")
                     self.session = None
                     self._set_status(ConnectionStatus.RECONNECTING)
         except asyncio.CancelledError:

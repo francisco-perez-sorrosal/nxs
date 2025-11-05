@@ -8,6 +8,8 @@ The ArtifactManager is responsible for:
 - Managing the lifecycle of MCP client connections
 """
 
+import asyncio
+import time
 from contextlib import AsyncExitStack
 from typing import Optional, Callable
 
@@ -46,6 +48,10 @@ class ArtifactManager:
         self._exit_stack: Optional[AsyncExitStack] = None
         self.on_status_change = on_status_change
         self._server_statuses: dict[str, ConnectionStatus] = {}
+        # Track last check time for each server
+        self._server_last_check: dict[str, float] = {}
+        # Cache artifacts for each server to avoid unnecessary fetches
+        self._artifacts_cache: dict[str, dict[str, list[str]]] = {}
 
     async def initialize(self, use_auth: bool = False) -> None:
         """
@@ -297,6 +303,239 @@ class ArtifactManager:
             Dictionary mapping server names to their connection status.
         """
         return self._server_statuses.copy()
+
+    def get_server_last_check(self, server_name: str) -> float:
+        """
+        Get the last check time for a server.
+
+        Args:
+            server_name: Name of the server
+
+        Returns:
+            Unix timestamp of last check, or 0 if never checked
+        """
+        return self._server_last_check.get(server_name, 0)
+
+    def update_server_last_check(self, server_name: str, timestamp: float | None = None) -> None:
+        """
+        Update the last check time for a server.
+
+        Args:
+            server_name: Name of the server
+            timestamp: Unix timestamp. If None, uses current time
+        """
+        if timestamp is None:
+            timestamp = time.time()
+        self._server_last_check[server_name] = timestamp
+
+    def get_cached_artifacts(self, server_name: str) -> dict[str, list[str]] | None:
+        """
+        Get cached artifacts for a server.
+
+        Args:
+            server_name: Name of the server
+
+        Returns:
+            Cached artifacts dict or None if not cached
+        """
+        return self._artifacts_cache.get(server_name)
+
+    def cache_artifacts(self, server_name: str, artifacts: dict[str, list[str]]) -> None:
+        """
+        Cache artifacts for a server.
+
+        Args:
+            server_name: Name of the server
+            artifacts: Artifacts dict with keys "tools", "prompts", "resources"
+        """
+        self._artifacts_cache[server_name] = artifacts.copy()
+
+    def clear_artifacts_cache(self, server_name: str | None = None) -> None:
+        """
+        Clear artifacts cache for a server or all servers.
+
+        Args:
+            server_name: Name of the server. If None, clears all cache
+        """
+        if server_name is None:
+            self._artifacts_cache.clear()
+        else:
+            self._artifacts_cache.pop(server_name, None)
+
+    def have_artifacts_changed(self, server_name: str, new_artifacts: dict[str, list[str]]) -> bool:
+        """
+        Check if artifacts have changed compared to cache.
+
+        Args:
+            server_name: Name of the server
+            new_artifacts: New artifacts dict to compare
+
+        Returns:
+            True if artifacts have changed, False otherwise
+        """
+        cached = self._artifacts_cache.get(server_name)
+        if cached is None:
+            return True
+
+        # Compare artifact counts
+        new_total = (
+            len(new_artifacts.get("tools", [])) +
+            len(new_artifacts.get("prompts", [])) +
+            len(new_artifacts.get("resources", []))
+        )
+        cached_total = (
+            len(cached.get("tools", [])) +
+            len(cached.get("prompts", [])) +
+            len(cached.get("resources", []))
+        )
+
+        # Check if going from 0 to >0 or >0 to 0
+        if (cached_total == 0 and new_total > 0) or (cached_total > 0 and new_total == 0):
+            return True
+
+        # Compare actual content
+        return new_artifacts != cached
+
+    async def _fetch_with_retry(
+        self,
+        fetch_func: Callable,
+        server_name: str,
+        artifact_type: str,
+        retry_on_empty: bool = False,
+        max_retries: int = 2,
+        retry_delay: float = 0.5
+    ) -> list:
+        """
+        Fetch artifacts with retry logic for reconnection scenarios.
+
+        Args:
+            fetch_func: Async function to fetch artifacts (list_tools, list_prompts, list_resources)
+            server_name: Name of the server (for logging)
+            artifact_type: Type of artifact being fetched (for logging)
+            retry_on_empty: If True, retry if result is empty
+            max_retries: Maximum number of retries
+            retry_delay: Delay between retries in seconds
+
+        Returns:
+            List of artifacts (tools, prompts, or resources)
+        """
+        for attempt in range(max_retries + 1):
+            try:
+                result = await fetch_func()
+                if result or not retry_on_empty or attempt == max_retries:
+                    return result or []
+
+                # If result is empty and we should retry, wait and try again
+                if attempt < max_retries:
+                    logger.debug(
+                        f"Empty {artifact_type} for {server_name} (attempt {attempt + 1}), "
+                        f"retrying in {retry_delay}s..."
+                    )
+                    await asyncio.sleep(retry_delay)
+            except Exception as e:
+                if attempt < max_retries:
+                    logger.debug(
+                        f"Error fetching {artifact_type} for {server_name} (attempt {attempt + 1}): {e}, "
+                        f"retrying in {retry_delay}s..."
+                    )
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.warning(f"Failed to fetch {artifact_type} for {server_name} after {max_retries + 1} attempts: {e}")
+                    raise
+
+        return []
+
+    async def get_server_artifacts(
+        self,
+        server_name: str,
+        retry_on_empty: bool = False
+    ) -> dict[str, list[str]]:
+        """
+        Get artifacts (tools, prompts, resources) for a specific server.
+
+        Args:
+            server_name: Name of the server
+            retry_on_empty: If True, retry fetching if results are empty
+
+        Returns:
+            Dictionary with keys "tools", "prompts", "resources", each containing a list of names/URIs
+        """
+        artifacts: dict[str, list[str]] = {
+            "tools": [],
+            "prompts": [],
+            "resources": []
+        }
+
+        client = self.mcp_clients.get(server_name)
+        if not client:
+            logger.warning(f"Server {server_name} not found in clients")
+            return artifacts
+
+        # Update last check time
+        self.update_server_last_check(server_name)
+
+        # Only fetch if connected
+        if not client.is_connected:
+            logger.debug(f"Server {server_name} is not connected, skipping artifact fetch")
+            return artifacts
+
+        try:
+            # Fetch tools with retry
+            tools = await self._fetch_with_retry(
+                client.list_tools,
+                server_name,
+                "tools",
+                retry_on_empty=retry_on_empty
+            )
+            if tools:
+                artifacts["tools"] = [tool.name for tool in tools]
+
+            # Fetch prompts with retry
+            prompts = await self._fetch_with_retry(
+                client.list_prompts,
+                server_name,
+                "prompts",
+                retry_on_empty=retry_on_empty
+            )
+            if prompts:
+                artifacts["prompts"] = [prompt.name for prompt in prompts]
+
+            # Fetch resources with retry
+            resources = await self._fetch_with_retry(
+                client.list_resources,
+                server_name,
+                "resources",
+                retry_on_empty=retry_on_empty
+            )
+            if resources:
+                artifacts["resources"] = [str(resource.uri) for resource in resources]
+
+            logger.debug(
+                f"Fetched artifacts for {server_name}: "
+                f"{len(artifacts['tools'])} tools, "
+                f"{len(artifacts['prompts'])} prompts, "
+                f"{len(artifacts['resources'])} resources"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to fetch artifacts for {server_name}: {e}")
+
+        return artifacts
+
+    async def get_all_servers_artifacts(self) -> dict[str, dict[str, list[str]]]:
+        """
+        Get artifacts for all servers.
+
+        Returns:
+            Dictionary mapping server names to their artifacts dict
+        """
+        all_artifacts: dict[str, dict[str, list[str]]] = {}
+
+        for server_name in self.mcp_clients.keys():
+            artifacts = await self.get_server_artifacts(server_name)
+            all_artifacts[server_name] = artifacts
+
+        return all_artifacts
 
     async def cleanup(self) -> None:
         """

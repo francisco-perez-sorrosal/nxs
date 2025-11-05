@@ -4,6 +4,7 @@ MCPPanel - A scrollable panel displaying MCP servers and their artifacts.
 
 from textual.widgets import RichLog
 from nxs.mcp_client.client import ConnectionStatus
+from nxs.utils import format_time_hhmmss
 
 
 def get_status_icon(status: ConnectionStatus) -> str:
@@ -56,6 +57,8 @@ class MCPPanel(RichLog):
         self.add_divider()
         # Track connection status for each server
         self._server_statuses: dict[str, ConnectionStatus] = {}
+        # Track fetching status for each server
+        self._server_fetch_status: dict[str, str] = {}
 
     def update_server_status(self, server_name: str, status: ConnectionStatus):
         """
@@ -69,11 +72,31 @@ class MCPPanel(RichLog):
         # Refresh the display to show updated status
         # Note: This requires the full servers_data to be passed again
         # For now, we'll just store it and show it in the next update
+    
+    def set_fetch_status(self, server_name: str, status_message: str):
+        """
+        Set the fetching status message for a server.
+        
+        Args:
+            server_name: Name of the server
+            status_message: Status message (e.g., "Fetching artifacts...", "Loaded 5 artifacts")
+        """
+        self._server_fetch_status[server_name] = status_message
+    
+    def clear_fetch_status(self, server_name: str):
+        """
+        Clear the fetching status for a server.
+        
+        Args:
+            server_name: Name of the server
+        """
+        self._server_fetch_status.pop(server_name, None)
 
     def update_servers(
         self,
         servers_data: dict[str, dict[str, list[str]]],
         server_statuses: dict[str, ConnectionStatus] | None = None,
+        server_last_check: dict[str, float] | None = None,
     ):
         """
         Update the panel with server data and connection status.
@@ -89,6 +112,8 @@ class MCPPanel(RichLog):
                          }
             server_statuses: Dictionary mapping server names to their connection status.
                              If None, uses cached statuses.
+            server_last_check: Dictionary mapping server names to their last check timestamp.
+                             If None, uses cached times.
         """
         # Update cached statuses if provided
         if server_statuses:
@@ -109,8 +134,21 @@ class MCPPanel(RichLog):
             status_icon = get_status_icon(status)
             status_text = get_status_text(status)
             
+            # Get fetch status if available
+            fetch_status = self._server_fetch_status.get(server_name, "")
+            
+            # Get last check time from provided dict (from ArtifactManager via app.py)
+            last_check_timestamp = server_last_check.get(server_name, 0) if server_last_check else 0
+            last_check_str = format_time_hhmmss(last_check_timestamp)
+            
             # Server header with connection status
-            self.write(f"\n[bold yellow]📡 {server_name}[/] {status_icon} {status_text}\n")
+            if fetch_status:
+                self.write(f"\n[bold yellow]📡 {server_name}[/] {status_icon} {status_text} [dim]| {fetch_status}[/]\n")
+            else:
+                self.write(f"\n[bold yellow]📡 {server_name}[/] {status_icon} {status_text}\n")
+            
+            # Show last check time
+            self.write(f"  [dim]Checked: {last_check_str}[/]\n")
             
             # Tools
             tools = artifacts.get("tools", [])
