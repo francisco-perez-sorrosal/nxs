@@ -11,7 +11,8 @@ from mcp import types
 import typer
 import webbrowser
 from datetime import timedelta
-from typing import Any
+from typing import Any, Callable, Optional
+from enum import Enum
 from pydantic import AnyUrl
 
 from mcp.types import CallToolResult
@@ -25,18 +26,66 @@ from nxs.logger import get_logger
 from nxs.mcp_client.auth import oauth_context
 
 
+class ConnectionStatus(Enum):
+    """Connection status enumeration."""
+    DISCONNECTED = "disconnected"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    RECONNECTING = "reconnecting"
+    ERROR = "error"
+
+
 class MCPAuthClient:
     """MCP Auth Client with OAuth support."""
 
-    def __init__(self, server_url: str, transport_type: str = "streamable_http"):
+    def __init__(
+        self,
+        server_url: str,
+        transport_type: str = "streamable_http",
+        on_status_change: Optional[Callable[[ConnectionStatus], None]] = None,
+    ):
         self.server_url = server_url
         self.transport_type = transport_type
         self.session: ClientSession | None = None
+        self.on_status_change = on_status_change
+        self._connection_status = ConnectionStatus.DISCONNECTED
+        self._use_auth = False
+
+        # Reconnection settings
+        self._reconnect_attempts = 0
+        self._max_reconnect_attempts = 10
+        self._reconnect_delay = 1.0  # Initial delay in seconds
+        self._max_reconnect_delay = 60.0  # Maximum delay in seconds
+        self._reconnect_backoff_multiplier = 2.0
+        self._health_check_interval = 30.0  # Check connection health every 30 seconds
+        self._health_check_task: asyncio.Task | None = None
 
         # Lifecycle management for background connection
         self._connection_task: asyncio.Task | None = None  # Background task keeping connection alive
         self._stop_event: asyncio.Event | None = None      # Event to signal shutdown
         self._ready_event: asyncio.Event | None = None     # Event to signal session is ready
+
+    def _set_status(self, status: ConnectionStatus):
+        """Update connection status and notify callback if set."""
+        if self._connection_status != status:
+            old_status = self._connection_status
+            self._connection_status = status
+            logger.debug(f"Connection status changed: {old_status.value} -> {status.value}")
+            if self.on_status_change:
+                try:
+                    self.on_status_change(status)
+                except Exception as e:
+                    logger.error(f"Error in status change callback: {e}")
+
+    @property
+    def connection_status(self) -> ConnectionStatus:
+        """Get current connection status."""
+        return self._connection_status
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if client is currently connected."""
+        return self._connection_status == ConnectionStatus.CONNECTED and self.session is not None
 
     async def connect(self, use_auth: bool = False):
         """
@@ -49,13 +98,19 @@ class MCPAuthClient:
         Args:
             use_auth: Whether to use OAuth authentication
         """
+        self._use_auth = use_auth
         print(f"🔗 Attempting to connect to {self.server_url}...")
         logger.info(f"🔗 Starting non-blocking connection to {self.server_url}")
         logger.info(f"🔗 Transport type: {self.transport_type}")
+        self._set_status(ConnectionStatus.CONNECTING)
 
         # Check transport type
         if self.transport_type == "sse":
+            self._set_status(ConnectionStatus.ERROR)
             raise ValueError("SSE transport is not supported")
+
+        # Reset reconnection state
+        self._reconnect_attempts = 0
 
         # Create events for lifecycle coordination
         self._stop_event = asyncio.Event()
@@ -64,6 +119,9 @@ class MCPAuthClient:
         # Start background task to maintain connection
         logger.info(f"🚀 Starting background connection maintenance task")
         self._connection_task = asyncio.create_task(self._maintain_connection(use_auth))
+
+        # Start health check task
+        self._health_check_task = asyncio.create_task(self._health_check_loop())
 
         # Wait for session to be ready
         logger.info(f"⏳ Waiting for session to be ready...")
@@ -75,6 +133,7 @@ class MCPAuthClient:
             print(f"✅ Connection established! Session is ready for use.\n")
         except Exception as e:
             logger.error(f"❌ Failed to establish connection: {e}")
+            self._set_status(ConnectionStatus.ERROR)
             # Clean up if connection failed
             if self._connection_task:
                 self._connection_task.cancel()
@@ -82,59 +141,114 @@ class MCPAuthClient:
                     await self._connection_task
                 except asyncio.CancelledError:
                     pass
+            if self._health_check_task:
+                self._health_check_task.cancel()
             raise
 
     async def _maintain_connection(self, use_auth: bool):
         """
         Background task that maintains the connection by keeping all context managers alive.
+        Implements reconnection logic with exponential backoff.
         
         CRITICAL: This method catches all exceptions to prevent them from blocking the application.
         Connection failures are logged but do not crash the app - the TUI should continue working
         even if MCP connections fail.
         """
-        try:
-            logger.info(f"🔄 Starting connection maintenance task (auth={use_auth})")
+        if self._stop_event is None:
+            logger.error("❌ Stop event not initialized, cannot maintain connection")
+            return
+        
+        while not self._stop_event.is_set():
+            try:
+                logger.info(f"🔄 Starting connection maintenance task (auth={use_auth}, attempt={self._reconnect_attempts + 1})")
+                self._set_status(ConnectionStatus.CONNECTING if self._reconnect_attempts == 0 else ConnectionStatus.RECONNECTING)
 
-            if use_auth:
-                logger.info(f"🔐 Using OAuth context")
-                async with oauth_context(self.server_url) as oauth_provider:
+                if use_auth:
+                    logger.info(f"🔐 Using OAuth context")
+                    async with oauth_context(self.server_url) as oauth_provider:
+                        async with streamablehttp_client(
+                            url=self.server_url,
+                            auth=oauth_provider,
+                            timeout=timedelta(seconds=60),
+                        ) as (read_stream, write_stream, get_session_id):
+                            logger.info(f"✅ StreamableHTTP transport connected (with auth)")
+                            await self._setup_session(read_stream, write_stream, get_session_id)
+                else:
+                    logger.info(f"🔓 No OAuth context")
                     async with streamablehttp_client(
                         url=self.server_url,
-                        auth=oauth_provider,
+                        auth=None,
                         timeout=timedelta(seconds=60),
                     ) as (read_stream, write_stream, get_session_id):
-                        logger.info(f"✅ StreamableHTTP transport connected (with auth)")
+                        logger.info(f"✅ StreamableHTTP transport connected (no auth)")
                         await self._setup_session(read_stream, write_stream, get_session_id)
-            else:
-                logger.info(f"🔓 No OAuth context")
-                async with streamablehttp_client(
-                    url=self.server_url,
-                    auth=None,
-                    timeout=timedelta(seconds=60),
-                ) as (read_stream, write_stream, get_session_id):
-                    logger.info(f"✅ StreamableHTTP transport connected (no auth)")
-                    await self._setup_session(read_stream, write_stream, get_session_id)
-
-        except asyncio.CancelledError:
-            # Task was cancelled - this is expected during shutdown
-            logger.info(f"🛑 Connection maintenance task cancelled")
-            raise  # Re-raise cancellation so asyncio knows task was cancelled
-        except Exception as e:
-            # Log the error but DON'T re-raise - we don't want this to block the app
-            import traceback
-            logger.error(f"❌ Connection maintenance task failed: {e}")
-            logger.debug(f"Connection error traceback:\n{traceback.format_exc()}")
-            
-            # CRITICAL: Always set ready_event even on failure, so connect() doesn't hang
-            if self._ready_event and not self._ready_event.is_set():
-                self._ready_event.set()
-                logger.info(f"✅ Set ready_event despite connection failure (non-blocking mode)")
-        finally:
-            logger.info(f"🧹 Connection maintenance task exiting")
-            self.session = None
+                
+                # If we get here, the connection was successful and then lost
+                # (setup_session exited, which means connection was closed)
+                logger.warning(f"⚠️ Connection lost, attempting to reconnect...")
+                self._set_status(ConnectionStatus.RECONNECTING)
+                self._reconnect_attempts += 1
+                
+            except asyncio.CancelledError:
+                # Task was cancelled - this is expected during shutdown
+                logger.info(f"🛑 Connection maintenance task cancelled")
+                self._set_status(ConnectionStatus.DISCONNECTED)
+                raise  # Re-raise cancellation so asyncio knows task was cancelled
+            except Exception as e:
+                # Log the error but attempt reconnection
+                import traceback
+                logger.error(f"❌ Connection maintenance task failed: {e}")
+                logger.debug(f"Connection error traceback:\n{traceback.format_exc()}")
+                
+                # CRITICAL: Always set ready_event even on failure, so connect() doesn't hang
+                if self._ready_event and not self._ready_event.is_set():
+                    self._ready_event.set()
+                    logger.info(f"✅ Set ready_event despite connection failure (non-blocking mode)")
+                
+                # Check if we should attempt reconnection
+                if self._stop_event.is_set():
+                    logger.info(f"🛑 Stop event set, not attempting reconnection")
+                    self._set_status(ConnectionStatus.DISCONNECTED)
+                    break
+                
+                if self._reconnect_attempts >= self._max_reconnect_attempts:
+                    logger.error(f"❌ Max reconnection attempts ({self._max_reconnect_attempts}) reached, giving up")
+                    self._set_status(ConnectionStatus.ERROR)
+                    break
+                
+                # Attempt reconnection with exponential backoff
+                self._reconnect_attempts += 1
+                delay = min(
+                    self._reconnect_delay * (self._reconnect_backoff_multiplier ** (self._reconnect_attempts - 1)),
+                    self._max_reconnect_delay
+                )
+                logger.info(f"🔄 Reconnecting in {delay:.1f} seconds (attempt {self._reconnect_attempts}/{self._max_reconnect_attempts})...")
+                self._set_status(ConnectionStatus.RECONNECTING)
+                
+                # Wait before reconnecting (but check stop_event periodically)
+                try:
+                    if self._stop_event is not None:
+                        await asyncio.wait_for(self._stop_event.wait(), timeout=delay)
+                    else:
+                        await asyncio.sleep(delay)
+                    # If stop_event was set, break the loop
+                    logger.info(f"🛑 Stop event set during reconnect delay")
+                    self._set_status(ConnectionStatus.DISCONNECTED)
+                    break
+                except asyncio.TimeoutError:
+                    # Timeout is expected - continue to reconnect
+                    pass
+            finally:
+                # Clean up session if connection was lost
+                if self.session:
+                    self.session = None
+                    logger.info(f"🧹 Session cleaned up")
+        
+        logger.info(f"🧹 Connection maintenance task exiting")
+        self._set_status(ConnectionStatus.DISCONNECTED)
 
     async def _setup_session(self, read_stream, write_stream, get_session_id):
-        """Initialize session and keep it alive until stop signal."""
+        """Initialize session and keep it alive until stop signal or connection loss."""
         print("🤝 Initializing MCP session...")
         logger.info(f"🤝 Creating ClientSession")
 
@@ -149,8 +263,12 @@ class MCPAuthClient:
                 print("✨ Session initialization complete!")
             except Exception as e:
                 logger.error(f"❌ Session initialization failed: {e}")
+                self._set_status(ConnectionStatus.ERROR)
                 raise
 
+            # Reset reconnect attempts on successful connection
+            self._reconnect_attempts = 0
+            self._set_status(ConnectionStatus.CONNECTED)
             print(f"\n✅ Connected to MCP server at {self.server_url}")
             logger.info(f"✅ Full connection established to {self.server_url}")
 
@@ -165,12 +283,56 @@ class MCPAuthClient:
                 self._ready_event.set()
                 logger.info(f"✅ Session ready - signaled ready event")
 
-            # Keep session alive until stop signal
-            logger.info(f"⏳ Session active, waiting for stop signal...")
+            # Keep session alive until stop signal or connection loss
+            logger.info(f"⏳ Session active, waiting for stop signal or connection loss...")
             if self._stop_event:
                 await self._stop_event.wait()
 
             logger.info(f"🛑 Stop signal received, cleaning up session...")
+            self._set_status(ConnectionStatus.DISCONNECTED)
+
+    async def _health_check_loop(self):
+        """
+        Background task that periodically checks connection health.
+        If connection is lost, triggers reconnection.
+        """
+        if self._stop_event is None:
+            logger.error("❌ Stop event not initialized, cannot run health check")
+            return
+        
+        try:
+            while not self._stop_event.is_set():
+                await asyncio.sleep(self._health_check_interval)
+                
+                if self._stop_event.is_set():
+                    break
+                
+                # Check if we have a session and if it's still valid
+                if self.session is None:
+                    logger.warning(f"⚠️ Health check: Session is None, connection may be lost")
+                    if self._connection_status == ConnectionStatus.CONNECTED:
+                        logger.warning(f"⚠️ Connection status says CONNECTED but session is None, triggering reconnection")
+                        # Trigger reconnection by breaking out of _setup_session
+                        # The _maintain_connection loop will handle reconnection
+                    continue
+                
+                # Try to perform a lightweight operation to check connection health
+                try:
+                    # Use list_tools as a health check - it's lightweight and doesn't require arguments
+                    await asyncio.wait_for(self.session.list_tools(), timeout=5.0)
+                    logger.debug(f"✅ Health check passed: connection is healthy")
+                except asyncio.TimeoutError:
+                    logger.warning(f"⚠️ Health check timed out, connection may be lost")
+                    self.session = None
+                    self._set_status(ConnectionStatus.RECONNECTING)
+                except Exception as e:
+                    logger.warning(f"⚠️ Health check failed: {e}, connection may be lost")
+                    self.session = None
+                    self._set_status(ConnectionStatus.RECONNECTING)
+        except asyncio.CancelledError:
+            logger.info(f"🛑 Health check task cancelled")
+        except Exception as e:
+            logger.error(f"❌ Health check loop error: {e}")
 
     async def _run_session(self, read_stream, write_stream, get_session_id):
         """Run the MCP session with the given streams."""
@@ -376,11 +538,23 @@ class MCPAuthClient:
         """
         logger.info(f"🛑 Disconnect requested")
         print("\n🛑 Disconnecting from server...")
+        self._set_status(ConnectionStatus.DISCONNECTED)
 
         if self._stop_event:
             # Signal background task to stop
             self._stop_event.set()
             logger.info(f"📤 Stop event set, waiting for connection task to finish")
+
+        # Cancel health check task
+        if self._health_check_task:
+            self._health_check_task.cancel()
+            try:
+                await self._health_check_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(f"⚠️  Error cancelling health check task: {e}")
+            self._health_check_task = None
 
         if self._connection_task:
             try:

@@ -9,7 +9,7 @@ The ArtifactManager is responsible for:
 """
 
 from contextlib import AsyncExitStack
-from typing import Optional
+from typing import Optional, Callable
 
 from mcp.types import Prompt, Tool, Resource
 
@@ -19,7 +19,7 @@ from nxs.core.mcp_config import (
     get_server_config,
     load_mcp_config,
 )
-from nxs.mcp_client.client import MCPAuthClient
+from nxs.mcp_client.client import MCPAuthClient, ConnectionStatus
 from nxs.logger import get_logger
 
 logger = get_logger("artifact_manager")
@@ -28,16 +28,24 @@ logger = get_logger("artifact_manager")
 class ArtifactManager:
     """Manages artifacts from MCP servers: resources, prompts, and tools."""
 
-    def __init__(self, config: Optional[MCPServersConfig] = None):
+    def __init__(
+        self,
+        config: Optional[MCPServersConfig] = None,
+        on_status_change: Optional[Callable[[str, ConnectionStatus], None]] = None,
+    ):
         """
         Initialize the ArtifactManager.
 
         Args:
             config: MCP servers configuration. If None, loads from default location.
+            on_status_change: Optional callback called when connection status changes.
+                             Receives (server_name, status) as arguments.
         """
         self.config = config or load_mcp_config()
         self.mcp_clients: dict[str, MCPAuthClient] = {}
         self._exit_stack: Optional[AsyncExitStack] = None
+        self.on_status_change = on_status_change
+        self._server_statuses: dict[str, ConnectionStatus] = {}
 
     async def initialize(self, use_auth: bool = False) -> None:
         """
@@ -60,14 +68,31 @@ class ArtifactManager:
                 url = server.remote_url()
                 if url:
                     logger.info(f"Connecting to remote MCP server: {server_name} at {url}")
-                    mcp_client = MCPAuthClient(url)
+                    
+                    # Create status change callback for this server
+                    def make_status_callback(name: str):
+                        def status_callback(status: ConnectionStatus):
+                            self._server_statuses[name] = status
+                            if self.on_status_change:
+                                try:
+                                    self.on_status_change(name, status)
+                                except Exception as e:
+                                    logger.error(f"Error in status change callback for {name}: {e}")
+                        return status_callback
+                    
+                    mcp_client = MCPAuthClient(
+                        url,
+                        on_status_change=make_status_callback(server_name)
+                    )
                     self.mcp_clients[server_name] = mcp_client
+                    self._server_statuses[server_name] = ConnectionStatus.DISCONNECTED
 
                     try:
                         await mcp_client.connect(use_auth=use_auth)
                         logger.info(f"Successfully connected to {server_name}")
                     except Exception as e:
                         logger.error(f"Failed to connect to {server_name}: {e}")
+                        self._server_statuses[server_name] = ConnectionStatus.ERROR
                         # Continue with other servers even if one fails
                 else:
                     logger.warning(
@@ -263,6 +288,15 @@ class ArtifactManager:
             This is used by CommandControlAgent/AgentLoop to execute tools.
         """
         return self.mcp_clients
+
+    def get_server_statuses(self) -> dict[str, ConnectionStatus]:
+        """
+        Get the connection status for all servers.
+
+        Returns:
+            Dictionary mapping server names to their connection status.
+        """
+        return self._server_statuses.copy()
 
     async def cleanup(self) -> None:
         """

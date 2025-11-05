@@ -15,6 +15,7 @@ from .widgets.mcp_panel import MCPPanel
 from .query_manager import QueryManager
 from .status_queue import StatusQueue
 from nxs.core.artifact_manager import ArtifactManager
+from nxs.mcp_client.client import ConnectionStatus
 from nxs.logger import get_logger
 
 logger = get_logger("nexus_tui")
@@ -77,6 +78,10 @@ class NexusApp(App):
         self.query_manager = QueryManager(processor=self._process_query)
         # Initialize StatusQueue for asynchronous status updates
         self.status_queue = StatusQueue(status_panel_getter=self._get_status_panel)
+        
+        # Set up connection status change callback
+        # Note: This will be set after artifact_manager is created in main.py
+        # We'll set it in on_mount to ensure the TUI is ready
 
     def compose(self) -> ComposeResult:
         """Create the UI layout."""
@@ -125,6 +130,10 @@ class NexusApp(App):
 
         # Show loading message in status panel
         await self.status_queue.add_info_message("Initializing MCP connections...")
+
+        # Set up connection status change callback
+        # This must be done before initialization to catch all status changes
+        self.artifact_manager.on_status_change = self._on_mcp_status_change
 
         # Initialize MCP connections asynchronously in the background
         # This allows the TUI to appear immediately without blocking
@@ -216,6 +225,76 @@ class NexusApp(App):
             except Exception as panel_error:
                 logger.error(f"Failed to update MCP panel: {panel_error}")
     
+    def _on_mcp_status_change(self, server_name: str, status: ConnectionStatus):
+        """
+        Handle connection status change for an MCP server.
+        
+        This callback is called whenever a server's connection status changes.
+        It updates the MCP panel to reflect the new status.
+        
+        Args:
+            server_name: Name of the server
+            status: New connection status
+        """
+        logger.info(f"Connection status changed for {server_name}: {status.value}")
+        
+        # Update MCP panel status
+        try:
+            mcp_panel = self.query_one("#mcp-panel", MCPPanel)
+            mcp_panel.update_server_status(server_name, status)
+            
+            # Refresh the panel with current data
+            # We need to get the current servers_data and statuses
+            asyncio.create_task(self._refresh_mcp_panel_with_status())
+        except Exception as e:
+            logger.error(f"Error updating MCP panel status: {e}")
+
+    async def _refresh_mcp_panel_with_status(self) -> None:
+        """Refresh the MCP panel with current server data and statuses."""
+        try:
+            # Get current server statuses
+            server_statuses = self.artifact_manager.get_server_statuses()
+            
+            # Get current server data
+            servers_data: dict[str, dict[str, list[str]]] = {}
+            
+            # Iterate through all MCP clients (even if disconnected)
+            for server_name, client in self.artifact_manager.clients.items():
+                artifacts: dict[str, list[str]] = {
+                    "tools": [],
+                    "prompts": [],
+                    "resources": []
+                }
+                
+                # Only try to get artifacts if connected
+                if client.is_connected:
+                    try:
+                        # Get tools
+                        tools = await client.list_tools()
+                        if tools:
+                            artifacts["tools"] = [tool.name for tool in tools]
+                        
+                        # Get prompts
+                        prompts = await client.list_prompts()
+                        if prompts:
+                            artifacts["prompts"] = [prompt.name for prompt in prompts]
+                        
+                        # Get resources
+                        resources = await client.list_resources()
+                        if resources:
+                            artifacts["resources"] = [str(resource.uri) for resource in resources]
+                    except Exception as e:
+                        logger.error(f"Failed to collect artifacts for {server_name}: {e}")
+                
+                servers_data[server_name] = artifacts
+            
+            # Update the MCP panel with both data and statuses
+            mcp_panel = self.query_one("#mcp-panel", MCPPanel)
+            mcp_panel.update_servers(servers_data, server_statuses)
+            logger.debug(f"Refreshed MCP panel with {len(servers_data)} server(s)")
+        except Exception as e:
+            logger.error(f"Error refreshing MCP panel: {e}")
+
     async def _update_mcp_panel(self) -> None:
         """
         Collect MCP server data and update the MCP panel.
@@ -224,6 +303,9 @@ class NexusApp(App):
         server and updates the MCP panel display.
         """
         try:
+            # Get current server statuses
+            server_statuses = self.artifact_manager.get_server_statuses()
+            
             servers_data: dict[str, dict[str, list[str]]] = {}
             
             # Iterate through all connected MCP clients
@@ -234,35 +316,37 @@ class NexusApp(App):
                     "resources": []
                 }
                 
-                try:
-                    # Get tools
-                    tools = await client.list_tools()
-                    if tools:
-                        artifacts["tools"] = [tool.name for tool in tools]
-                    
-                    # Get prompts
-                    prompts = await client.list_prompts()
-                    if prompts:
-                        artifacts["prompts"] = [prompt.name for prompt in prompts]
-                    
-                    # Get resources
-                    resources = await client.list_resources()
-                    if resources:
-                        artifacts["resources"] = [str(resource.uri) for resource in resources]
-                    
-                    servers_data[server_name] = artifacts
-                    logger.debug(f"Collected artifacts for {server_name}: "
-                               f"{len(artifacts['tools'])} tools, "
-                               f"{len(artifacts['prompts'])} prompts, "
-                               f"{len(artifacts['resources'])} resources")
-                except Exception as e:
-                    logger.error(f"Failed to collect artifacts for {server_name}: {e}")
-                    # Still add the server entry even if artifact collection failed
-                    servers_data[server_name] = artifacts
+                # Only try to get artifacts if connected
+                if client.is_connected:
+                    try:
+                        # Get tools
+                        tools = await client.list_tools()
+                        if tools:
+                            artifacts["tools"] = [tool.name for tool in tools]
+                        
+                        # Get prompts
+                        prompts = await client.list_prompts()
+                        if prompts:
+                            artifacts["prompts"] = [prompt.name for prompt in prompts]
+                        
+                        # Get resources
+                        resources = await client.list_resources()
+                        if resources:
+                            artifacts["resources"] = [str(resource.uri) for resource in resources]
+                        
+                        logger.debug(f"Collected artifacts for {server_name}: "
+                                   f"{len(artifacts['tools'])} tools, "
+                                   f"{len(artifacts['prompts'])} prompts, "
+                                   f"{len(artifacts['resources'])} resources")
+                    except Exception as e:
+                        logger.error(f"Failed to collect artifacts for {server_name}: {e}")
+                        # Still add the server entry even if artifact collection failed
+                
+                servers_data[server_name] = artifacts
             
-            # Update the MCP panel
+            # Update the MCP panel with both data and statuses
             mcp_panel = self.query_one("#mcp-panel", MCPPanel)
-            mcp_panel.update_servers(servers_data)
+            mcp_panel.update_servers(servers_data, server_statuses)
             logger.info(f"Updated MCP panel with {len(servers_data)} server(s)")
             
         except Exception as e:
