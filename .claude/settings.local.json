@@ -32,7 +32,8 @@
       "Bash(rm:*)",
       "Bash(lsof:*)",
       "Bash(xargs kill:*)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []
