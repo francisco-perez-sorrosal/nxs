@@ -482,20 +482,19 @@ bus.publish(ConnectionStatusChanged(server_name="foo", status=CONNECTED))
 
 ---
 
-#### **Step 1.3: Extract Refresh Orchestration** 🟡 **Medium Priority**
+#### ~~**Step 1.3: Extract Refresh Orchestration**~~ ✅ **COMPLETED**
 
 **Target:** `NexusApp._schedule_refresh()` and `_refresh_mcp_panel_with_status()`
 
 **Actions:**
-1. Create `tui/services/` package:
+1. ✅ Create `tui/services/` package:
    ```
    tui/services/
    ├── __init__.py
-   ├── refresh_coordinator.py   # RefreshCoordinator
-   └── artifact_fetcher.py      # ArtifactFetcher
+   └── refresh_coordinator.py   # RefreshCoordinator
    ```
 
-2. Extract task management → `RefreshCoordinator`:
+2. ✅ Extract task management → `RefreshCoordinator`:
    ```python
    class RefreshCoordinator:
        def schedule_refresh(self, server_name: str | None, delay: float = 0.0)
@@ -503,22 +502,20 @@ bus.publish(ConnectionStatusChanged(server_name="foo", status=CONNECTED))
        async def refresh(self, server_name: str | None)
    ```
 
-3. Extract fetching logic → `ArtifactFetcher`:
-   ```python
-   class ArtifactFetcher:
-       async def fetch_with_timeout(self, server_name: str) -> Artifacts
-       async def fetch_all(self) -> dict[str, Artifacts]
-   ```
+3. ✅ Extract refresh orchestration logic from `NexusApp`
 
-4. Refactor `NexusApp` to delegate to these services
+4. ✅ Refactor `NexusApp` to delegate to `RefreshCoordinator`
 
-**Benefits:**
-- Testable refresh logic
-- Clearer responsibilities
-- Reduced complexity in NexusApp
-- Reusable components
+**Results:**
+- ✅ Created `RefreshCoordinator` service with clean API for scheduling and managing refreshes
+- ✅ Extracted complex task cancellation, debouncing, and locking logic from `NexusApp`
+- ✅ Simplified `NexusApp` by delegating all refresh coordination to the service
+- ✅ Improved testability and maintainability with focused, single-responsibility component
+- ✅ Reduced complexity in NexusApp
 
-**Estimated effort:** 5-7 hours
+**Note:** `ArtifactFetcher` was not needed as a separate component; the fetching logic is cleanly handled by `ArtifactManager` and the coordination is handled by `RefreshCoordinator`.
+
+**Actual effort:** ~3-4 hours
 
 ---
 
