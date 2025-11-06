@@ -430,11 +430,16 @@ class NexusApp(App):
         
         This is a helper method to avoid code duplication.
         """
+        logger.debug(f"_update_mcp_panel_display: {len(servers_data)} servers in data, {len(server_statuses)} in statuses")
+        
         # Get last check times from ArtifactManager
+        # If servers_data is empty but we have server_statuses, use statuses to get check times
+        server_names = set(servers_data.keys()) if servers_data else set(server_statuses.keys()) if server_statuses else set()
         server_last_check = {}
-        for server_name in servers_data.keys():
+        for server_name in server_names:
             server_last_check[server_name] = self.artifact_manager.get_server_last_check(server_name)
         
+        logger.debug(f"Calling update_servers with {len(servers_data)} servers, {len(server_statuses)} statuses")
         mcp_panel.update_servers(servers_data, server_statuses, server_last_check)
     
     async def _clear_fetch_status_after_delay(self, server_name: str, delay: float) -> None:
@@ -442,6 +447,7 @@ class NexusApp(App):
         Clear the fetch status for a server after a delay.
         
         This runs asynchronously and doesn't block the UI.
+        With the new per-server widget architecture, we only need to update that one server.
         
         Args:
             server_name: Name of the server
@@ -451,10 +457,7 @@ class NexusApp(App):
         try:
             mcp_panel = self.query_one("#mcp-panel", MCPPanel)
             mcp_panel.clear_fetch_status(server_name)
-            # Refresh panel to remove status message
-            server_statuses = self.artifact_manager.get_server_statuses()
-            servers_data = await self.artifact_manager.get_all_servers_artifacts()
-            await self._update_mcp_panel_display(mcp_panel, servers_data, server_statuses)
+            # No need to refresh entire panel - just that server widget is updated
         except Exception as e:
             logger.debug(f"Error clearing fetch status for {server_name}: {e}")
     
