@@ -43,11 +43,13 @@ class MCPAuthClient:
         server_url: str,
         transport_type: str = "streamable_http",
         on_status_change: Optional[Callable[[ConnectionStatus], None]] = None,
+        on_reconnect_progress: Optional[Callable[[int, int, float], None]] = None,
     ):
         self.server_url = server_url
         self.transport_type = transport_type
         self.session: ClientSession | None = None
         self.on_status_change = on_status_change
+        self.on_reconnect_progress = on_reconnect_progress
         self._connection_status = ConnectionStatus.DISCONNECTED
         self._use_auth = False
 
@@ -59,6 +61,7 @@ class MCPAuthClient:
         self._reconnect_backoff_multiplier = 2.0
         self._health_check_interval = 30.0  # Check connection health every 30 seconds
         self._health_check_task: asyncio.Task | None = None
+        self._error_message: str | None = None  # Store error message for ERROR status
 
         # Lifecycle management for background connection
         self._connection_task: asyncio.Task | None = None  # Background task keeping connection alive
@@ -87,6 +90,41 @@ class MCPAuthClient:
         """Check if client is currently connected."""
         return self._connection_status == ConnectionStatus.CONNECTED and self.session is not None
 
+    @property
+    def reconnect_info(self) -> dict[str, Any]:
+        """
+        Get reconnection progress information.
+        
+        Returns:
+            Dictionary with reconnection info:
+            - attempts: Current attempt number
+            - max_attempts: Maximum reconnection attempts
+            - next_retry_delay: Seconds until next retry (if reconnecting)
+            - error_message: Error message if status is ERROR
+        """
+        info = {
+            "attempts": self._reconnect_attempts,
+            "max_attempts": self._max_reconnect_attempts,
+            "next_retry_delay": None,
+            "error_message": self._error_message,
+        }
+        
+        # Calculate next retry delay if reconnecting
+        # Only show delay if we have actual reconnection attempts (not the initial connection attempt)
+        if self._connection_status == ConnectionStatus.RECONNECTING and self._reconnect_attempts > 0:
+            delay = min(
+                self._reconnect_delay * (self._reconnect_backoff_multiplier ** (self._reconnect_attempts - 1)),
+                self._max_reconnect_delay
+            )
+            info["next_retry_delay"] = delay
+        elif self._connection_status == ConnectionStatus.RECONNECTING and self._reconnect_attempts == 0:
+            # If we're marked as RECONNECTING but attempts is still 0, we're in an inconsistent state
+            # This shouldn't happen, but handle it gracefully by showing we're about to start reconnecting
+            info["attempts"] = 1  # Show as attempt 1 since we're about to retry
+            info["next_retry_delay"] = self._reconnect_delay  # Show initial delay
+            
+        return info
+
     async def connect(self, use_auth: bool = False):
         """
         Connect to MCP server and keep connection alive in background.
@@ -111,6 +149,7 @@ class MCPAuthClient:
 
         # Reset reconnection state
         self._reconnect_attempts = 0
+        self._error_message = None
 
         # Create events for lifecycle coordination
         self._stop_event = asyncio.Event()
@@ -186,8 +225,57 @@ class MCPAuthClient:
                 # If we get here, the connection was successful and then lost
                 # (setup_session exited, which means connection was closed)
                 logger.warning(f"⚠️ Connection lost, attempting to reconnect...")
-                self._set_status(ConnectionStatus.RECONNECTING)
+                # Increment attempt counter BEFORE setting status to ensure consistency
                 self._reconnect_attempts += 1
+                
+                # Calculate delay for this attempt
+                delay = min(
+                    self._reconnect_delay * (self._reconnect_backoff_multiplier ** (self._reconnect_attempts - 1)),
+                    self._max_reconnect_delay
+                )
+                logger.info(f"🔄 Reconnecting in {delay:.1f} seconds (attempt {self._reconnect_attempts}/{self._max_reconnect_attempts})...")
+                
+                # Set status to RECONNECTING AFTER incrementing attempt counter and calculating delay
+                self._set_status(ConnectionStatus.RECONNECTING)
+                
+                # Notify about reconnection progress
+                if self.on_reconnect_progress:
+                    try:
+                        self.on_reconnect_progress(self._reconnect_attempts, self._max_reconnect_attempts, delay)
+                    except Exception as e:
+                        logger.error(f"Error in reconnect progress callback: {e}")
+                
+                # Wait before reconnecting (similar to exception handler path)
+                try:
+                    if self._stop_event is not None:
+                        elapsed = 0.0
+                        update_interval = 2.0
+                        while elapsed < delay:
+                            remaining = delay - elapsed
+                            if remaining > update_interval:
+                                await asyncio.sleep(update_interval)
+                                elapsed += update_interval
+                                logger.debug(f"⏳ Reconnection in {remaining:.1f}s... (attempt {self._reconnect_attempts}/{self._max_reconnect_attempts})")
+                                # Update progress callback with remaining time
+                                if self.on_reconnect_progress:
+                                    try:
+                                        self.on_reconnect_progress(self._reconnect_attempts, self._max_reconnect_attempts, remaining)
+                                    except Exception:
+                                        pass
+                            else:
+                                await asyncio.sleep(remaining)
+                                elapsed = delay
+                        
+                        # Check if stop_event was set during wait
+                        if self._stop_event.is_set():
+                            logger.info(f"🛑 Stop event set during reconnect delay")
+                            self._set_status(ConnectionStatus.DISCONNECTED)
+                            break
+                    else:
+                        await asyncio.sleep(delay)
+                except asyncio.TimeoutError:
+                    # Timeout is expected - continue to reconnect
+                    pass
                 
             except asyncio.CancelledError:
                 # Task was cancelled - this is expected during shutdown
@@ -211,20 +299,35 @@ class MCPAuthClient:
                     self._set_status(ConnectionStatus.DISCONNECTED)
                     break
                 
-                if self._reconnect_attempts >= self._max_reconnect_attempts:
+                # Increment attempt counter BEFORE checking max attempts
+                # This ensures reconnect_info is always consistent when status is RECONNECTING
+                self._reconnect_attempts += 1
+                
+                if self._reconnect_attempts > self._max_reconnect_attempts:
+                    error_msg = f"Connection failed after {self._max_reconnect_attempts} attempts"
                     logger.error(f"❌ Max reconnection attempts ({self._max_reconnect_attempts}) reached, giving up")
+                    self._error_message = error_msg
                     self._set_status(ConnectionStatus.ERROR)
                     # The status callback will notify the UI about the error
                     break
                 
-                # Attempt reconnection with exponential backoff
-                self._reconnect_attempts += 1
+                # Calculate delay for this attempt (attempt number is already incremented)
                 delay = min(
                     self._reconnect_delay * (self._reconnect_backoff_multiplier ** (self._reconnect_attempts - 1)),
                     self._max_reconnect_delay
                 )
                 logger.info(f"🔄 Reconnecting in {delay:.1f} seconds (attempt {self._reconnect_attempts}/{self._max_reconnect_attempts})...")
+                
+                # Set status to RECONNECTING AFTER incrementing attempt counter
+                # This ensures reconnect_info is always consistent
                 self._set_status(ConnectionStatus.RECONNECTING)
+                
+                # Notify about reconnection progress
+                if self.on_reconnect_progress:
+                    try:
+                        self.on_reconnect_progress(self._reconnect_attempts, self._max_reconnect_attempts, delay)
+                    except Exception as e:
+                        logger.error(f"Error in reconnect progress callback: {e}")
                 
                 # Wait before reconnecting (but check stop_event periodically)
                 # Show periodic progress updates during the wait
@@ -239,6 +342,12 @@ class MCPAuthClient:
                                 await asyncio.sleep(update_interval)
                                 elapsed += update_interval
                                 logger.debug(f"⏳ Reconnection in {remaining:.1f}s... (attempt {self._reconnect_attempts}/{self._max_reconnect_attempts})")
+                                # Update progress callback with remaining time
+                                if self.on_reconnect_progress:
+                                    try:
+                                        self.on_reconnect_progress(self._reconnect_attempts, self._max_reconnect_attempts, remaining)
+                                    except Exception:
+                                        pass
                             else:
                                 await asyncio.sleep(remaining)
                                 elapsed = delay
@@ -282,8 +391,9 @@ class MCPAuthClient:
                 self._set_status(ConnectionStatus.ERROR)
                 raise
 
-            # Reset reconnect attempts on successful connection
+            # Reset reconnect attempts and clear error on successful connection
             self._reconnect_attempts = 0
+            self._error_message = None
             self._set_status(ConnectionStatus.CONNECTED)
             print(f"\n✅ Connected to MCP server at {self.server_url}")
             logger.info(f"✅ Full connection established to {self.server_url}")
@@ -546,6 +656,25 @@ class MCPAuthClient:
                 break
             except EOFError:
                 break
+
+    async def retry_connection(self, use_auth: bool = False) -> None:
+        """
+        Manually retry connection after ERROR status.
+        
+        This resets the reconnection state and attempts to reconnect.
+        
+        Args:
+            use_auth: Whether to use OAuth authentication
+        """
+        if self._connection_status == ConnectionStatus.ERROR:
+            logger.info(f"🔄 Manual retry requested for {self.server_url}")
+            # Reset reconnection state
+            self._reconnect_attempts = 0
+            self._error_message = None
+            # Restart connection
+            await self.connect(use_auth=use_auth)
+        else:
+            logger.warning(f"Cannot retry connection: status is {self._connection_status.value}, not ERROR")
 
     async def disconnect(self):
         """

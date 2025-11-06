@@ -2,6 +2,7 @@
 MCPPanel - A scrollable panel displaying MCP servers and their artifacts.
 """
 
+from typing import Any
 from textual.widgets import RichLog
 from nxs.mcp_client.client import ConnectionStatus
 from nxs.utils import format_time_hhmmss
@@ -59,6 +60,10 @@ class MCPPanel(RichLog):
         self._server_statuses: dict[str, ConnectionStatus] = {}
         # Track fetching status for each server
         self._server_fetch_status: dict[str, str] = {}
+        # Track reconnection progress for each server
+        self._server_reconnect_info: dict[str, dict[str, Any]] = {}
+        # Track error messages for each server
+        self._server_error_messages: dict[str, str] = {}
 
     def update_server_status(self, server_name: str, status: ConnectionStatus):
         """
@@ -69,9 +74,25 @@ class MCPPanel(RichLog):
             status: Connection status
         """
         self._server_statuses[server_name] = status
+        # Clear error message when status changes away from ERROR
+        if status != ConnectionStatus.ERROR:
+            self._server_error_messages.pop(server_name, None)
         # Refresh the display to show updated status
         # Note: This requires the full servers_data to be passed again
         # For now, we'll just store it and show it in the next update
+    
+    def update_reconnect_info(self, server_name: str, reconnect_info: dict[str, Any]):
+        """
+        Update reconnection progress information for a server.
+        
+        Args:
+            server_name: Name of the server
+            reconnect_info: Dictionary with reconnection info (attempts, max_attempts, next_retry_delay, error_message)
+        """
+        self._server_reconnect_info[server_name] = reconnect_info
+        # Store error message if present
+        if reconnect_info.get("error_message"):
+            self._server_error_messages[server_name] = reconnect_info["error_message"]
     
     def set_fetch_status(self, server_name: str, status_message: str):
         """
@@ -137,15 +158,44 @@ class MCPPanel(RichLog):
             # Get fetch status if available
             fetch_status = self._server_fetch_status.get(server_name, "")
             
+            # Get reconnection info if available
+            reconnect_info = self._server_reconnect_info.get(server_name, {})
+            
+            # Get error message if available
+            error_message = self._server_error_messages.get(server_name)
+            
             # Get last check time from provided dict (from ArtifactManager via app.py)
             last_check_timestamp = server_last_check.get(server_name, 0) if server_last_check else 0
             last_check_str = format_time_hhmmss(last_check_timestamp)
             
-            # Server header with connection status
+            # Build status line with reconnection progress or error message
+            status_details = []
+            
+            # Add reconnection progress if reconnecting
+            if status == ConnectionStatus.RECONNECTING and reconnect_info:
+                attempts = reconnect_info.get("attempts", 0)
+                max_attempts = reconnect_info.get("max_attempts", 10)
+                next_retry = reconnect_info.get("next_retry_delay")
+                if next_retry is not None:
+                    status_details.append(f"[dim]attempt {attempts}/{max_attempts}, retry in {next_retry:.0f}s[/]")
+                else:
+                    status_details.append(f"[dim]attempt {attempts}/{max_attempts}[/]")
+            
+            # Add error message if ERROR status
+            if status == ConnectionStatus.ERROR and error_message:
+                status_details.append(f"[red]{error_message}[/]")
+            
+            # Add fetch status if available
             if fetch_status:
-                self.write(f"\n[bold yellow]📡 {server_name}[/] {status_icon} {status_text} [dim]| {fetch_status}[/]\n")
-            else:
-                self.write(f"\n[bold yellow]📡 {server_name}[/] {status_icon} {status_text}\n")
+                status_details.append(fetch_status)
+            
+            # Build status line
+            status_line = status_text
+            if status_details:
+                status_line += f" [dim]| {' | '.join(status_details)}[/]"
+            
+            # Server header with connection status
+            self.write(f"\n[bold yellow]📡 {server_name}[/] {status_icon} {status_line}\n")
             
             # Show last check time
             self.write(f"  [dim]Checked: {last_check_str}[/]\n")

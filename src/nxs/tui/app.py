@@ -137,6 +137,7 @@ class NexusApp(App):
         # Set up connection status change callback
         # This must be done before initialization to catch all status changes
         self.artifact_manager.on_status_change = self._on_mcp_status_change
+        self.artifact_manager.on_reconnect_progress = self._on_mcp_reconnect_progress
 
         # Initialize MCP connections asynchronously in the background
         # This allows the TUI to appear immediately without blocking
@@ -258,6 +259,15 @@ class NexusApp(App):
                     if total_cached > 0:
                         # Already connected with artifacts, don't refresh unnecessarily
                         logger.debug(f"Server {server_name} already connected with {total_cached} artifact(s), skipping refresh")
+                        # Still update reconnect info to clear any stale progress
+                        try:
+                            mcp_panel = self.query_one("#mcp-panel", MCPPanel)
+                            if client:
+                                reconnect_info = client.reconnect_info
+                                mcp_panel.update_reconnect_info(server_name, reconnect_info)
+                                asyncio.create_task(self._refresh_mcp_panel_with_status())
+                        except Exception:
+                            pass
                         return
         except Exception:
             pass  # Continue with refresh if check fails
@@ -266,6 +276,12 @@ class NexusApp(App):
         try:
             mcp_panel = self.query_one("#mcp-panel", MCPPanel)
             mcp_panel.update_server_status(server_name, status)
+            
+            # Update reconnect info from client
+            client = self.artifact_manager.clients.get(server_name)
+            if client:
+                reconnect_info = client.reconnect_info
+                mcp_panel.update_reconnect_info(server_name, reconnect_info)
             
             # Update last check time when status changes
             self.artifact_manager.update_server_last_check(server_name)
@@ -283,10 +299,35 @@ class NexusApp(App):
                 # Refresh panel immediately to show artifacts are gone
                 asyncio.create_task(self._refresh_mcp_panel_with_status())
             else:
-                # For other statuses (CONNECTING, RECONNECTING), refresh immediately
+                # For other statuses (CONNECTING, RECONNECTING, ERROR), refresh immediately
                 asyncio.create_task(self._refresh_mcp_panel_with_status())
         except Exception as e:
             logger.error(f"Error updating MCP panel status: {e}")
+
+    def _on_mcp_reconnect_progress(self, server_name: str, attempts: int, max_attempts: int, next_retry_delay: float):
+        """
+        Handle reconnection progress updates for an MCP server.
+        
+        This callback is called periodically during reconnection to update progress information.
+        
+        Args:
+            server_name: Name of the server
+            attempts: Current reconnection attempt number
+            max_attempts: Maximum reconnection attempts
+            next_retry_delay: Seconds until next retry attempt
+        """
+        logger.debug(f"Reconnection progress for {server_name}: attempt {attempts}/{max_attempts}, retry in {next_retry_delay:.1f}s")
+        
+        try:
+            mcp_panel = self.query_one("#mcp-panel", MCPPanel)
+            client = self.artifact_manager.clients.get(server_name)
+            if client:
+                reconnect_info = client.reconnect_info
+                mcp_panel.update_reconnect_info(server_name, reconnect_info)
+                # Refresh panel to show updated progress
+                asyncio.create_task(self._refresh_mcp_panel_with_status())
+        except Exception as e:
+            logger.debug(f"Error updating reconnect progress for {server_name}: {e}")
 
     async def _refresh_mcp_panel_with_status_delayed(self, server_name: str) -> None:
         """
@@ -754,6 +795,7 @@ class NexusApp(App):
         
         This helps catch cases where artifacts weren't loaded initially but are
         now available, or when reconnection happens but artifacts weren't refreshed.
+        Also retries ERROR status servers periodically to allow recovery.
         
         Runs asynchronously every 30 seconds without blocking the UI.
         Only refreshes if artifacts have changed or if server had no artifacts before.
@@ -762,10 +804,30 @@ class NexusApp(App):
         
         while self._mcp_initialized:
             try:
-                # Check all connected servers asynchronously
+                # Check all servers asynchronously
                 for server_name, client in self.artifact_manager.clients.items():
-                    if client.is_connected:
-                        try:
+                    try:
+                        status = client.connection_status
+                        
+                        # Handle ERROR status servers - retry connection periodically (every 60 seconds)
+                        if status == ConnectionStatus.ERROR:
+                            # Check if we should retry (every 60 seconds)
+                            last_check = self.artifact_manager.get_server_last_check(server_name)
+                            time_since_check = time.time() - last_check
+                            if time_since_check >= 60.0:
+                                logger.info(f"Retrying connection for ERROR status server: {server_name}")
+                                try:
+                                    await client.retry_connection(use_auth=False)
+                                    # Update last check time
+                                    self.artifact_manager.update_server_last_check(server_name)
+                                except Exception as e:
+                                    logger.debug(f"Error retrying connection for {server_name}: {e}")
+                                    # Update last check time even on failure to avoid retrying too frequently
+                                    self.artifact_manager.update_server_last_check(server_name)
+                            continue
+                        
+                        # Handle connected servers - check for artifacts
+                        if client.is_connected:
                             logger.debug(f"Periodic refresh check for {server_name}")
                             
                             # Update last check time
@@ -803,8 +865,8 @@ class NexusApp(App):
                             else:
                                 # Already have artifacts cached, skip fetching to avoid unnecessary refresh
                                 logger.debug(f"Server {server_name} already has {cached_total} artifact(s) cached, skipping periodic fetch")
-                        except Exception as e:
-                            logger.debug(f"Error during periodic refresh check for {server_name}: {e}")
+                    except Exception as e:
+                        logger.debug(f"Error during periodic refresh check for {server_name}: {e}")
                 
                 # Wait 30 seconds before next check (asynchronous sleep)
                 await asyncio.sleep(30.0)

@@ -34,6 +34,7 @@ class ArtifactManager:
         self,
         config: Optional[MCPServersConfig] = None,
         on_status_change: Optional[Callable[[str, ConnectionStatus], None]] = None,
+        on_reconnect_progress: Optional[Callable[[str, int, int, float], None]] = None,
     ):
         """
         Initialize the ArtifactManager.
@@ -42,11 +43,14 @@ class ArtifactManager:
             config: MCP servers configuration. If None, loads from default location.
             on_status_change: Optional callback called when connection status changes.
                              Receives (server_name, status) as arguments.
+            on_reconnect_progress: Optional callback called during reconnection progress.
+                                   Receives (server_name, attempts, max_attempts, next_retry_delay) as arguments.
         """
         self.config = config or load_mcp_config()
         self.mcp_clients: dict[str, MCPAuthClient] = {}
         self._exit_stack: Optional[AsyncExitStack] = None
         self.on_status_change = on_status_change
+        self.on_reconnect_progress = on_reconnect_progress
         self._server_statuses: dict[str, ConnectionStatus] = {}
         # Track last check time for each server
         self._server_last_check: dict[str, float] = {}
@@ -86,9 +90,21 @@ class ArtifactManager:
                                     logger.error(f"Error in status change callback for {name}: {e}")
                         return status_callback
                     
+                    # Create reconnection progress callback for this server
+                    def make_reconnect_progress_callback(name: str):
+                        def reconnect_progress_callback(attempts: int, max_attempts: int, next_retry_delay: float):
+                            # Store reconnect info for UI access
+                            if self.on_reconnect_progress:
+                                try:
+                                    self.on_reconnect_progress(name, attempts, max_attempts, next_retry_delay)
+                                except Exception as e:
+                                    logger.error(f"Error in reconnect progress callback for {name}: {e}")
+                        return reconnect_progress_callback
+                    
                     mcp_client = MCPAuthClient(
                         url,
-                        on_status_change=make_status_callback(server_name)
+                        on_status_change=make_status_callback(server_name),
+                        on_reconnect_progress=make_reconnect_progress_callback(server_name)
                     )
                     self.mcp_clients[server_name] = mcp_client
                     self._server_statuses[server_name] = ConnectionStatus.DISCONNECTED
