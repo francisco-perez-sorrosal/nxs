@@ -7,8 +7,6 @@ from textual.widgets import Static, RichLog, Button
 from textual.containers import Container, Vertical, Horizontal
 from textual.app import ComposeResult
 from textual.binding import Binding
-from rich.text import Text
-from rich.panel import Panel
 from nxs.logger import get_logger
 
 logger = get_logger("artifact_overlay")
@@ -84,25 +82,22 @@ class ArtifactDescriptionOverlay(Container):
         """Called when the overlay is mounted - populate the description."""
         description_widget = self.query_one("#artifact-description-content", RichLog)
         
-        # Format description with Rich markup
+        # Format description with Rich markup - no panel wrapper, just direct text
         if self.description:
-            # Create a panel for the description
-            description_panel = Panel(
-                self.description,
-                border_style="dim",
-                padding=(1, 2),
-                expand=False
-            )
-            description_widget.write(description_panel)
+            description_widget.write(self.description)
         else:
             description_widget.write("[dim]No description available.[/]")
+        
+        # Make overlay focusable so it can receive keyboard events
+        self.can_focus = True
+        self.focus()
         
         # Auto-dismiss after 10 seconds if user doesn't interact
         self._dismiss_timer = asyncio.create_task(self._auto_dismiss())
 
     async def _auto_dismiss(self) -> None:
         """Auto-dismiss the overlay after 10 seconds."""
-        await asyncio.sleep(10.0)
+        await asyncio.sleep(5.0)
         if self.is_attached:
             self.remove()
 
@@ -114,16 +109,36 @@ class ArtifactDescriptionOverlay(Container):
             self.remove()
 
     def action_dismiss(self) -> None:
-        """Dismiss the overlay (ESC key support)."""
+        """Dismiss the overlay (ESC key support via binding)."""
         if self._dismiss_timer:
             self._dismiss_timer.cancel()
         self.remove()
-
-    def on_click(self, event) -> None:
-        """Handle clicks - dismiss if clicking outside content."""
-        # Check if click is on the container itself (not children)
-        if event.target == self or (hasattr(event.target, 'id') and event.target.id == "artifact-overlay-container"):
+    
+    def on_key(self, event) -> None:
+        """Handle key events - dismiss on ESC key."""
+        if event.key == "escape":
             if self._dismiss_timer:
                 self._dismiss_timer.cancel()
             self.remove()
+            event.stop()
+        else:
+            # Allow other keys to propagate
+            event.allow_default_behavior()
+
+    def on_click(self, event) -> None:
+        """Handle clicks - dismiss if clicking outside content."""
+        # In Textual, the clicked widget is accessible via event.control
+        # Only dismiss if clicking directly on the overlay container itself
+        # (not on children like the content area, header, or buttons)
+        clicked_widget = getattr(event, 'control', None)
+        
+        # Check if the click is on the overlay container itself
+        if clicked_widget is not None:
+            if clicked_widget == self or (hasattr(clicked_widget, 'id') and clicked_widget.id == "artifact-description-overlay"):
+                # Don't dismiss if clicking on interactive elements (header, close button, content)
+                # Only dismiss if clicking on the container background
+                if clicked_widget == self:
+                    if self._dismiss_timer:
+                        self._dismiss_timer.cancel()
+                    self.remove()
 

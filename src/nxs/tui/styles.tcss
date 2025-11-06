@@ -190,7 +190,7 @@ ArtifactItem:hover {
 #artifact-description-overlay {
     layer: overlay;
     dock: right;
-    width: 40;
+    width: 60;
     height: 30;
     border: solid $accent;
     background: $surface;
@@ -221,12 +221,11 @@ ArtifactItem:hover {
 
 #artifact-overlay-content {
     height: 1fr;
-    padding: 1;
+    padding: 0 1;
 }
 
 #artifact-description-content {
     height: 1fr;
-    border: solid $panel;
     padding: 1;
     scrollbar-gutter: stable;
 }

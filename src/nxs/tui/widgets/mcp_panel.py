@@ -260,15 +260,8 @@ class ServerWidget(Vertical):
                 description_widget = existing_overlay.query_one("#artifact-description-content")
                 if isinstance(description_widget, RichLog):
                     description_widget.clear()
-                    from rich.panel import Panel
                     if existing_overlay.description:
-                        description_panel = Panel(
-                            existing_overlay.description,
-                            border_style="dim",
-                            padding=(1, 2),
-                            expand=False
-                        )
-                        description_widget.write(description_panel)
+                        description_widget.write(existing_overlay.description)
                     else:
                         description_widget.write("[dim]No description available.[/]")
             except:
