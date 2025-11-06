@@ -11,6 +11,7 @@ The ArtifactManager is responsible for:
 import asyncio
 import time
 from contextlib import AsyncExitStack
+from functools import partial
 from typing import Optional, Callable
 
 from mcp.types import Prompt, Tool, Resource
@@ -57,6 +58,47 @@ class ArtifactManager:
         # Cache artifacts for each server to avoid unnecessary fetches
         self._artifacts_cache: dict[str, dict[str, list[dict[str, str | None]]]] = {}
 
+    def _handle_status_change(self, status: ConnectionStatus, server_name: str) -> None:
+        """
+        Handle connection status change for a specific server.
+
+        Centralized error handling for status change callbacks.
+
+        Args:
+            status: New connection status
+            server_name: Name of the server
+        """
+        self._server_statuses[server_name] = status
+        if self.on_status_change:
+            try:
+                self.on_status_change(server_name, status)
+            except Exception as e:
+                logger.error(f"Error in status change callback for {server_name}: {e}")
+
+    def _handle_reconnect_progress(
+        self,
+        attempts: int,
+        max_attempts: int,
+        next_retry_delay: float,
+        server_name: str
+    ) -> None:
+        """
+        Handle reconnection progress for a specific server.
+
+        Centralized error handling for reconnect progress callbacks.
+
+        Args:
+            attempts: Current reconnection attempt number
+            max_attempts: Maximum reconnection attempts
+            next_retry_delay: Seconds until next retry
+            server_name: Name of the server
+        """
+        if self.on_reconnect_progress:
+            try:
+                self.on_reconnect_progress(server_name, attempts, max_attempts, next_retry_delay)
+            except Exception as e:
+                logger.error(f"Error in reconnect progress callback for {server_name}: {e}")
+
     async def initialize(self, use_auth: bool = False) -> None:
         """
         Initialize and connect to all MCP servers.
@@ -78,33 +120,15 @@ class ArtifactManager:
                 url = server.remote_url()
                 if url:
                     logger.info(f"Connecting to remote MCP server: {server_name} at {url}")
-                    
-                    # Create status change callback for this server
-                    def make_status_callback(name: str):
-                        def status_callback(status: ConnectionStatus):
-                            self._server_statuses[name] = status
-                            if self.on_status_change:
-                                try:
-                                    self.on_status_change(name, status)
-                                except Exception as e:
-                                    logger.error(f"Error in status change callback for {name}: {e}")
-                        return status_callback
-                    
-                    # Create reconnection progress callback for this server
-                    def make_reconnect_progress_callback(name: str):
-                        def reconnect_progress_callback(attempts: int, max_attempts: int, next_retry_delay: float):
-                            # Store reconnect info for UI access
-                            if self.on_reconnect_progress:
-                                try:
-                                    self.on_reconnect_progress(name, attempts, max_attempts, next_retry_delay)
-                                except Exception as e:
-                                    logger.error(f"Error in reconnect progress callback for {name}: {e}")
-                        return reconnect_progress_callback
-                    
+
+                    # Create callbacks using functools.partial for cleaner, more maintainable code
+                    status_callback = partial(self._handle_status_change, server_name=server_name)
+                    reconnect_callback = partial(self._handle_reconnect_progress, server_name=server_name)
+
                     mcp_client = MCPAuthClient(
                         url,
-                        on_status_change=make_status_callback(server_name),
-                        on_reconnect_progress=make_reconnect_progress_callback(server_name)
+                        on_status_change=status_callback,
+                        on_reconnect_progress=reconnect_callback
                     )
                     self.mcp_clients[server_name] = mcp_client
                     self._server_statuses[server_name] = ConnectionStatus.DISCONNECTED

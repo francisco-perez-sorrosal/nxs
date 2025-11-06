@@ -306,3 +306,4 @@ Follow conventional commits with optional version bump prefixes:
 Example: `feat: add document export functionality`
 
 Note: Do not include Claude authorship in commit messages; pre-commit hooks may modify commits.
+- the current application is a terminal application. when you run it in a bash pixi terminal is disturbing the output of claude code due to mouse events sent to the terminal. after you kill the app when you test it, remember to always to reset the terminal with the `reset` command or `tput reset`

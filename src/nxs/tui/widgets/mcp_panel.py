@@ -2,7 +2,7 @@
 MCPPanel - A scrollable panel displaying MCP servers and their artifacts.
 """
 
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from textual.widgets import Static, Label
 from textual.containers import Vertical, ScrollableContainer
 from textual.app import ComposeResult
@@ -12,6 +12,7 @@ from rich.console import Group
 from nxs.mcp_client.client import ConnectionStatus
 from nxs.utils import format_time_hhmmss
 from nxs.logger import get_logger
+from nxs.tui.widgets.artifact_overlay import ArtifactDescriptionOverlay
 
 logger = get_logger("mcp_panel")
 
@@ -231,85 +232,43 @@ class ServerWidget(Vertical):
         self._update_display()
     
     def on_artifact_item_clicked(self, event: ArtifactItem.Clicked) -> None:
-        """Handle artifact click - show overlay widget."""
-        from .artifact_overlay import ArtifactDescriptionOverlay
-        
-        # Get MCP panel
-        mcp_panel = self.app.query_one("#mcp-panel", MCPPanel)
-        
-        # Try to find existing overlay - reuse it if it exists
-        from .artifact_overlay import ArtifactDescriptionOverlay as OverlayType
-        existing_overlay = None
+        """Handle artifact click - show overlay widget (non-blocking)."""
+        # Defer overlay update to after current UI refresh to prevent blocking
+        self.app.call_after_refresh(self._show_artifact_overlay, event)
+
+    def _show_artifact_overlay(self, event: ArtifactItem.Clicked) -> None:
+        """Actually show the overlay (called after UI refresh to prevent blocking)."""
+        # Navigate up the widget tree to find MCPPanel
+        # ServerWidget -> ScrollableContainer -> MCPPanel
+        mcp_panel = None
+        current = self.parent
+        while current is not None:
+            if isinstance(current, MCPPanel):
+                mcp_panel = current
+                break
+            current = current.parent
+
+        if mcp_panel is None:
+            logger.error("Could not find MCPPanel in widget tree")
+            return
+
+        # Get the persistent overlay
+        overlay = mcp_panel._artifact_overlay
+        if overlay is None:
+            logger.error("No artifact overlay found in MCPPanel")
+            return
+
+        # Update overlay content and show it
         try:
-            overlay_widget = mcp_panel.query_one("#artifact-description-overlay")
-            if isinstance(overlay_widget, OverlayType):
-                existing_overlay = overlay_widget
-        except:
-            # No existing overlay found, that's fine
-            pass
-        
-        if existing_overlay is not None:
-            # Update existing overlay with new content
-            existing_overlay.artifact_name = event.artifact_name
-            existing_overlay.artifact_type = event.artifact_type
-            existing_overlay.description = event.description or "No description available."
-            
-            # Update the overlay content
-            try:
-                from textual.widgets import RichLog, Static
-                description_widget = existing_overlay.query_one("#artifact-description-content")
-                if isinstance(description_widget, RichLog):
-                    description_widget.clear()
-                    if existing_overlay.description:
-                        description_widget.write(existing_overlay.description)
-                    else:
-                        description_widget.write("[dim]No description available.[/]")
-            except:
-                pass
-            
-            # Update header
-            try:
-                from textual.widgets import Static
-                header_widget = existing_overlay.query_one("#artifact-overlay-title")
-                if isinstance(header_widget, Static):
-                    type_labels = {"T": "Tool", "P": "Prompt", "R": "Resource"}
-                    type_label = type_labels.get(event.artifact_type, "Artifact")
-                    header_text = f"[bold cyan]{type_label}:[/] [bold]{event.artifact_name}[/]"
-                    from rich.text import Text
-                    header_widget.update(Text.from_markup(header_text))
-            except:
-                pass
-            
-            # Reset auto-dismiss timer
-            if hasattr(existing_overlay, '_dismiss_timer') and existing_overlay._dismiss_timer:
-                existing_overlay._dismiss_timer.cancel()
-            import asyncio
-            existing_overlay._dismiss_timer = asyncio.create_task(existing_overlay._auto_dismiss())
-            
-            return  # Overlay updated, we're done
-        
-        # Remove any existing overlays that might have slipped through
-        # This is a safety measure to prevent duplicates
-        try:
-            existing_overlays_list = list(mcp_panel.query("#artifact-description-overlay"))
-            for overlay in existing_overlays_list:
-                try:
-                    overlay.remove()
-                except:
-                    pass
-        except:
-            pass
-        
-        # Create new overlay
-        overlay = ArtifactDescriptionOverlay(
-            artifact_name=event.artifact_name,
-            artifact_type=event.artifact_type,
-            description=event.description,
-            id="artifact-description-overlay"
-        )
-        
-        # Mount overlay in the MCP panel
-        mcp_panel.mount(overlay)
+            logger.debug(f"Showing overlay for {event.artifact_name}")
+            overlay.update_content(
+                artifact_name=event.artifact_name,
+                artifact_type=event.artifact_type,
+                description=event.description
+            )
+            overlay.show_and_start_timer()
+        except Exception as e:
+            logger.error(f"Failed to show overlay: {e}", exc_info=True)
     
     def on_clicked(self, event: ArtifactItem.Clicked) -> None:
         """Handle artifact click - alternative handler name."""
@@ -645,17 +604,30 @@ class MCPPanel(Vertical):
         self._header_widget: Static | None = None
         self._empty_message_widget: Static | None = None
         self._scroll_container: ScrollableContainer | None = None
+        self._artifact_overlay: ArtifactDescriptionOverlay | None = None
 
     def compose(self) -> ComposeResult:
         """Compose the panel with header and scrollable content."""
+        # Persistent artifact overlay - FIRST child so it appears at TOP when shown
+        # This is a normal child (no layer/dock), so it will appear within the MCP panel area
+        overlay = ArtifactDescriptionOverlay(
+            artifact_name="",
+            artifact_type="T",
+            description="",
+            id="artifact-description-overlay"
+        )
+        overlay.display = False  # Hidden by default
+        self._artifact_overlay = overlay
+        yield overlay
+
         # Header
         header = Static("[bold cyan]MCP Servers & Artifacts[/]", id="mcp-header")
         self._header_widget = header
         yield header
-        
+
         # Divider
         yield Static("[dim]" + "─" * 30 + "[/]", id="mcp-divider-top")
-        
+
         # Scrollable container for servers - use context manager to properly yield container
         with ScrollableContainer(id="mcp-servers-container") as servers_container:
             # Store reference for later use

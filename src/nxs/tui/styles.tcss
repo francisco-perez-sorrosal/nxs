@@ -3,6 +3,7 @@
 /* Global app styling */
 Screen {
     background: $surface;
+    overflow: hidden hidden;  /* Prevent scrolling on screen */
 }
 
 /* Header styling */
@@ -25,6 +26,7 @@ Footer {
 #app-container {
     height: 100%;
     layout: vertical;
+    overflow: hidden hidden;  /* Prevent scrolling on main container */
 }
 
 /* Horizontal split container */
@@ -188,13 +190,13 @@ ArtifactItem:hover {
 
 /* Artifact description overlay styling */
 #artifact-description-overlay {
-    layer: overlay;
-    dock: right;
-    width: 60;
-    height: 30;
+    /* Normal child of MCPPanel - no layer, no dock - just appears at top in vertical layout */
+    width: 1fr;
+    height: 40;  /* Increased from 25 to 40 for more vertical space */
     border: solid $accent;
     background: $surface;
     padding: 1;
+    margin-bottom: 1;
 }
 
 #artifact-overlay-container {
@@ -228,6 +230,7 @@ ArtifactItem:hover {
     height: 1fr;
     padding: 1;
     scrollbar-gutter: stable;
+    text-style: dim;  /* Make text smaller/dimmer */
 }
 
 #artifact-overlay-footer {
