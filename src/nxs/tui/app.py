@@ -82,6 +82,12 @@ class NexusApp(App):
         # Initialize StatusQueue for asynchronous status updates
         self.status_queue = StatusQueue(status_panel_getter=self._get_status_panel)
         
+        # Track active refresh tasks to prevent accumulation and unresponsiveness
+        self._refresh_tasks: set[asyncio.Task] = set()
+        self._refresh_lock = asyncio.Lock()  # Prevent simultaneous refresh operations
+        self._last_reconnect_progress_update: dict[str, float] = {}  # Debounce reconnect progress
+        self._reconnect_progress_debounce_interval = 1.0  # Minimum 1 second between reconnect progress updates
+        
         # Set up connection status change callback
         # Note: This will be set after artifact_manager is created in main.py
         # We'll set it in on_mount to ensure the TUI is ready
@@ -265,7 +271,7 @@ class NexusApp(App):
                             if client:
                                 reconnect_info = client.reconnect_info
                                 mcp_panel.update_reconnect_info(server_name, reconnect_info)
-                                asyncio.create_task(self._refresh_mcp_panel_with_status())
+                                self._schedule_refresh()
                         except Exception:
                             pass
                         return
@@ -291,16 +297,16 @@ class NexusApp(App):
             # This is especially important during reconnection when artifacts need to be re-fetched
             if status == ConnectionStatus.CONNECTED:
                 # Delay refresh slightly to ensure session is ready after initialization
-                asyncio.create_task(self._refresh_mcp_panel_with_status_delayed(server_name))
+                self._schedule_refresh(server_name=server_name, delay=0.5)
             elif status == ConnectionStatus.DISCONNECTED:
                 # Clear fetch status and artifacts cache when disconnected
                 mcp_panel.clear_fetch_status(server_name)
                 self.artifact_manager.clear_artifacts_cache(server_name)
                 # Refresh panel immediately to show artifacts are gone
-                asyncio.create_task(self._refresh_mcp_panel_with_status())
+                self._schedule_refresh()
             else:
                 # For other statuses (CONNECTING, RECONNECTING, ERROR), refresh immediately
-                asyncio.create_task(self._refresh_mcp_panel_with_status())
+                self._schedule_refresh()
         except Exception as e:
             logger.error(f"Error updating MCP panel status: {e}")
 
@@ -309,6 +315,7 @@ class NexusApp(App):
         Handle reconnection progress updates for an MCP server.
         
         This callback is called periodically during reconnection to update progress information.
+        Debounced to prevent creating too many refresh tasks.
         
         Args:
             server_name: Name of the server
@@ -316,6 +323,15 @@ class NexusApp(App):
             max_attempts: Maximum reconnection attempts
             next_retry_delay: Seconds until next retry attempt
         """
+        import time
+        current_time = time.time()
+        
+        # Debounce: only update if enough time has passed since last update for this server
+        last_update = self._last_reconnect_progress_update.get(server_name, 0)
+        if current_time - last_update < self._reconnect_progress_debounce_interval:
+            return  # Skip this update to avoid too many refresh tasks
+        
+        self._last_reconnect_progress_update[server_name] = current_time
         logger.debug(f"Reconnection progress for {server_name}: attempt {attempts}/{max_attempts}, retry in {next_retry_delay:.1f}s")
         
         try:
@@ -324,109 +340,200 @@ class NexusApp(App):
             if client:
                 reconnect_info = client.reconnect_info
                 mcp_panel.update_reconnect_info(server_name, reconnect_info)
-                # Refresh panel to show updated progress
-                asyncio.create_task(self._refresh_mcp_panel_with_status())
+                # Schedule refresh with task management to prevent accumulation
+                self._schedule_refresh()
         except Exception as e:
             logger.debug(f"Error updating reconnect progress for {server_name}: {e}")
 
-    async def _refresh_mcp_panel_with_status_delayed(self, server_name: str) -> None:
+    def _schedule_refresh(self, server_name: str | None = None, retry_on_empty: bool = False, delay: float = 0.0) -> None:
         """
-        Refresh the MCP panel with a small delay to ensure session is ready.
+        Schedule a refresh operation, cancelling any previous refresh tasks.
         
-        This is used when status changes to CONNECTED to give the session
-        time to be fully ready before fetching artifacts.
+        This prevents accumulation of refresh tasks that can cause unresponsiveness.
         
         Args:
-            server_name: Name of the server being refreshed (for status messages)
+            server_name: Optional specific server name to refresh
+            retry_on_empty: If True, retry fetching artifacts if they come back empty
+            delay: Delay in seconds before starting the refresh (default: 0.0)
         """
-        # Small delay to ensure session is ready after initialization
-        await asyncio.sleep(0.5)
-        await self._refresh_mcp_panel_with_status(retry_on_empty=True, server_name=server_name)
-
-    async def _refresh_mcp_panel_with_status(self, retry_on_empty: bool = False, server_name: str | None = None) -> None:
+        # Cancel all previous refresh tasks to prevent accumulation
+        self._cancel_refresh_tasks()
+        
+        # Create new refresh task
+        if server_name:
+            task = asyncio.create_task(
+                self._refresh_mcp_panel_with_status(retry_on_empty=retry_on_empty, server_name=server_name, delay=delay)
+            )
+        else:
+            task = asyncio.create_task(
+                self._refresh_mcp_panel_with_status(retry_on_empty=retry_on_empty, delay=delay)
+            )
+        
+        # Track the task
+        self._refresh_tasks.add(task)
+        
+        # Clean up task when done
+        task.add_done_callback(self._refresh_tasks.discard)
+    
+    def _cancel_refresh_tasks(self) -> None:
+        """Cancel all active refresh tasks to prevent accumulation."""
+        for task in list(self._refresh_tasks):
+            if not task.done():
+                try:
+                    task.cancel()
+                except Exception as e:
+                    logger.debug(f"Error cancelling refresh task: {e}")
+        self._refresh_tasks.clear()
+    
+    async def _refresh_mcp_panel_with_status(self, retry_on_empty: bool = False, server_name: str | None = None, delay: float = 0.0) -> None:
         """
         Refresh the MCP panel with current server data and statuses.
+        
+        This method uses a lock to prevent simultaneous refresh operations that can
+        cause unresponsiveness. It also adds timeouts to prevent blocking.
         
         Args:
             retry_on_empty: If True, retry fetching artifacts if they come back empty
                            for connected servers. This helps with reconnection scenarios.
             server_name: Optional specific server name to highlight in status messages
+            delay: Delay in seconds before starting the refresh (default: 0.0)
         """
-        try:
-            # Get current server statuses
-            server_statuses = self.artifact_manager.get_server_statuses()
-            
-            # Track if we're specifically refreshing one server
-            is_single_server_refresh = server_name is not None
-            
-            # Get artifacts for all servers or just one
-            if is_single_server_refresh:
-                # For single server refresh, fetch artifacts first, then update display once
-                mcp_panel = self.query_one("#mcp-panel", MCPPanel)
-                mcp_panel.set_fetch_status(server_name, "[dim]Fetching artifacts...[/]")
+        # Apply delay if specified (used when status changes to CONNECTED to ensure session is ready)
+        if delay > 0:
+            await asyncio.sleep(delay)
+        
+        # Use lock to prevent simultaneous refresh operations
+        async with self._refresh_lock:
+            try:
+                # Get current server statuses
+                server_statuses = self.artifact_manager.get_server_statuses()
                 
-                # Fetch artifacts for the target server with retry
-                artifacts = await self.artifact_manager.get_server_artifacts(
-                    server_name,
-                    retry_on_empty=retry_on_empty
-                )
+                # Track if we're specifically refreshing one server
+                is_single_server_refresh = server_name is not None
                 
-                # Get all servers data, preserving existing artifacts for other servers
-                # This prevents clearing artifacts from other servers during refresh
-                servers_data = await self.artifact_manager.get_all_servers_artifacts()
-                servers_data[server_name] = artifacts
-                
-                # Check if artifacts changed
-                if self.artifact_manager.have_artifacts_changed(server_name, artifacts):
-                    # Cache the new artifacts
-                    self.artifact_manager.cache_artifacts(server_name, artifacts)
-                    
-                    # Show success status
-                    total_artifacts = len(artifacts.get("tools", [])) + len(artifacts.get("prompts", [])) + len(artifacts.get("resources", []))
-                    if total_artifacts > 0:
-                        mcp_panel.set_fetch_status(server_name, f"[green]✓ {total_artifacts} artifact(s)[/]")
-                        # Clear status after 2 seconds
-                        asyncio.create_task(self._clear_fetch_status_after_delay(server_name, 2.0))
-                    else:
-                        mcp_panel.set_fetch_status(server_name, "[dim]No artifacts[/]")
-                    
-                    # Update display once with all server data including the new artifacts
-                    await self._update_mcp_panel_display(mcp_panel, servers_data, server_statuses)
-                    logger.debug(f"Artifacts changed for {server_name}, refreshed panel")
-                else:
-                    # Cache even if unchanged to keep it up to date
-                    self.artifact_manager.cache_artifacts(server_name, artifacts)
-                    # Clear "Fetching artifacts..." status even if artifacts didn't change
-                    # Don't update display if artifacts haven't changed - preserves existing widgets
-                    mcp_panel.clear_fetch_status(server_name)
-                    logger.debug(f"Artifacts unchanged for {server_name}, cleared fetch status (widgets preserved)")
-            else:
-                # Full refresh for all servers
-                servers_data = await self.artifact_manager.get_all_servers_artifacts()
-                
-                # Cache all artifacts
-                for name, artifacts in servers_data.items():
-                    self.artifact_manager.cache_artifacts(name, artifacts)
-                
-                # Update panel
-                mcp_panel = self.query_one("#mcp-panel", MCPPanel)
-                await self._update_mcp_panel_display(mcp_panel, servers_data, server_statuses)
-                logger.debug(f"Refreshed MCP panel with {len(servers_data)} server(s)")
-                
-        except Exception as e:
-            logger.error(f"Error refreshing MCP panel: {e}")
-            # Show error status if single server refresh
-            if is_single_server_refresh and server_name:
-                try:
+                # Get artifacts for all servers or just one
+                if is_single_server_refresh:
+                    # For single server refresh, fetch artifacts first, then update display once
+                    if server_name is None:
+                        logger.error("server_name is None in single server refresh")
+                        return
                     mcp_panel = self.query_one("#mcp-panel", MCPPanel)
-                    mcp_panel.set_fetch_status(server_name, f"[red]✗ Error: {str(e)[:30]}...[/]")
-                except Exception:
-                    pass
+                    mcp_panel.set_fetch_status(server_name, "[dim]Fetching artifacts...[/]")
+                    
+                    # Fetch artifacts for the target server with retry and timeout
+                    # Add timeout to prevent blocking if server is slow or stuck
+                    try:
+                        artifacts = await asyncio.wait_for(
+                            self.artifact_manager.get_server_artifacts(
+                                server_name,
+                                retry_on_empty=retry_on_empty
+                            ),
+                            timeout=30.0  # 30 second timeout per server
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Timeout fetching artifacts for {server_name}")
+                        artifacts = {"tools": [], "prompts": [], "resources": []}
+                    
+                    # Get all servers data, preserving existing artifacts for other servers
+                    # This prevents clearing artifacts from other servers during refresh
+                    # Add timeout to prevent blocking
+                    try:
+                        servers_data = await asyncio.wait_for(
+                            self.artifact_manager.get_all_servers_artifacts(),
+                            timeout=60.0  # 60 second timeout for all servers
+                        )
+                        servers_data[server_name] = artifacts
+                    except asyncio.TimeoutError:
+                        logger.warning("Timeout fetching artifacts for all servers, using cached data")
+                        # Fall back to cached data if available
+                        servers_data = {}
+                        for name in server_statuses.keys():
+                            cached = self.artifact_manager.get_cached_artifacts(name)
+                            if cached:
+                                servers_data[name] = cached
+                            else:
+                                servers_data[name] = {"tools": [], "prompts": [], "resources": []}
+                        # Still update the target server with what we got (even if timeout)
+                        servers_data[server_name] = artifacts
+                    
+                    # Check if artifacts changed
+                    if self.artifact_manager.have_artifacts_changed(server_name, artifacts):
+                        # Cache the new artifacts
+                        self.artifact_manager.cache_artifacts(server_name, artifacts)
+                        
+                        # Show success status
+                        total_artifacts = len(artifacts.get("tools", [])) + len(artifacts.get("prompts", [])) + len(artifacts.get("resources", []))
+                        if total_artifacts > 0:
+                            mcp_panel.set_fetch_status(server_name, f"[green]✓ {total_artifacts} artifact(s)[/]")
+                            # Clear status after 2 seconds
+                            asyncio.create_task(self._clear_fetch_status_after_delay(server_name, 2.0))
+                        else:
+                            mcp_panel.set_fetch_status(server_name, "[dim]No artifacts[/]")
+                        
+                        # Update display once with all server data including the new artifacts
+                        await self._update_mcp_panel_display(mcp_panel, servers_data, server_statuses)
+                        logger.debug(f"Artifacts changed for {server_name}, refreshed panel")
+                    else:
+                        # Cache even if unchanged to keep it up to date
+                        self.artifact_manager.cache_artifacts(server_name, artifacts)
+                        # Clear "Fetching artifacts..." status even if artifacts didn't change
+                        # Don't update display if artifacts haven't changed - preserves existing widgets
+                        mcp_panel.clear_fetch_status(server_name)
+                        logger.debug(f"Artifacts unchanged for {server_name}, cleared fetch status (widgets preserved)")
+                else:
+                    # Full refresh for all servers with timeout
+                    try:
+                        servers_data = await asyncio.wait_for(
+                            self.artifact_manager.get_all_servers_artifacts(),
+                            timeout=60.0  # 60 second timeout for all servers
+                        )
+                        
+                        # Cache all artifacts
+                        for name, artifacts in servers_data.items():
+                            self.artifact_manager.cache_artifacts(name, artifacts)
+                        
+                        # Update panel
+                        mcp_panel = self.query_one("#mcp-panel", MCPPanel)
+                        await self._update_mcp_panel_display(mcp_panel, servers_data, server_statuses)
+                        logger.debug(f"Refreshed MCP panel with {len(servers_data)} server(s)")
+                    except asyncio.TimeoutError:
+                        logger.warning("Timeout refreshing all servers, using cached data")
+                        # Fall back to cached data if available
+                        servers_data = {}
+                        for name in server_statuses.keys():
+                            cached = self.artifact_manager.get_cached_artifacts(name)
+                            if cached:
+                                servers_data[name] = cached
+                            else:
+                                servers_data[name] = {"tools": [], "prompts": [], "resources": []}
+                        
+                        # Update panel with cached data
+                        mcp_panel = self.query_one("#mcp-panel", MCPPanel)
+                        await self._update_mcp_panel_display(mcp_panel, servers_data, server_statuses)
+                        logger.debug(f"Refreshed MCP panel with cached data for {len(servers_data)} server(s)")
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout refreshing MCP panel for {server_name or 'all servers'}")
+                # Show timeout status if single server refresh
+                if is_single_server_refresh and server_name:
+                    try:
+                        mcp_panel = self.query_one("#mcp-panel", MCPPanel)
+                        mcp_panel.set_fetch_status(server_name, "[red]✗ Timeout[/]")
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.error(f"Error refreshing MCP panel: {e}")
+                # Show error status if single server refresh
+                if is_single_server_refresh and server_name:
+                    try:
+                        mcp_panel = self.query_one("#mcp-panel", MCPPanel)
+                        mcp_panel.set_fetch_status(server_name, f"[red]✗ Error: {str(e)[:30]}...[/]")
+                    except Exception:
+                        pass
     
     async def _update_mcp_panel_display(
         self,
         mcp_panel: MCPPanel,
-        servers_data: dict[str, dict[str, list[str]]],
+        servers_data: dict[str, dict[str, list[dict[str, str | None]]]],
         server_statuses: dict[str, ConnectionStatus]
     ) -> None:
         """
