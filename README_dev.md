@@ -136,34 +136,81 @@ pixi run mcp_client --server-url https://synx-francisco-perez-sorrosal.wasmer.ap
 
 ```
 nxs/
-├── pyproject.toml           # Project configuration and dependencies
-├── ruff.toml               # Ruff linting configuration
-├── main.py                 # Main application entry point
-├── mcp_server.py           # MCP server implementation
-├── mcp_client.py           # MCP client implementation
-├── core/                   # Core application modules
-│   ├── __init__.py
-│   ├── chat.py
-│   ├── claude.py
-│   ├── cli_chat.py
-│   ├── cli.py
-│   └── tools.py
-├── tests/                  # Test suite
-│   ├── __init__.py
-│   └── test_main.py
-└── README.md               # User guide
+├── pyproject.toml              # Project configuration and dependencies
+├── ruff.toml                   # Ruff linting configuration
+├── src/nxs/                    # Source code (src-layout)
+│   ├── __main__.py            # Module entry point
+│   ├── main.py                # Application entry point
+│   ├── logger.py              # Logging configuration
+│   ├── utils.py               # Utility functions
+│   ├── mcp_server.py          # Example MCP server
+│   ├── mcp_client.py          # Legacy MCP client wrapper
+│   ├── config/                # Configuration files
+│   │   └── mcp_servers.json   # MCP server configurations
+│   ├── core/                  # Core application modules (UI-independent)
+│   │   ├── artifact_manager.py    # MCP artifact manager
+│   │   ├── mcp_config.py          # MCP config parser
+│   │   ├── chat.py                # Base agent loop
+│   │   ├── command_control.py     # Command/resource processing agent
+│   │   ├── claude.py              # Anthropic SDK wrapper
+│   │   └── tools.py               # Tool management
+│   ├── mcp_client/            # MCP client package
+│   │   ├── client.py          # Main MCP client with reconnection
+│   │   ├── auth.py            # Authentication handler
+│   │   ├── storage.py         # Storage handler
+│   │   └── callback.py        # UI callback helpers
+│   ├── tui/                   # TUI layer (Textual + Rich)
+│   │   ├── app.py             # Main NexusApp
+│   │   ├── styles.tcss        # Textual CSS styling
+│   │   ├── query_manager.py   # Async query processing
+│   │   ├── status_queue.py    # Async status updates
+│   │   └── widgets/           # TUI widgets
+│   │       ├── chat_panel.py          # Chat display
+│   │       ├── status_panel.py        # Status display
+│   │       ├── mcp_panel.py           # MCP server/artifact panel
+│   │       ├── artifact_overlay.py    # Artifact detail overlay
+│   │       ├── input_field.py         # Input field
+│   │       ├── autocomplete.py        # Autocomplete dropdown
+│   │       ├── command_parser.py      # Command parsing
+│   │       └── argument_suggestions.py # Argument suggestions
+│   └── prompts/               # Prompt templates
+└── tests/                     # Test suite
+    ├── __init__.py
+    └── test_main.py
 ```
 
-## Adding New Documents
+## Adding Resources, Prompts, or Tools
 
-Edit the `mcp_server.py` file to add new documents to the `docs` dictionary.
+### Option 1: Modify the example MCP server
+Edit `src/nxs/mcp_server.py` to add new documents to the `docs` dictionary, or add new tools/prompts.
 
-## Implementing MCP Features
+### Option 2: Create a new MCP server
+1. Create a new Python file implementing the MCP server protocol (use `mcp_server.py` as a template)
+2. Add it to `src/nxs/config/mcp_servers.json`:
+   ```json
+   {
+     "mcpServers": {
+       "my-server": {
+         "command": "python",
+         "args": ["-m", "path.to.my_server"]
+       }
+     }
+   }
+   ```
+3. Restart the application
 
-To fully implement the MCP features:
-
-1. Complete the TODOs in `mcp_server.py`
-2. Implement the missing functionality in `mcp_client.py`
+### Option 3: Use existing MCP servers
+Add community MCP servers to your configuration:
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/directory"]
+    }
+  }
+}
+```
 
 ## Contributing
 

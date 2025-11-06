@@ -31,7 +31,8 @@
       "Bash(pixi list:*)",
       "Bash(rm:*)",
       "Bash(lsof:*)",
-      "Bash(xargs kill:*)"
+      "Bash(xargs kill:*)",
+      "Bash(tree:*)"
     ],
     "deny": [],
     "ask": []

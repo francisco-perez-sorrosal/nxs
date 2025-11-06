@@ -34,16 +34,37 @@ USE_UV=1                       # Set to 0 if using pixi instead
 
 ## Architecture
 
-The application has four main layers with clean separation between UI and core logic:
+The application has five main layers with clean separation between UI and core logic:
 
-### 1. MCP Protocol Layer (`mcp_server.py`, `mcp_client.py`)
+### 1. MCP Configuration & Management (`core/mcp_config.py`, `core/artifact_manager.py`)
 
-- **mcp_server.py**: Defines MCP resources (documents), tools, and prompts; runs as subprocess
-- **mcp_client.py**: Async wrapper around MCP ClientSession; handles subprocess communication via stdio
+- **mcp_config.py**: Parses MCP server configurations from JSON files (e.g., `mcp_servers.json`)
+  - `MCPServerConfig`: Pydantic model for individual server configuration (command, args)
+  - `MCPServersConfig`: Container for all server configurations
+  - Supports both local (stdio) and remote (HTTP) MCP servers
+- **artifact_manager.py**: Central manager for all MCP artifacts and connections
+  - Loads server configs and initializes MCP client connections asynchronously
+  - Aggregates resources, prompts, and tools from all connected servers
+  - Provides callbacks for connection status changes and reconnection progress
+  - Manages lifecycle: `initialize()`, `cleanup()`, and automatic reconnection
+  - Used by both TUI (for resources/prompts) and agent loop (for tools)
 
-Multiple MCP servers can be connected by passing additional server scripts to `main.py`.
+### 2. MCP Client Layer (`mcp_client/` package)
 
-### 2. Core Agent Loop (`core/` - UI-independent)
+A full MCP client implementation with authentication and storage support:
+
+- **client.py**: `MCPAuthClient` - Main async client with stdio/HTTP transports
+  - Connection management with automatic reconnection and exponential backoff
+  - Status tracking: CONNECTED, DISCONNECTED, CONNECTING, RECONNECTING, ERROR
+  - Status change and reconnection progress callbacks
+- **auth.py**: Authentication handler for remote MCP servers
+- **storage.py**: Storage handler for MCP server state persistence
+- **callback.py**: UI callback helpers for progress/completion tracking
+- **mcp_client.py** (legacy): Simple async wrapper around MCP ClientSession (kept for backwards compatibility)
+
+**Note**: `mcp_server.py` is an example MCP server implementation showing how to define resources, tools, and prompts.
+
+### 3. Core Agent Loop (`core/` - UI-independent)
 
 The agent loop implements the core Claude integration with **no UI dependencies**:
 
@@ -55,31 +76,44 @@ The agent loop implements the core Claude integration with **no UI dependencies*
   5. Supports callbacks for streaming chunks, tool calls, and completion
 
 - **CommandControlAgent** (`core/command_control.py`): Extends AgentLoop with:
-  - Resource extraction from `@document` mentions in queries
-  - Command processing from `/command` prefixes
-  - Document content fetching and context building
+  - Receives `ArtifactManager` for accessing resources, prompts, and tools
+  - Resource extraction from `@resource` mentions in queries
+  - Command/prompt processing from `/command` prefixes
+  - Document content fetching and context building via `ArtifactManager`
+  - Tool discovery through `ArtifactManager.get_tools()`
 
-### 3. TUI Layer (`tui/` - Textual + Rich)
+### 4. TUI Layer (`tui/` - Textual + Rich)
 
 The **NexusApp** class provides the full-screen terminal interface built with **Textual** (framework) and **Rich** (formatting):
 
 **Architecture:**
 ```
 tui/
-├── app.py              # Main NexusApp (Textual App)
-├── styles.tcss         # Textual CSS styling
+├── app.py                    # Main NexusApp (Textual App)
+├── styles.tcss               # Textual CSS styling
+├── query_manager.py          # Async query processing manager
+├── status_queue.py           # Async status update queue
 └── widgets/
-    ├── chat_panel.py   # RichLog-based chat display
-    ├── status_panel.py # RichLog-based status panel
-    └── input_field.py  # AutoComplete input with dropdown
+    ├── chat_panel.py         # RichLog-based chat display
+    ├── status_panel.py       # RichLog-based status panel
+    ├── mcp_panel.py          # MCP servers & artifacts panel
+    ├── artifact_overlay.py   # Artifact detail overlay modal
+    ├── input_field.py        # Input with dropdown completions
+    ├── autocomplete.py       # AutoComplete dropdown logic
+    ├── command_parser.py     # Command parsing utilities
+    └── argument_suggestions.py # Command argument suggestions
 ```
 
 **Layout Structure:**
 - **Header**: Application title and status (Textual Header widget)
-- **Chat Panel** (RichLog): Scrollable conversation with Rich markup, markdown, and syntax highlighting
-- **Status Panel** (RichLog): Real-time tool execution status with structured data display
-- **Input Field** (AutoComplete): Text input with dropdown completions for @ and / triggers
+- **Main Horizontal Container**:
+  - **Left Vertical Panel (Main)**:
+    - **Chat Panel** (RichLog): Scrollable conversation with Rich markup, markdown, and syntax highlighting
+    - **Status Panel** (RichLog): Real-time tool execution status with structured data display
+    - **Input Field** (AutoComplete): Text input with dropdown completions for @ and / triggers
+  - **Right Panel**: **MCP Panel** - Displays connected MCP servers, their status, and artifacts (resources, prompts, tools)
 - **Footer**: Keyboard shortcuts and mode indicators (Textual Footer widget)
+- **Artifact Overlay** (Modal): Displays detailed artifact information when clicked in MCP panel
 
 **Key Features:**
 - **Rich Markup**: Beautiful inline formatting with `[bold cyan]text[/]` syntax
@@ -87,18 +121,25 @@ tui/
 - **Markdown Rendering**: Built-in Rich Markdown with syntax highlighting
 - **Syntax Highlighting**: Rich Syntax widget for code blocks with themes
 - **Tool Visualization**: Rich Panel and Table widgets for structured tool output
-- **Auto-completion**: Dropdown menu triggered by `@` (resources) and `/` (commands)
+- **Auto-completion**: Dropdown menu triggered by `@` (resources) and `/` (prompts/commands)
 - **Streaming**: Real-time chunk-by-chunk display via RichLog.write()
 - **Focus Management**: Tab navigation between widgets (native Textual behavior)
+- **MCP Server Monitoring**: Real-time connection status with reconnection progress and error messages
+- **Artifact Browser**: Click on resources/prompts/tools in MCP panel to view full details in overlay
 
 **Key Bindings:**
 - `@`: Triggers resource completion dropdown
-- `/`: Triggers command completion dropdown
+- `/`: Triggers prompt/command completion dropdown
 - `Tab`: Navigate between input fields
-- `Enter`: Send message
-- `Ctrl+Q`: Quit application
+- `Enter`: Send message or select autocomplete suggestion
+- `Ctrl+Q` or `Ctrl+C`: Quit application
 - `Ctrl+L`: Clear chat history
+- `Click` on artifacts in MCP panel: View detailed information in overlay
 - **Automatic scrolling**: Chat and status panels auto-scroll to bottom
+
+**Supporting Services:**
+- **QueryManager** (`query_manager.py`): Manages async query processing to prevent race conditions
+- **StatusQueue** (`status_queue.py`): Async queue for status updates from agent callbacks to TUI
 
 **Rich Integration Benefits:**
 - Textual is built on top of Rich by the same author (Will McGugan)
@@ -106,17 +147,45 @@ tui/
 - Clean markup syntax: `[bold cyan]` instead of formatted text tuples
 - Superior formatting capabilities compared to previous prompt-toolkit implementation
 
-### 4. Tool Management (`core/tools.py`)
+### 5. Tool Management & Supporting Services
 
-**ToolManager** aggregates tools from multiple MCP clients and routes execution:
-- `get_all_tools()`: Discovers and collects tools from all connected clients
+**ToolManager** (`core/tools.py`):
+- Aggregates tools from `ArtifactManager`
+- Routes tool execution to the correct MCP client
+- `get_all_tools()`: Discovers and collects tools from all connected servers
 - `execute_tool_requests()`: Routes tool calls to the correct client and executes them
 
-### 5. Supporting Services
-
+**Supporting Services:**
 - **core/claude.py**: Thin Anthropic SDK wrapper with message helpers
-- **core/logger.py**: Loguru-based logging configured to file only (prevents TUI interference)
-- **mcp_server.py**: Defines documents, tools, resources, and prompts; can be extended
+- **logger.py**: Loguru-based logging configured to file only (prevents TUI interference)
+- **utils.py**: Utility functions (time formatting, etc.)
+- **mcp_server.py**: Example MCP server implementation defining documents, tools, resources, and prompts
+
+## MCP Server Configuration
+
+MCP servers are configured in a JSON file (default: `src/nxs/config/mcp_servers.json`). The `ArtifactManager` loads this configuration on startup.
+
+**Example configuration:**
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/directory"]
+    },
+    "remote-api": {
+      "command": "npx",
+      "args": ["mcp-remote", "https://example.com/mcp"]
+    }
+  }
+}
+```
+
+The configuration supports:
+- **Local servers** (stdio transport): command + args to spawn subprocess
+- **Remote servers** (HTTP transport): Use `mcp-remote` as first arg, URL as second arg
+
+To add/remove servers, edit the configuration file and restart the application.
 
 ## Common Development Tasks
 
@@ -145,8 +214,14 @@ pixi run --environment dev ci           # Full pipeline (all checks + tests)
 - Use `pixi run --environment dev type-check` to catch type issues early
 - Tests are in `tests/test_main.py`; run with `pixi run --environment test test`
 
-## Adding Documents or Resources
+## Adding Resources, Prompts, or Tools
 
+There are two ways to extend the application:
+
+### 1. Create a new MCP server
+Create a new Python file that implements the MCP server protocol (see `mcp_server.py` as an example), then add it to your `mcp_servers.json` configuration.
+
+### 2. Modify the example server
 Edit `mcp_server.py` to add new resources:
 ```python
 docs = {
@@ -154,37 +229,65 @@ docs = {
 }
 ```
 
-Resources are automatically discovered and available for completion with `@`.
+Resources and prompts are automatically discovered and available for completion with `@` and `/` respectively.
 
 ## Code Organization
 
-### Core Packages
+All source code is located in `src/nxs/` following the Python src-layout pattern.
+
+### Entry Points
 
 | File | Purpose |
 |------|---------|
-| `main.py` | Entry point; manages MCP client lifecycle and launches Textual TUI |
-| `mcp_server.py` | MCP server: documents, resources, tools, prompts definitions |
-| `mcp_client.py` | Async MCP client wrapper for subprocess communication |
+| `__main__.py` | Module entry point: `python -m nxs` |
+| `main.py` | Main application logic; creates `ArtifactManager`, `CommandControlAgent`, and launches `NexusApp` |
 
-### Core Layer (UI-independent agent logic)
+### Core Layer (UI-independent)
 
 | File | Purpose |
 |------|---------|
+| `core/artifact_manager.py` | Central manager for MCP artifacts: loads configs, manages connections, aggregates resources/prompts/tools |
+| `core/mcp_config.py` | MCP configuration parser: loads and validates `mcp_servers.json` |
 | `core/chat.py` | Base `AgentLoop` class: Claude integration, tool execution loop, streaming callbacks |
-| `core/command_control.py` | Agent extending AgentLoop with resource extraction and command handling |
+| `core/command_control.py` | `CommandControlAgent`: extends AgentLoop with resource/prompt extraction and processing |
 | `core/claude.py` | Anthropic SDK wrapper with message construction helpers |
-| `core/tools.py` | `ToolManager` for aggregating and routing tool execution |
-| `core/logger.py` | Loguru configuration (file-only output to avoid TUI interference) |
+| `core/tools.py` | `ToolManager`: aggregates and routes tool execution across MCP clients |
+
+### MCP Client Layer
+
+| File | Purpose |
+|------|---------|
+| `mcp_client/client.py` | `MCPAuthClient`: main async client with connection management and reconnection logic |
+| `mcp_client/auth.py` | Authentication handler for remote MCP servers |
+| `mcp_client/storage.py` | Storage handler for MCP server state persistence |
+| `mcp_client/callback.py` | UI callback helpers for progress/completion tracking |
+| `mcp_client.py` | Legacy simple async wrapper (backwards compatibility) |
 
 ### TUI Layer (Textual + Rich)
 
 | File | Purpose |
 |------|---------|
-| `tui/app.py` | Main `NexusApp` (Textual App): layout, callbacks, event handling |
+| `tui/app.py` | `NexusApp` (Textual App): main layout, event handling, MCP status callbacks |
 | `tui/styles.tcss` | Textual CSS for styling widgets and layout |
+| `tui/query_manager.py` | Async query processing manager to prevent race conditions |
+| `tui/status_queue.py` | Async status update queue from agent to TUI |
 | `tui/widgets/chat_panel.py` | `ChatPanel` (RichLog): scrollable chat with Rich markup/markdown |
 | `tui/widgets/status_panel.py` | `StatusPanel` (RichLog): tool execution status with structured display |
-| `tui/widgets/input_field.py` | `NexusInput` (AutoComplete): input with dropdown for @ and / completions |
+| `tui/widgets/mcp_panel.py` | `MCPPanel`: displays MCP servers, connection status, and artifacts |
+| `tui/widgets/artifact_overlay.py` | `ArtifactOverlay`: modal for viewing artifact details |
+| `tui/widgets/input_field.py` | `NexusInput`: input field with autocomplete integration |
+| `tui/widgets/autocomplete.py` | `NexusAutoComplete`: dropdown autocomplete widget |
+| `tui/widgets/command_parser.py` | Command parsing utilities |
+| `tui/widgets/argument_suggestions.py` | Command argument suggestion logic |
+
+### Supporting Files
+
+| File | Purpose |
+|------|---------|
+| `logger.py` | Loguru configuration (file-only output to avoid TUI interference) |
+| `utils.py` | Utility functions (time formatting, etc.) |
+| `mcp_server.py` | Example MCP server implementation |
+| `config/mcp_servers.json` | MCP server configurations |
 
 ### Tests
 
