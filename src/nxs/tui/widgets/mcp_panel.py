@@ -381,9 +381,25 @@ class MCPPanel(Vertical):
             
             logger.debug(f"Updating server {server_name}: status={status}, artifacts={len(artifacts.get('tools', []))} tools")
             
+            # Check if we should clear the operational status
+            # If artifacts are provided and current status is "Fetching artifacts...", clear it
+            # This handles the case where artifacts were just fetched and we want to remove the "Fetching..." message
+            operational_status_to_set = None
+            if server_name in self._server_widgets:
+                current_widget = self._server_widgets[server_name]
+                current_op_status = current_widget._operational_status or ""
+                # Clear "Fetching artifacts..." status when artifacts are successfully provided
+                # Only clear if it's a plain "Fetching artifacts..." message (not success/error messages)
+                if "Fetching artifacts" in current_op_status:
+                    # Don't clear if it's already a success or error message
+                    if "✓" not in current_op_status and "✗" not in current_op_status and "Error" not in current_op_status and "No artifacts" not in current_op_status:
+                        operational_status_to_set = ""  # Clear the status
+                        logger.debug(f"Clearing 'Fetching artifacts...' status for {server_name} after artifacts loaded")
+            
             self.update_server(
                 server_name=server_name,
                 connection_status=status,
+                operational_status=operational_status_to_set if operational_status_to_set is not None else None,
                 artifacts=artifacts,
                 last_check_time=last_check,
             )

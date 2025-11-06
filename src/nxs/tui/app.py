@@ -395,7 +395,9 @@ class NexusApp(App):
                 else:
                     # Cache even if unchanged to keep it up to date
                     self.artifact_manager.cache_artifacts(server_name, artifacts)
-                    logger.debug(f"Artifacts unchanged for {server_name}, skipping panel refresh")
+                    # Clear "Fetching artifacts..." status even if artifacts didn't change
+                    mcp_panel.clear_fetch_status(server_name)
+                    logger.debug(f"Artifacts unchanged for {server_name}, cleared fetch status")
             else:
                 # Full refresh for all servers
                 servers_data = await self.artifact_manager.get_all_servers_artifacts()
