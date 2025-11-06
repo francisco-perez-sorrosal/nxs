@@ -361,19 +361,19 @@ class NexusApp(App):
             
             # Get artifacts for all servers or just one
             if is_single_server_refresh:
-                # Fetch artifacts for all servers (preserve other servers' data)
-                servers_data = await self.artifact_manager.get_all_servers_artifacts()
-                
-                # Show fetch status for the target server
+                # For single server refresh, fetch artifacts first, then update display once
                 mcp_panel = self.query_one("#mcp-panel", MCPPanel)
                 mcp_panel.set_fetch_status(server_name, "[dim]Fetching artifacts...[/]")
-                await self._update_mcp_panel_display(mcp_panel, servers_data, server_statuses)
                 
                 # Fetch artifacts for the target server with retry
                 artifacts = await self.artifact_manager.get_server_artifacts(
                     server_name,
                     retry_on_empty=retry_on_empty
                 )
+                
+                # Get all servers data, preserving existing artifacts for other servers
+                # This prevents clearing artifacts from other servers during refresh
+                servers_data = await self.artifact_manager.get_all_servers_artifacts()
                 servers_data[server_name] = artifacts
                 
                 # Check if artifacts changed
@@ -390,14 +390,16 @@ class NexusApp(App):
                     else:
                         mcp_panel.set_fetch_status(server_name, "[dim]No artifacts[/]")
                     
+                    # Update display once with all server data including the new artifacts
                     await self._update_mcp_panel_display(mcp_panel, servers_data, server_statuses)
                     logger.debug(f"Artifacts changed for {server_name}, refreshed panel")
                 else:
                     # Cache even if unchanged to keep it up to date
                     self.artifact_manager.cache_artifacts(server_name, artifacts)
                     # Clear "Fetching artifacts..." status even if artifacts didn't change
+                    # Don't update display if artifacts haven't changed - preserves existing widgets
                     mcp_panel.clear_fetch_status(server_name)
-                    logger.debug(f"Artifacts unchanged for {server_name}, cleared fetch status")
+                    logger.debug(f"Artifacts unchanged for {server_name}, cleared fetch status (widgets preserved)")
             else:
                 # Full refresh for all servers
                 servers_data = await self.artifact_manager.get_all_servers_artifacts()

@@ -175,3 +175,65 @@ Container {
 Vertical {
     background: $surface;
 }
+
+/* Artifact item styling - clickable artifacts */
+ArtifactItem {
+    background: $surface;
+    color: $text;
+}
+
+ArtifactItem:hover {
+    background: $panel-lighten-1;
+}
+
+/* Artifact description overlay styling */
+#artifact-description-overlay {
+    layer: overlay;
+    dock: right;
+    width: 40;
+    height: 30;
+    border: solid $accent;
+    background: $surface;
+    padding: 1;
+}
+
+#artifact-overlay-container {
+    width: 100%;
+    height: 100%;
+    layout: vertical;
+}
+
+#artifact-overlay-header {
+    height: 3;
+    border-bottom: solid $accent;
+    padding: 0 1;
+    align: left middle;
+}
+
+#artifact-overlay-title {
+    width: 1fr;
+}
+
+#artifact-overlay-close {
+    width: 3;
+    min-width: 3;
+}
+
+#artifact-overlay-content {
+    height: 1fr;
+    padding: 1;
+}
+
+#artifact-description-content {
+    height: 1fr;
+    border: solid $panel;
+    padding: 1;
+    scrollbar-gutter: stable;
+}
+
+#artifact-overlay-footer {
+    height: 1;
+    border-top: solid $accent;
+    padding: 0 1;
+    text-align: center;
+}

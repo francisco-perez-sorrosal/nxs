@@ -55,7 +55,7 @@ class ArtifactManager:
         # Track last check time for each server
         self._server_last_check: dict[str, float] = {}
         # Cache artifacts for each server to avoid unnecessary fetches
-        self._artifacts_cache: dict[str, dict[str, list[str]]] = {}
+        self._artifacts_cache: dict[str, dict[str, list[dict[str, str | None]]]] = {}
 
     async def initialize(self, use_auth: bool = False) -> None:
         """
@@ -360,7 +360,7 @@ class ArtifactManager:
             timestamp = time.time()
         self._server_last_check[server_name] = timestamp
 
-    def get_cached_artifacts(self, server_name: str) -> dict[str, list[str]] | None:
+    def get_cached_artifacts(self, server_name: str) -> dict[str, list[dict[str, str | None]]] | None:
         """
         Get cached artifacts for a server.
 
@@ -372,7 +372,7 @@ class ArtifactManager:
         """
         return self._artifacts_cache.get(server_name)
 
-    def cache_artifacts(self, server_name: str, artifacts: dict[str, list[str]]) -> None:
+    def cache_artifacts(self, server_name: str, artifacts: dict[str, list[dict[str, str | None]]]) -> None:
         """
         Cache artifacts for a server.
 
@@ -394,7 +394,9 @@ class ArtifactManager:
         else:
             self._artifacts_cache.pop(server_name, None)
 
-    def have_artifacts_changed(self, server_name: str, new_artifacts: dict[str, list[str]]) -> bool:
+    def have_artifacts_changed(
+        self, server_name: str, new_artifacts: dict[str, list[dict[str, str | None]]]
+    ) -> bool:
         """
         Check if artifacts have changed compared to cache.
 
@@ -425,7 +427,7 @@ class ArtifactManager:
         if (cached_total == 0 and new_total > 0) or (cached_total > 0 and new_total == 0):
             return True
 
-        # Compare actual content
+        # Compare actual content (names and descriptions)
         return new_artifacts != cached
 
     async def _fetch_with_retry(
@@ -481,7 +483,7 @@ class ArtifactManager:
         self,
         server_name: str,
         retry_on_empty: bool = False
-    ) -> dict[str, list[str]]:
+    ) -> dict[str, list[dict[str, str | None]]]:
         """
         Get artifacts (tools, prompts, resources) for a specific server.
 
@@ -490,9 +492,10 @@ class ArtifactManager:
             retry_on_empty: If True, retry fetching if results are empty
 
         Returns:
-            Dictionary with keys "tools", "prompts", "resources", each containing a list of names/URIs
+            Dictionary with keys "tools", "prompts", "resources", each containing a list of dicts
+            with "name" and "description" keys
         """
-        artifacts: dict[str, list[str]] = {
+        artifacts: dict[str, list[dict[str, str | None]]] = {
             "tools": [],
             "prompts": [],
             "resources": []
@@ -520,7 +523,10 @@ class ArtifactManager:
                 retry_on_empty=retry_on_empty
             )
             if tools:
-                artifacts["tools"] = [tool.name for tool in tools]
+                artifacts["tools"] = [
+                    {"name": tool.name, "description": tool.description}
+                    for tool in tools
+                ]
 
             # Fetch prompts with retry
             prompts = await self._fetch_with_retry(
@@ -530,7 +536,10 @@ class ArtifactManager:
                 retry_on_empty=retry_on_empty
             )
             if prompts:
-                artifacts["prompts"] = [prompt.name for prompt in prompts]
+                artifacts["prompts"] = [
+                    {"name": prompt.name, "description": prompt.description}
+                    for prompt in prompts
+                ]
 
             # Fetch resources with retry
             resources = await self._fetch_with_retry(
@@ -540,7 +549,19 @@ class ArtifactManager:
                 retry_on_empty=retry_on_empty
             )
             if resources:
-                artifacts["resources"] = [str(resource.uri) for resource in resources]
+                artifacts["resources"] = [
+                    {
+                        "name": str(resource.uri),
+                        "description": (
+                            resource.description
+                            if hasattr(resource, "description") and resource.description
+                            else resource.name
+                            if hasattr(resource, "name") and resource.name
+                            else None
+                        )
+                    }
+                    for resource in resources
+                ]
 
             logger.debug(
                 f"Fetched artifacts for {server_name}: "
@@ -554,14 +575,14 @@ class ArtifactManager:
 
         return artifacts
 
-    async def get_all_servers_artifacts(self) -> dict[str, dict[str, list[str]]]:
+    async def get_all_servers_artifacts(self) -> dict[str, dict[str, list[dict[str, str | None]]]]:
         """
         Get artifacts for all servers.
 
         Returns:
             Dictionary mapping server names to their artifacts dict
         """
-        all_artifacts: dict[str, dict[str, list[str]]] = {}
+        all_artifacts: dict[str, dict[str, list[dict[str, str | None]]]] = {}
 
         for server_name in self.mcp_clients.keys():
             artifacts = await self.get_server_artifacts(server_name)

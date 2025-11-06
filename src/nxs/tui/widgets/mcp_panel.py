@@ -3,9 +3,10 @@ MCPPanel - A scrollable panel displaying MCP servers and their artifacts.
 """
 
 from typing import Any
-from textual.widgets import Static
+from textual.widgets import Static, Label
 from textual.containers import Vertical, ScrollableContainer
 from textual.app import ComposeResult
+from textual.message import Message
 from rich.text import Text
 from rich.console import Group
 from nxs.mcp_client.client import ConnectionStatus
@@ -13,6 +14,28 @@ from nxs.utils import format_time_hhmmss
 from nxs.logger import get_logger
 
 logger = get_logger("mcp_panel")
+
+
+def sanitize_widget_id(name: str) -> str:
+    """
+    Sanitize a name to be used as a widget ID.
+    
+    Replaces special characters that are problematic in CSS selectors
+    and widget IDs with safe alternatives.
+    
+    Args:
+        name: The name to sanitize
+        
+    Returns:
+        Sanitized name safe for use as widget ID
+    """
+    # Replace special characters with underscores
+    # This ensures IDs are valid for CSS selectors
+    sanitized = name.replace("://", "_").replace(":", "_").replace("/", "_").replace(" ", "_")
+    sanitized = sanitized.replace(".", "_").replace("-", "_").replace("+", "_")
+    # Remove any remaining problematic characters
+    sanitized = "".join(c if c.isalnum() or c == "_" else "_" for c in sanitized)
+    return sanitized
 
 
 def get_status_icon(status: ConnectionStatus) -> str:
@@ -42,7 +65,7 @@ def get_status_text(status: ConnectionStatus) -> str:
 def _format_server_display(
     server_name: str,
     status: ConnectionStatus,
-    artifacts: dict[str, list[str]],
+    artifacts: dict[str, list[dict[str, str | None]]],
     last_check_timestamp: float,
     operational_status: str = "",
     reconnect_info: dict[str, Any] | None = None,
@@ -110,24 +133,28 @@ def _format_server_display(
     tools = artifacts.get("tools", [])
     if tools:
         for tool in tools:
-            lines.append(Text.from_markup(f"  [cyan](T)[/] {tool}"))
+            tool_name = tool.get("name", "") if isinstance(tool, dict) else tool
+            lines.append(Text.from_markup(f"  [cyan](T)[/] {tool_name}"))
     
     # Prompts
     prompts = artifacts.get("prompts", [])
     if prompts:
         for prompt in prompts:
-            lines.append(Text.from_markup(f"  [green](P)[/] {prompt}"))
+            prompt_name = prompt.get("name", "") if isinstance(prompt, dict) else prompt
+            lines.append(Text.from_markup(f"  [green](P)[/] {prompt_name}"))
     
     # Resources
     resources = artifacts.get("resources", [])
     if resources:
         for resource in resources:
             # Extract resource name from URI if it's a full URI
-            resource_display = resource
-            if "://" in resource:
-                parts = resource.split("/")
-                resource_display = parts[-1] if parts else resource
-            lines.append(Text.from_markup(f"  [magenta](R)[/] {resource_display}"))
+            resource_name = resource.get("name", "") if isinstance(resource, dict) else resource
+            if resource_name:
+                resource_display = resource_name
+                if "://" in resource_name:
+                    parts = resource_name.split("/")
+                    resource_display = parts[-1] if parts else resource_name
+                lines.append(Text.from_markup(f"  [magenta](R)[/] {resource_display}"))
     
     # Show counts if any artifacts exist
     total = len(tools) + len(prompts) + len(resources)
@@ -142,7 +169,42 @@ def _format_server_display(
     return Group(*lines)
 
 
-class ServerWidget(Static):
+class ArtifactItem(Static):
+    """Clickable artifact item widget."""
+    
+    class Clicked(Message):
+        """Message sent when artifact is clicked."""
+        def __init__(self, artifact_name: str, artifact_type: str, description: str | None):
+            super().__init__()
+            self.artifact_name = artifact_name
+            self.artifact_type = artifact_type
+            self.description = description
+    
+    def __init__(self, artifact_name: str, artifact_type: str, description: str | None, **kwargs):
+        """Initialize the artifact item."""
+        super().__init__(**kwargs)
+        self.artifact_name = artifact_name
+        self.artifact_type = artifact_type
+        self.description = description
+        
+        # Format display text
+        type_colors = {
+            "T": "cyan",
+            "P": "green",
+            "R": "magenta"
+        }
+        color = type_colors.get(artifact_type, "white")
+        display_text = f"  [{color}]({artifact_type})[/] {artifact_name}"
+        self.update(Text.from_markup(display_text))
+    
+    def on_click(self) -> None:
+        """Handle click event - send message to parent."""
+        self.post_message(
+            self.Clicked(self.artifact_name, self.artifact_type, self.description)
+        )
+
+
+class ServerWidget(Vertical):
     """Individual server display widget that can be updated independently."""
     
     def __init__(self, server_name: str, **kwargs):
@@ -153,16 +215,335 @@ class ServerWidget(Static):
         self._operational_status = ""
         self._reconnect_info: dict[str, Any] = {}
         self._error_message: str | None = None
-        self._artifacts: dict[str, list[str]] = {"tools": [], "prompts": [], "resources": []}
+        self._artifacts: dict[str, list[dict[str, str | None]]] = {"tools": [], "prompts": [], "resources": []}
         self._last_check_time = 0.0
-        # Initialize with placeholder content so widget is visible
-        self.update(Text.from_markup(f"[dim]Loading {server_name}...[/]"))
+        self._artifact_widgets: dict[str, ArtifactItem] = {}
+    
+    def compose(self) -> ComposeResult:
+        """Compose the server widget with header and artifacts."""
+        # Header will be added dynamically
+        # Sanitize server name for widget ID
+        safe_server_name = sanitize_widget_id(self.server_name)
+        yield Static("", id=f"server-header-{safe_server_name}")
+    
+    def on_mount(self) -> None:
+        """Initialize display after mount."""
+        self._update_display()
+    
+    def on_artifact_item_clicked(self, event: ArtifactItem.Clicked) -> None:
+        """Handle artifact click - show overlay widget."""
+        from .artifact_overlay import ArtifactDescriptionOverlay
+        
+        # Get MCP panel
+        mcp_panel = self.app.query_one("#mcp-panel", MCPPanel)
+        
+        # Try to find existing overlay - reuse it if it exists
+        from .artifact_overlay import ArtifactDescriptionOverlay as OverlayType
+        existing_overlay = None
+        try:
+            overlay_widget = mcp_panel.query_one("#artifact-description-overlay")
+            if isinstance(overlay_widget, OverlayType):
+                existing_overlay = overlay_widget
+        except:
+            # No existing overlay found, that's fine
+            pass
+        
+        if existing_overlay is not None:
+            # Update existing overlay with new content
+            existing_overlay.artifact_name = event.artifact_name
+            existing_overlay.artifact_type = event.artifact_type
+            existing_overlay.description = event.description or "No description available."
+            
+            # Update the overlay content
+            try:
+                from textual.widgets import RichLog, Static
+                description_widget = existing_overlay.query_one("#artifact-description-content")
+                if isinstance(description_widget, RichLog):
+                    description_widget.clear()
+                    from rich.panel import Panel
+                    if existing_overlay.description:
+                        description_panel = Panel(
+                            existing_overlay.description,
+                            border_style="dim",
+                            padding=(1, 2),
+                            expand=False
+                        )
+                        description_widget.write(description_panel)
+                    else:
+                        description_widget.write("[dim]No description available.[/]")
+            except:
+                pass
+            
+            # Update header
+            try:
+                from textual.widgets import Static
+                header_widget = existing_overlay.query_one("#artifact-overlay-title")
+                if isinstance(header_widget, Static):
+                    type_labels = {"T": "Tool", "P": "Prompt", "R": "Resource"}
+                    type_label = type_labels.get(event.artifact_type, "Artifact")
+                    header_text = f"[bold cyan]{type_label}:[/] [bold]{event.artifact_name}[/]"
+                    from rich.text import Text
+                    header_widget.update(Text.from_markup(header_text))
+            except:
+                pass
+            
+            # Reset auto-dismiss timer
+            if hasattr(existing_overlay, '_dismiss_timer') and existing_overlay._dismiss_timer:
+                existing_overlay._dismiss_timer.cancel()
+            import asyncio
+            existing_overlay._dismiss_timer = asyncio.create_task(existing_overlay._auto_dismiss())
+            
+            return  # Overlay updated, we're done
+        
+        # Remove any existing overlays that might have slipped through
+        # This is a safety measure to prevent duplicates
+        try:
+            existing_overlays_list = list(mcp_panel.query("#artifact-description-overlay"))
+            for overlay in existing_overlays_list:
+                try:
+                    overlay.remove()
+                except:
+                    pass
+        except:
+            pass
+        
+        # Create new overlay
+        overlay = ArtifactDescriptionOverlay(
+            artifact_name=event.artifact_name,
+            artifact_type=event.artifact_type,
+            description=event.description,
+            id="artifact-description-overlay"
+        )
+        
+        # Mount overlay in the MCP panel
+        mcp_panel.mount(overlay)
+    
+    def on_clicked(self, event: ArtifactItem.Clicked) -> None:
+        """Handle artifact click - alternative handler name."""
+        self.on_artifact_item_clicked(event)
+    
+    def _update_header_and_metadata(self) -> None:
+        """Update header and metadata (status, timestamps) without touching artifacts."""
+        # Get header widget
+        safe_server_name = sanitize_widget_id(self.server_name)
+        header_widget = self.query_one(f"#server-header-{safe_server_name}", Static)
+        
+        # Format header
+        status_icon = get_status_icon(self._connection_status)
+        status_text = get_status_text(self._connection_status)
+        
+        # Build status line with reconnection progress or error message
+        status_details = []
+        
+        if self._connection_status == ConnectionStatus.RECONNECTING and self._reconnect_info:
+            attempts = self._reconnect_info.get("attempts", 0)
+            max_attempts = self._reconnect_info.get("max_attempts", 10)
+            next_retry = self._reconnect_info.get("next_retry_delay")
+            if next_retry is not None:
+                status_details.append(f"[dim]attempt {attempts}/{max_attempts}, retry in {next_retry:.0f}s[/]")
+            else:
+                status_details.append(f"[dim]attempt {attempts}/{max_attempts}[/]")
+        
+        if self._connection_status == ConnectionStatus.ERROR and self._error_message:
+            status_details.append(f"[red]{self._error_message}[/]")
+        
+        status_line = status_text
+        if status_details:
+            status_line += f" [dim]| {' | '.join(status_details)}[/]"
+        
+        header_text = f"\n[bold yellow]📡 {self.server_name}[/] {status_icon} {status_line}"
+        header_widget.update(Text.from_markup(header_text))
+        
+        # Add operational status if present
+        op_status_id = f"server-op-status-{safe_server_name}"
+        try:
+            op_status_widget = self.query_one(f"#{op_status_id}", Static)
+        except:
+            op_status_widget = Static("", id=op_status_id)
+            self.mount(op_status_widget)
+        
+        if self._operational_status:
+            op_status_widget.update(Text.from_markup(f"  Status: {self._operational_status}"))
+            op_status_widget.display = True
+        else:
+            op_status_widget.display = False
+        
+        # Add last check time
+        last_check_id = f"server-last-check-{safe_server_name}"
+        try:
+            last_check_widget = self.query_one(f"#{last_check_id}", Static)
+        except:
+            last_check_widget = Static("", id=last_check_id)
+            self.mount(last_check_widget)
+        last_check_str = format_time_hhmmss(self._last_check_time)
+        last_check_widget.update(Text.from_markup(f"  [dim]Checked: {last_check_str}[/]"))
+        
+        # Update count line
+        total = (
+            len(self._artifacts.get("tools", [])) +
+            len(self._artifacts.get("prompts", [])) +
+            len(self._artifacts.get("resources", []))
+        )
+        count_id = f"server-count-{safe_server_name}"
+        try:
+            count_widget = self.query_one(f"#{count_id}", Static)
+        except:
+            count_widget = Static("", id=count_id)
+            self.mount(count_widget)
+        
+        if total == 0:
+            count_widget.update(Text.from_markup("  [dim]No artifacts[/]"))
+        else:
+            count_text = f"  [dim]({len(self._artifacts.get('tools', []))} tools, {len(self._artifacts.get('prompts', []))} prompts, {len(self._artifacts.get('resources', []))} resources)[/]"
+            count_widget.update(Text.from_markup(count_text))
+        
+        # Add divider
+        divider_id = f"server-divider-{safe_server_name}"
+        try:
+            divider_widget = self.query_one(f"#{divider_id}", Static)
+        except:
+            divider_widget = Static("", id=divider_id)
+            self.mount(divider_widget)
+        divider_widget.update(Text.from_markup("[dim]" + "─" * 30 + "[/]"))
+    
+    def _update_display(self) -> None:
+        """Update the entire server widget display (used on initial mount)."""
+        self._update_header_and_metadata()
+        self._update_artifacts()
+    
+    def _update_artifacts(self) -> None:
+        """Update artifact widgets."""
+        # Calculate new artifact count
+        new_total = (
+            len(self._artifacts.get("tools", [])) +
+            len(self._artifacts.get("prompts", [])) +
+            len(self._artifacts.get("resources", []))
+        )
+        
+        logger.debug(
+            f"_update_artifacts called for {self.server_name}: "
+            f"current widgets={len(self._artifact_widgets)}, "
+            f"new artifacts: {len(self._artifacts.get('tools', []))} tools, "
+            f"{len(self._artifacts.get('prompts', []))} prompts, "
+            f"{len(self._artifacts.get('resources', []))} resources"
+        )
+        
+        # Remove old artifact widgets
+        removed_count = 0
+        for artifact_id, widget in list(self._artifact_widgets.items()):
+            try:
+                widget.remove()
+                removed_count += 1
+            except Exception as e:
+                logger.debug(f"Error removing artifact widget {artifact_id}: {e}")
+            del self._artifact_widgets[artifact_id]
+        
+        logger.debug(f"Removed {removed_count} artifact widget(s) for {self.server_name}, will create {new_total} new one(s)")
+        
+        # Add new artifact widgets
+        # Mount after the last check widget
+        safe_server_name = sanitize_widget_id(self.server_name)
+        try:
+            last_check_widget = self.query_one(f"#server-last-check-{safe_server_name}", Static)
+        except:
+            last_check_widget = None
+        
+        # Tools
+        tools = self._artifacts.get("tools", [])
+        for tool in tools:
+            tool_name = tool.get("name", "") if isinstance(tool, dict) else str(tool) if tool else ""
+            if not tool_name:
+                continue
+            tool_desc = tool.get("description") if isinstance(tool, dict) else None
+            # Sanitize the artifact ID to avoid special characters
+            safe_tool_name = sanitize_widget_id(tool_name)
+            artifact_id = f"artifact-{sanitize_widget_id(self.server_name)}-T-{safe_tool_name}"
+            try:
+                artifact_widget = ArtifactItem(
+                    artifact_name=tool_name,
+                    artifact_type="T",
+                    description=tool_desc,
+                    id=artifact_id
+                )
+                if last_check_widget:
+                    self.mount(artifact_widget, after=last_check_widget)
+                    last_check_widget = artifact_widget
+                else:
+                    self.mount(artifact_widget)
+                    last_check_widget = artifact_widget
+                self._artifact_widgets[artifact_id] = artifact_widget
+            except Exception as e:
+                logger.error(f"Error creating artifact widget for tool {tool_name}: {e}")
+        
+        # Prompts
+        prompts = self._artifacts.get("prompts", [])
+        for prompt in prompts:
+            prompt_name = prompt.get("name", "") if isinstance(prompt, dict) else str(prompt) if prompt else ""
+            if not prompt_name:
+                continue
+            prompt_desc = prompt.get("description") if isinstance(prompt, dict) else None
+            # Sanitize the artifact ID to avoid special characters
+            safe_prompt_name = sanitize_widget_id(prompt_name)
+            artifact_id = f"artifact-{sanitize_widget_id(self.server_name)}-P-{safe_prompt_name}"
+            try:
+                artifact_widget = ArtifactItem(
+                    artifact_name=prompt_name,
+                    artifact_type="P",
+                    description=prompt_desc,
+                    id=artifact_id
+                )
+                if last_check_widget:
+                    self.mount(artifact_widget, after=last_check_widget)
+                    last_check_widget = artifact_widget
+                else:
+                    self.mount(artifact_widget)
+                    last_check_widget = artifact_widget
+                self._artifact_widgets[artifact_id] = artifact_widget
+            except Exception as e:
+                logger.error(f"Error creating artifact widget for prompt {prompt_name}: {e}")
+        
+        # Resources
+        resources = self._artifacts.get("resources", [])
+        for resource in resources:
+            resource_name = resource.get("name", "") if isinstance(resource, dict) else str(resource) if resource else ""
+            if not resource_name:
+                continue
+            resource_desc = resource.get("description") if isinstance(resource, dict) else None
+            # Extract resource display name from URI if needed
+            resource_display = resource_name
+            if resource_name and "://" in resource_name:
+                parts = resource_name.split("/")
+                resource_display = parts[-1] if parts else resource_name
+            # Sanitize the artifact ID to avoid special characters
+            safe_resource_name = sanitize_widget_id(resource_name)
+            artifact_id = f"artifact-{sanitize_widget_id(self.server_name)}-R-{safe_resource_name}"
+            try:
+                artifact_widget = ArtifactItem(
+                    artifact_name=resource_display,
+                    artifact_type="R",
+                    description=resource_desc,
+                    id=artifact_id
+                )
+                if last_check_widget:
+                    self.mount(artifact_widget, after=last_check_widget)
+                    last_check_widget = artifact_widget
+                else:
+                    self.mount(artifact_widget)
+                    last_check_widget = artifact_widget
+                self._artifact_widgets[artifact_id] = artifact_widget
+            except Exception as e:
+                logger.error(f"Error creating artifact widget for resource {resource_name}: {e}")
+        
+        logger.debug(
+            f"Completed _update_artifacts for {self.server_name}: "
+            f"created {len(self._artifact_widgets)} widget(s)"
+        )
     
     def update_data(
         self,
         connection_status: ConnectionStatus | None = None,
         operational_status: str | None = None,
-        artifacts: dict[str, list[str]] | None = None,
+        artifacts: dict[str, list[dict[str, str | None]]] | None = None,
         last_check_time: float | None = None,
         reconnect_info: dict[str, Any] | None = None,
         error_message: str | None = None,
@@ -178,7 +559,9 @@ class ServerWidget(Static):
             reconnect_info: Reconnection info (if None, keeps current)
             error_message: Error message (if None, keeps current; empty string clears)
         """
-        # Update internal state
+        artifacts_changed = False
+        
+        # Update internal state and track changes
         if connection_status is not None:
             self._connection_status = connection_status
             if connection_status != ConnectionStatus.ERROR:
@@ -188,7 +571,32 @@ class ServerWidget(Static):
             self._operational_status = operational_status
         
         if artifacts is not None:
-            self._artifacts = artifacts
+            # Check if artifacts actually changed before updating
+            # First check if we have no artifacts currently (initial state)
+            current_total = (
+                len(self._artifacts.get("tools", [])) +
+                len(self._artifacts.get("prompts", [])) +
+                len(self._artifacts.get("resources", []))
+            )
+            new_total = (
+                len(artifacts.get("tools", [])) +
+                len(artifacts.get("prompts", [])) +
+                len(artifacts.get("resources", []))
+            )
+            
+            # If we're going from empty to non-empty or vice versa, always update
+            if (current_total == 0 and new_total > 0) or (current_total > 0 and new_total == 0):
+                artifacts_changed = True
+            # Otherwise, do a deep comparison of the actual content
+            elif self._artifacts != artifacts:
+                # Use deep comparison - Python's dict equality should work for nested structures
+                # but we need to ensure we're comparing the actual content
+                artifacts_changed = True
+            
+            if artifacts_changed:
+                # Store a deep copy to avoid reference issues
+                import copy
+                self._artifacts = copy.deepcopy(artifacts)
         
         if last_check_time is not None:
             self._last_check_time = last_check_time
@@ -199,19 +607,26 @@ class ServerWidget(Static):
         if error_message is not None:
             self._error_message = error_message
         
-        # Re-render using shared formatting function
-        display = _format_server_display(
-            server_name=self.server_name,
-            status=self._connection_status,
-            artifacts=self._artifacts,
-            last_check_timestamp=self._last_check_time,
-            operational_status=self._operational_status,
-            reconnect_info=self._reconnect_info if self._reconnect_info else None,
-            error_message=self._error_message,
-        )
+        # Only update display if necessary
+        # Update header/metadata always (status, timestamps, etc.)
+        self._update_header_and_metadata()
         
-        # Update widget content (call parent Static.update method)
-        super().update(display)
+        # Only update artifacts if they actually changed
+        # This prevents unnecessary removal/recreation of artifact widgets
+        if artifacts_changed:
+            logger.debug(
+                f"Artifacts changed for {self.server_name}: "
+                f"{len(self._artifacts.get('tools', []))} tools, "
+                f"{len(self._artifacts.get('prompts', []))} prompts, "
+                f"{len(self._artifacts.get('resources', []))} resources"
+            )
+            self._update_artifacts()
+        else:
+            # Log when artifacts are provided but unchanged (for debugging)
+            if artifacts is not None:
+                logger.debug(
+                    f"Artifacts unchanged for {self.server_name}, skipping widget update"
+                )
 
 
 class MCPPanel(Vertical):
@@ -271,7 +686,7 @@ class MCPPanel(Vertical):
         server_name: str,
         connection_status: ConnectionStatus | None = None,
         operational_status: str | None = None,
-        artifacts: dict[str, list[str]] | None = None,
+        artifacts: dict[str, list[dict[str, str | None]]] | None = None,
         last_check_time: float | None = None,
         reconnect_info: dict[str, Any] | None = None,
         error_message: str | None = None,
@@ -352,7 +767,7 @@ class MCPPanel(Vertical):
 
     def update_all_servers(
         self,
-        servers_data: dict[str, dict[str, list[str]]],
+        servers_data: dict[str, dict[str, list[dict[str, str | None]]]],
         server_statuses: dict[str, ConnectionStatus] | None = None,
         server_last_check: dict[str, float] | None = None,
     ):
@@ -446,7 +861,7 @@ class MCPPanel(Vertical):
 
     def update_servers(
         self,
-        servers_data: dict[str, dict[str, list[str]]],
+        servers_data: dict[str, dict[str, list[dict[str, str | None]]]],
         server_statuses: dict[str, ConnectionStatus] | None = None,
         server_last_check: dict[str, float] | None = None,
     ):
