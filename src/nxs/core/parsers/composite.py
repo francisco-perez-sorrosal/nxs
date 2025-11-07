@@ -115,8 +115,55 @@ class CompositeArgumentParser:
             if arg_name not in schema_dict:
                 invalid_args.append(arg_name)
                 logger.warning(f"Unknown argument '{arg_name}' for prompt '{command_name}'")
-            # TODO: Add type validation if needed
-        
+            else:
+                # Validate type if schema provides type information
+                self._validate_argument_type(
+                    arg_name=arg_name,
+                    arg_value=arg_value,
+                    schema_info=schema_dict[arg_name],
+                    command_name=command_name,
+                )
+
         if invalid_args:
             logger.warning(f"Invalid arguments provided for prompt '{command_name}': {invalid_args}")
+
+    def _validate_argument_type(
+        self,
+        arg_name: str,
+        arg_value: str,
+        schema_info: dict[str, Any],
+        command_name: str,
+    ) -> None:
+        """
+        Validate argument value type against schema.
+
+        Args:
+            arg_name: Argument name
+            arg_value: Argument value (as string from user input)
+            schema_info: Schema information for this argument
+            command_name: Command name for logging
+        """
+        expected_type = schema_info.get('type', 'string')
+
+        # Basic type validation - values come as strings from user input
+        # We validate format rather than coercing types
+        if expected_type == 'number' or expected_type == 'integer':
+            try:
+                if expected_type == 'integer':
+                    int(arg_value)
+                else:
+                    float(arg_value)
+            except ValueError:
+                logger.warning(
+                    f"Argument '{arg_name}' for prompt '{command_name}' expects type '{expected_type}', "
+                    f"but got non-numeric value: '{arg_value}'"
+                )
+        elif expected_type == 'boolean':
+            # Accept common boolean representations
+            if arg_value.lower() not in ('true', 'false', '1', '0', 'yes', 'no'):
+                logger.warning(
+                    f"Argument '{arg_name}' for prompt '{command_name}' expects boolean, "
+                    f"but got: '{arg_value}' (expected: true/false/yes/no/1/0)"
+                )
+        # For 'string' or any other type, accept as-is since input is already string
 

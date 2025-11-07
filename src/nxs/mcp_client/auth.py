@@ -84,28 +84,3 @@ async def oauth_context(server_url: str):
         # Clean up callback server
         logger.info(f"🧹 Stopping callback server")
         callback_server.stop()
-
-
-def get_oauth_client_provider(server_url: str):
-    """
-    DEPRECATED: Use oauth_context() instead for proper lifecycle management.
-
-    This function is kept for backward compatibility but doesn't properly
-    manage the callback server lifecycle.
-    """
-    logger.warning("⚠️  get_oauth_client_provider() is deprecated, use oauth_context() instead")
-
-    # For backward compatibility, create a callback server that won't be cleaned up
-    callback_server = CallbackServer(port=3030)
-    callback_server.start()
-
-    storage = InMemoryTokenStorage()
-    logger.info(f"📦 Creating OAuthClientProvider for {server_url.replace('/mcp', '')}")
-
-    return OAuthClientProvider(
-        server_url=server_url.replace("/mcp", ""),
-        client_metadata=OAuthClientMetadata.model_validate(client_metadata_dict),
-        storage=storage,
-        redirect_handler=_create_redirect_handler(),
-        callback_handler=_create_callback_handler(callback_server),
-    )
