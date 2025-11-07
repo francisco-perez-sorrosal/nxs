@@ -249,79 +249,27 @@ This document outlines the **Phase 2 refinement strategy** for the Nexus codebas
 
 **AV1. Layer Boundary Violations**
 
-**Violation 1: TUI layer accessing MCP implementation details**
-```python
-# tui/handlers/connection_handler.py:92
-client = self.artifact_manager.clients.get(server_name)
-reconnect_info = client.reconnect_info  # type: ignore - accessing MCPAuthClient specific attribute
-```
-- **Problem:** Handler should only use protocol interfaces
-- **Impact:** Tight coupling, type safety compromised
-
-**Violation 2: Core layer importing concrete client classes**
-```python
-# core/artifact_manager.py:20
-from nxs.mcp_client.client import ConnectionStatus, MCPAuthClient
-# Should only import from protocols
-```
-- **Problem:** Core depends on infrastructure implementation
-- **Impact:** Coupling, hard to swap implementations
-
-**Violation 3: Business logic in widgets**
-```python
-# tui/widgets/argument_suggestions.py - 283 lines
-# ArgumentSuggestionGenerator should be in core/services
-```
-- **Problem:** Domain logic lives in presentation layer
-- **Impact:** Can't reuse logic outside TUI, hard to test
+- **Violation 1 – Resolved:** `ConnectionHandler` now pulls reconnect metadata exclusively from `ReconnectProgress` events. The file no longer touches `MCPAuthClient.reconnect_info`, and the remaining interactions stay within the `MCPClient` protocol (`client = self.artifact_manager.clients.get(server_name)` followed by `client.is_connected` checks).
+- **Violation 2 – Still Outstanding:** `core/artifact_manager.py` continues to import and instantiate `MCPAuthClient` directly (`from nxs.mcp_client.client import ConnectionStatus, MCPAuthClient` + `_create_clients()`), leaving the core layer coupled to the concrete infrastructure client.
+- **Violation 3 – Resolved:** `tui/widgets/argument_suggestions.py` has been deleted. The `ArgumentSuggestionGenerator` now lives in `core/suggestions/generator.py`, and the widget simply coordinates UI concerns.
 
 ---
 
 **AV2. Inconsistent Abstraction Levels**
 
-**Problem:** `ArtifactManager` is both high-level facade and low-level client manager
-
-```python
-# High-level facade methods:
-async def get_resource_list(self) -> list[str]:
-    return await self._artifact_repository.get_resource_list()
-
-# Low-level client management:
-def _create_clients(self) -> list[tuple[str, MCPAuthClient]]:
-    # 33 lines creating MCPAuthClient instances
-```
-
-**Should be:** Separate into `ClientFactory` (low-level) and `ArtifactService` (high-level)
+- **Status – Still Outstanding:** `ArtifactManager` still mixes concerns. Alongside delegating to `ArtifactRepository`, it maintains `_server_statuses`, tracks timestamps, and constructs `MCPAuthClient` instances in `_create_clients()`. The proposed split into a dedicated factory/service layer has not yet happened.
 
 ---
 
 **AV3. Services in Wrong Layer**
 
-**Problem:** TUI services doing core/domain work:
-
-```python
-# tui/services/artifact_fetcher.py
-class ArtifactFetcher:
-    """Service for fetching MCP artifacts with timeout..."""
-    async def fetch_with_timeout(self, server_name: str, ...) -> dict:
-        # Timeout logic should be in core, not TUI
-```
-
-**Should be:** Fetching logic and timeouts belong in `core/artifacts/` not `tui/services/`
+- **Status – Resolved:** `tui/services/artifact_fetcher.py` has been removed. Timeout handling now resides in `core.artifacts.repository.ArtifactRepository.get_server_artifacts()`, so the presentation layer no longer owns this domain logic.
 
 ---
 
 **AV4. Missing Adapter Pattern**
 
-**Problem:** Converting between Cache and dict representations
-
-```python
-# prompt_service.py
-def copy_caches_to_dicts(self, commands: list[str]) -> tuple[dict, dict]:
-    """Copy cache entries to dicts for components that use dict-based caches."""
-```
-
-**Should be:** Create CacheAdapter or update AutoComplete to use Cache protocol
+- **Status – Partially Addressed:** `PromptService.copy_caches_to_dicts()` has been removed, and downstream consumers receive the `Cache` protocol directly. `NexusAutoComplete` now wraps the cache with a minimal `CacheDict` shim to satisfy the third-party autocomplete API. Additional work could teach the completion strategies to consume the protocol directly and eliminate the inline adapter.
 
 ---
 
