@@ -50,9 +50,8 @@ This document outlines the **Phase 2 refinement strategy** for the Nexus codebas
 
 **Phase 2 Progress Update:**
 - ✅ **HIGH Priority Issues (H1-H4):** All 4 completed (~220 lines removed, zero new type errors)
-- ✅ **MEDIUM Priority Issues (M1-M3):** Completed (~469 lines removed/restructured, proper layer separation achieved)
+- ✅ **MEDIUM Priority Issues (M1-M6):** All 6 completed (~515 lines removed, documentation added, architecture clarified)
 - 🔄 **CRITICAL Issues (C1-C3):** In progress
-- ⏳ **MEDIUM Priority Issues (M4-M6):** Pending
 - ⏳ **LOW Priority Issues (L1-L2):** Pending
 
 ---
@@ -177,42 +176,48 @@ This document outlines the **Phase 2 refinement strategy** for the Nexus codebas
 - **Files Deleted:** `tui/widgets/command_parser.py` (186 lines)
 - **Net Change:** +2 lines (but proper layer separation achieved)
 
-**M4. Unclear Distinction: Services vs Handlers**
-- **Problem:** Both live in `tui/` but unclear what makes something a "service" vs "handler"
-- **Services** (seem to manage lifecycle/state):
-  - `MCPCoordinator` - initialization
-  - `PromptService` - caching
-  - `AutocompleteService` - lifecycle
-  - `MCPRefresher` - refresh coordination
-  - `ArtifactFetcher` - fetching with timeout
-- **Handlers** (seem to handle events):
-  - `ConnectionHandler` - handles ConnectionStatusChanged/ReconnectProgress
-  - `QueryHandler` - handles query processing
-  - `RefreshHandler` - handles ArtifactsFetched
-- **But:** Some services also "handle" things (MCPRefresher "handles" scheduling)
-- **Impact:** Architectural pattern not clearly defined
+**~~M4. Unclear Distinction: Services vs Handlers~~** ✅ **COMPLETED**
+- **Solution Implemented:**
+  - Created comprehensive README documentation for both packages
+  - **Services pattern**: Manage stateful operations and lifecycle (hold caches, coordinate operations)
+  - **Handlers pattern**: Process events from EventBus (stateless coordinators between events and services)
+  - Clear guidelines with examples and anti-patterns documented
+- **Files Created:**
+  - `tui/services/README.md` (103 lines) - Service pattern documentation
+  - `tui/handlers/README.md` (125 lines) - Handler pattern documentation
+- **Result:** Clear architectural pattern definition with testing guidelines and examples
 
-**M5. Prompt Schema Caching Duplication**
-- **Locations:**
-  1. `PromptService._prompt_schema_cache` (uses Cache protocol)
-  2. `NexusAutoComplete._prompt_schema_cache` (uses raw dict)
-  3. Conversion via `copy_caches_to_dicts()` method
-- **Problem:** PromptService uses Cache abstraction, but AutoComplete uses raw dicts
-- **Evidence:**
-  ```python
-  # prompt_service.py lines 115-142
-  def copy_caches_to_dicts(self, commands: list[str]) -> tuple[dict, dict]:
-      """Copy cache entries to dicts for components that use dict-based caches."""
-  ```
-- **Impact:** Inconsistent abstraction usage, unnecessary conversion
+**~~M5. Prompt Schema Caching Duplication~~** ✅ **COMPLETED**
+- **Solution Implemented:**
+  - Modified `NexusAutoComplete` to reference `PromptService` directly instead of maintaining own caches
+  - Created `CacheDict` wrapper class to provide dict-like interface to Cache protocol
+  - `ArgumentSuggestionGenerator` now accesses PromptService cache via wrapper
+  - Removed `copy_caches_to_dicts()` from PromptService (29 lines removed)
+  - Removed `copy_prompt_caches()` from AutocompleteService (46 lines removed)
+  - Updated `app.py` to remove cache copying logic
+- **Result:** Single source of truth for prompt caching in PromptService
+- **Files Modified:**
+  - `autocomplete.py` (added CacheDict wrapper, updated all cache access)
+  - `autocomplete_service.py` (removed copy_prompt_caches method)
+  - `prompt_service.py` (removed copy_caches_to_dicts method)
+  - `app.py` (removed cache copying call)
+- **Lines Removed:** ~75 lines of duplication and conversion logic
 
-**M6. Connection Status Tracking Duplication**
-- **Locations:**
-  1. `ConnectionManager.status` (mcp_client/connection/)
-  2. `ArtifactManager._server_statuses` (core/)
-  3. MCPPanel server display state (tui/widgets/)
-- **Problem:** Status tracked in multiple places
-- **Impact:** Unclear single source of truth
+**~~M6. Connection Status Tracking Duplication~~** ✅ **COMPLETED**
+- **Analysis Result:** Architecture is actually correct - not duplication but proper layering:
+  1. `ConnectionManager.status` - Per-connection status (infrastructure layer) ✓
+  2. `ArtifactManager._server_statuses` - **Single source of truth** for all servers (domain layer) ✓
+  3. `MCPPanel._connection_status` - Display state only (presentation layer) ✓
+- **Solution Implemented:**
+  - Added clarifying documentation to all three locations
+  - `ArtifactManager._server_statuses` documented as "Single source of truth"
+  - `ConnectionManager` documented as managing single connection (not all servers)
+  - `ServerWidget` documented as display state updated via events from ArtifactManager
+- **Result:** Architecture validated as correct, no code changes needed, documentation clarifies ownership
+- **Files Modified:**
+  - `artifact_manager.py` (added SSoT comment)
+  - `connection/manager.py` (clarified scope)
+  - `mcp_panel.py` (clarified display state)
 
 ---
 

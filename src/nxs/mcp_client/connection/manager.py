@@ -23,6 +23,9 @@ class ConnectionManager:
     """
     Orchestrates connection management with lifecycle, health checking, and reconnection.
 
+    This manager coordinates a SINGLE connection's lifecycle (not all servers).
+    For aggregate status across all MCP servers, see ArtifactManager._server_statuses.
+
     This manager coordinates:
     - Connection lifecycle state (connecting, connected, disconnected, etc.)
     - Health monitoring to detect connection failures

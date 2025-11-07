@@ -206,12 +206,18 @@ class ArtifactItem(Static):
 
 
 class ServerWidget(Vertical):
-    """Individual server display widget that can be updated independently."""
-    
+    """
+    Individual server display widget that can be updated independently.
+
+    This widget maintains display state for a single server. The connection status
+    is provided by ArtifactManager (single source of truth) via events and ConnectionHandler.
+    """
+
     def __init__(self, server_name: str, **kwargs):
         """Initialize the server widget."""
         super().__init__(**kwargs)
         self.server_name = server_name
+        # Display state (updated via update_server_status() from ConnectionHandler)
         self._connection_status = ConnectionStatus.DISCONNECTED
         self._operational_status = ""
         self._reconnect_info: dict[str, Any] = {}

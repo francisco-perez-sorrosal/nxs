@@ -112,35 +112,6 @@ class PromptService:
         """
         return self._prompt_schema_cache.get(command)
 
-    def copy_caches_to_dicts(
-        self, commands: list[str]
-    ) -> tuple[dict[str, str | None], dict[str, tuple]]:
-        """
-        Copy cache entries to dicts for components that use dict-based caches.
-
-        The autocomplete widget uses dict-based caches, so we need to convert
-        from Cache instances to dicts by getting all known command entries.
-
-        Args:
-            commands: List of command names to copy
-
-        Returns:
-            Tuple of (prompt_info_dict, prompt_schema_dict)
-        """
-        prompt_info_dict: dict[str, str | None] = {}
-        prompt_schema_dict: dict[str, tuple] = {}
-
-        for command in commands:
-            info = self._prompt_info_cache.get(command)
-            if info is not None:
-                prompt_info_dict[command] = info
-
-            schema = self._prompt_schema_cache.get(command)
-            if schema is not None:
-                prompt_schema_dict[command] = schema
-
-        return prompt_info_dict, prompt_schema_dict
-
     def _format_prompt_arguments(self, prompt: "Prompt") -> str | None:
         """
         Format prompt arguments into a readable string.

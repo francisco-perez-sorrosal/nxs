@@ -134,6 +134,7 @@ class NexusApp(App):
         self.autocomplete_service = AutocompleteService(
             app=self,
             input_getter=self._get_input,
+            prompt_service=self.prompt_service,
             autocomplete_getter=self._get_autocomplete,
         )
 
@@ -252,11 +253,8 @@ class NexusApp(App):
 
             # Preload prompt information for all commands
             # This ensures arguments are available when dropdown is shown
+            # AutoComplete widget now accesses PromptService caches directly via reference
             await self.prompt_service.preload_all(commands)
-
-            # Copy prompt caches to autocomplete widget if it's already mounted
-            prompt_info_dict, prompt_schema_dict = self.prompt_service.copy_caches_to_dicts(commands)
-            self.autocomplete_service.copy_prompt_caches(prompt_info_dict, prompt_schema_dict)
 
             # Mark MCP as initialized
             self._mcp_initialized = True

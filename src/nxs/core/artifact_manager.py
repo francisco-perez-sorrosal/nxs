@@ -50,6 +50,8 @@ class ArtifactManager:
         self.config = config or load_mcp_config()
         self.event_bus = event_bus
         self.mcp_clients: dict[str, MCPClient] = {}
+        # Single source of truth for server connection status across all MCP servers
+        # Updated via _handle_status_change() and published to UI via EventBus
         self._server_statuses: dict[str, ConnectionStatus] = {}
         self._server_last_check: dict[str, float] = {}
 

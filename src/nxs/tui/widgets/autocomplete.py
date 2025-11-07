@@ -2,6 +2,7 @@
 NexusAutoComplete - AutoComplete overlay for NexusInput with command and resource completion.
 """
 
+from typing import TYPE_CHECKING
 from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 from nxs.logger import get_logger
 from nxs.core.parsers.utils import (
@@ -12,45 +13,82 @@ from nxs.core.parsers.utils import (
 from nxs.core.suggestions import ArgumentSuggestionGenerator
 from nxs.tui.widgets.input_field import NexusInput
 
+if TYPE_CHECKING:
+    from nxs.tui.services.prompt_service import PromptService
+
 logger = get_logger("nexus_input")
 
 
 class NexusAutoComplete(AutoComplete):
     """
     AutoComplete overlay for NexusInput.
-    
+
     This widget floats above the screen as an overlay and shows
     completion suggestions when the user types @ or /.
     """
 
-    def __init__(self, input_widget: NexusInput):
+    def __init__(self, input_widget: NexusInput, prompt_service: "PromptService"):
         """
         Initialize the AutoComplete overlay.
 
         Args:
             input_widget: The NexusInput widget to provide completions for
+            prompt_service: PromptService for accessing prompt caches
         """
         logger.info("Initializing NexusAutoComplete overlay")
         logger.info(f"Target input widget has {len(input_widget.resources)} resources and {len(input_widget.commands)} commands")
-        
+
         # Store the input widget reference first
         self.input_widget = input_widget
-        
+        self.prompt_service = prompt_service
+
         super().__init__(
             target=input_widget,
             candidates=self._get_candidates,  # Pass the method directly
             prevent_default_enter=True,  # Prevent Enter from submitting when selecting from dropdown
         )
         logger.info(f"AutoComplete initialized with candidates function: {self.candidates}")
-        
+
         logger.info("NexusAutoComplete overlay initialized successfully")
-        
-        # Cache for prompt information to avoid repeated lookups
-        self._prompt_cache: dict[str, str | None] = {}  # Formatted argument strings for display
-        self._prompt_schema_cache: dict[str, tuple] = {}  # Full prompt objects for argument expansion
-        
-        # Initialize argument suggestion generator
-        self._arg_suggestion_generator = ArgumentSuggestionGenerator(self._prompt_schema_cache)
+
+        # Initialize argument suggestion generator with prompt_service schema cache
+        # ArgumentSuggestionGenerator needs a dict-like interface, so we create a wrapper
+        self._arg_suggestion_generator = ArgumentSuggestionGenerator(self._get_schema_cache_dict())
+
+    def _get_schema_cache_dict(self) -> dict:
+        """
+        Get a dict-like wrapper for the schema cache.
+
+        ArgumentSuggestionGenerator expects a dict interface, so we create
+        a wrapper that delegates to PromptService's cache.
+
+        Returns:
+            Dict-like object that accesses PromptService's schema cache
+        """
+        class CacheDict:
+            """Dict-like wrapper for Cache[str, tuple]."""
+
+            def __init__(self, service):
+                self.service = service
+
+            def get(self, key, default=None):
+                result = self.service.get_cached_schema(key)
+                return result if result is not None else default
+
+            def __getitem__(self, key):
+                result = self.service.get_cached_schema(key)
+                if result is None:
+                    raise KeyError(key)
+                return result
+
+            def __contains__(self, key):
+                return self.service.get_cached_schema(key) is not None
+
+            def __len__(self):
+                # Note: Cache protocol doesn't provide len(), so this is approximate
+                return 0  # Used only for logging
+
+        return CacheDict(self.prompt_service)
 
     def on_mount(self) -> None:
         """Called when the AutoComplete widget is mounted."""
@@ -164,17 +202,16 @@ class NexusAutoComplete(AutoComplete):
                 remaining_text = parts[1] if len(parts) > 1 else ""
                 
                 logger.info(f"Command detected with space: '{typed_command}', remaining text: '{remaining_text}'")
-                logger.info(f"Cache has {len(self._prompt_schema_cache)} prompt schemas cached")
-                
+
                 if typed_command in self.input_widget.commands:
                     current_command = typed_command
                     logger.info(f"Command '{current_command}' is valid, generating argument suggestions...")
-                    
+
                     # Show argument suggestions for this command
                     # Get all arguments (filtering of already-provided args happens in _get_argument_suggestions)
                     arg_suggestions = self._get_argument_suggestions(current_command, remaining_text)
                     logger.info(f"Generated {len(arg_suggestions)} argument suggestions for command '{current_command}' (remaining_text: '{remaining_text}')")
-                    
+
                     if arg_suggestions:
                         # Add ALL argument suggestions - let fuzzy matcher handle filtering based on search string
                         # This ensures they appear when search is empty (just space after command)
@@ -183,7 +220,7 @@ class NexusAutoComplete(AutoComplete):
                         logger.debug(f"Added {len(arg_suggestions)} argument suggestions for command '{current_command}'")
                     else:
                         # No argument suggestions - check if cache is empty or command has no args
-                        if current_command not in self._prompt_schema_cache:
+                        if self.prompt_service.get_cached_schema(current_command) is None:
                             logger.warning(f"Command '{current_command}' not in prompt schema cache - prompts may not be loaded yet")
                         else:
                             logger.info(f"Command '{current_command}' has no argument suggestions (no args or all args already provided)")
@@ -539,18 +576,19 @@ class NexusAutoComplete(AutoComplete):
     def _expand_command_with_arguments(self, command_name: str) -> str:
         """
         Expand a command with its arguments, pre-filling defaults and marking required.
-        
+
         Args:
             command_name: Name of the command
-            
+
         Returns:
             Expanded command string like "command arg1=value arg2=<required>"
         """
-        if command_name not in self._prompt_schema_cache:
+        schema_tuple = self.prompt_service.get_cached_schema(command_name)
+        if schema_tuple is None:
             logger.debug(f"No schema cache for '{command_name}', returning plain command")
             return command_name
-        
-        prompt, _ = self._prompt_schema_cache[command_name]
+
+        prompt, _ = schema_tuple
         
         if not hasattr(prompt, 'arguments') or not prompt.arguments:
             logger.debug(f"Prompt '{command_name}' has no arguments")
@@ -718,36 +756,37 @@ class NexusAutoComplete(AutoComplete):
     def _get_command_arguments(self, command_name: str) -> str | None:
         """
         Get argument information for a command to display in the dropdown.
-        
+
         Args:
             command_name: Name of the command/prompt
-            
+
         Returns:
             Formatted string showing required arguments, or None if unavailable
         """
-        # Check cache first
-        if command_name in self._prompt_cache:
-            cached = self._prompt_cache[command_name]
+        # Check cache via prompt_service
+        cached = self.prompt_service.get_cached_info(command_name)
+        if cached is not None:
             logger.debug(f"Found cached arg info for '{command_name}': {cached}")
             return cached
-        
-        logger.debug(f"No cached arg info for '{command_name}' (cache has {len(self._prompt_cache)} items)")
+
+        logger.debug(f"No cached arg info for '{command_name}'")
         return None
     
     def _get_command_arguments_with_defaults(self, command_name: str) -> str | None:
         """
         Get argument information including default values for display in dropdown.
-        
+
         Args:
             command_name: Name of the command/prompt
-            
+
         Returns:
             Formatted string showing arguments with defaults, or None if unavailable
         """
-        if command_name not in self._prompt_schema_cache:
+        schema_tuple = self.prompt_service.get_cached_schema(command_name)
+        if schema_tuple is None:
             return None
-        
-        prompt, _ = self._prompt_schema_cache[command_name]
+
+        prompt, _ = schema_tuple
         
         if not hasattr(prompt, 'arguments') or not prompt.arguments:
             return None
@@ -819,33 +858,27 @@ class NexusAutoComplete(AutoComplete):
         Get argument suggestions when typing a command's arguments.
         Shows all arguments: required [R] or optional [O] (arguments with defaults are optionals).
         """
-        # Update the generator's schema cache reference (in case it was updated)
-        self._arg_suggestion_generator.schema_cache = self._prompt_schema_cache
-        
+        # The generator already has a wrapper to the prompt_service cache via _get_schema_cache_dict()
+        # No need to update it - it will access the latest cache via the wrapper
+
         # Use the generator to create suggestions
         return self._arg_suggestion_generator.generate_suggestions(command_name, current_text)
     
     async def _load_prompt_info(self, command_name: str) -> None:
         """
         Load prompt argument information asynchronously and cache it.
-        
+
         Args:
             command_name: Name of the command/prompt
         """
-        if not self.input_widget.artifact_manager:
+        # Check if already cached in PromptService
+        if self.prompt_service.get_cached_info(command_name) is not None:
             return
-        
-        if command_name in self._prompt_cache:
-            return
-        
-        try:
-            prompt_info = await self.input_widget.artifact_manager.find_prompt(command_name)
-            if prompt_info:
-                prompt, _ = prompt_info
-                arg_info = self._format_prompt_arguments(prompt)
-                self._prompt_cache[command_name] = arg_info
-        except Exception as e:
-            logger.debug(f"Failed to load prompt info for '{command_name}': {e}")
+
+        # Loading is now handled by PromptService.preload_all()
+        # This method is kept for backward compatibility but does nothing
+        # since caching is centralized in PromptService
+        logger.debug(f"Prompt info for '{command_name}' should be preloaded by PromptService")
     
     def _format_prompt_arguments(self, prompt) -> str | None:
         """
