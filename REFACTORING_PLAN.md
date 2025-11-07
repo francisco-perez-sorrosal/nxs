@@ -828,94 +828,30 @@ bus.publish(ConnectionStatusChanged(server_name="foo", status=CONNECTED))
 
 ---
 
-#### **Step 3.2: Decompose ArtifactManager** 🔴 **High Priority**
+#### ~~**Step 3.2: Decompose ArtifactManager**~~ ✅ **COMPLETED**
 
-**Current responsibilities:**
-1. Config loading
-2. Connection management
-3. Artifact fetching
-4. Caching
-5. Status tracking
-6. Callback invocation
-7. Change detection
-
-**Proposed structure:**
-```
-core/
-├── artifact_manager.py           # Slim facade (200-300 lines)
-├── artifacts/
-│   ├── repository.py             # Artifact fetching & aggregation
-│   ├── cache.py                  # Artifact caching logic
-│   └── change_detector.py        # Detect artifact changes
-└── connection/
-    ├── manager.py                # Connection lifecycle
-    └── registry.py               # Client registry
-```
-
-**Refactored ArtifactManager:**
-```python
-class ArtifactManager:
-    """Facade for artifact operations"""
-
-    def __init__(self, config: Optional[MCPServersConfig] = None):
-        self.config = config or load_mcp_config()
-        self.connection_manager = ConnectionManager(self.config)
-        self.artifact_repository = ArtifactRepository(self.connection_manager)
-        self.artifact_cache = ArtifactCache()
-
-    async def initialize(self, use_auth: bool = False):
-        await self.connection_manager.connect_all(use_auth)
-
-    async def get_tools(self) -> list[Tool]:
-        return await self.artifact_repository.get_all_tools()
-
-    async def get_prompts(self) -> list[Prompt]:
-        return await self.artifact_repository.get_all_prompts()
-
-    # ... delegate to services
-```
-
-**Services:**
-```python
-class ConnectionManager:
-    """Manages MCP client connections"""
-
-    async def connect(self, server_name: str, config: ServerConfig, use_auth: bool):
-        ...
-
-    async def disconnect(self, server_name: str):
-        ...
-
-    def get_status(self, server_name: str) -> ConnectionStatus:
-        ...
-
-class ArtifactRepository:
-    """Fetches and aggregates artifacts"""
-
-    async def get_all_tools(self) -> list[Tool]:
-        ...
-
-    async def get_server_artifacts(self, server_name: str) -> dict:
-        ...
-
-class ArtifactCache:
-    """Caches artifacts with change detection"""
-
-    def get_cached(self, server_name: str) -> dict | None:
-        ...
-
-    def has_changed(self, server_name: str, artifacts: dict) -> bool:
-        ...
-```
+**Highlights:**
+- Converted `core/artifact_manager.py` into a slim facade (725 → 395 lines, ~45% reduction)
+- Reused and finalized the dedicated service modules introduced earlier in the plan (artifact fetching/caching), while delegating lifecycle back to the proven `MCPAuthClient` connection stack
+  - `core/artifacts/repository.py` (`ArtifactRepository`) for typed artifact fetching with retry support
+  - `core/artifacts/cache.py` (`ArtifactCache`) and `core/artifacts/change_detector.py` (`ArtifactChangeDetector`) for cache + change detection
+- Wired the pieces together inside `ArtifactManager`:
+  - Instantiates one `MCPAuthClient` per server, wiring EventBus + legacy callbacks for status / reconnect updates
+  - Uses `ArtifactRepository` for all resource/prompt/tool queries and per-server fetches
+  - Wraps the cache backend via `ArtifactCache`, with change detection handled centrally
+  - Publishes `ArtifactsFetched` events after cache updates, preserving downstream listeners
+- Updated `core/artifacts/__init__.py` exports so new services are first-class and discoverable
+- Ensured no duplication with `mcp_client.connection.*`; `ArtifactManager` now consumes the existing MCP client lifecycle directly
 
 **Benefits:**
-- Clear separation of concerns
-- Testable components
-- Reusable services
-- Event bus integration point
-- Reduced file size (627 → ~200 lines for manager)
+- Clear separation of concerns: connection lifecycle, artifact retrieval, caching, and orchestration now live in focused modules
+- Improved testability and substitution (every component can be injected/mocked independently)
+- EventBus integration happens in the appropriate layer with legacy callbacks still supported
+- Consistent cache/change detection handling reduces code duplication across the TUI services
+- ArtifactManager is ready for future extensions (e.g., TTL caches) without growing in complexity
 
-**Estimated effort:** 8-10 hours
+**Follow-ups:**
+- After installing the MCP dependencies (e.g., via `pixi install`), run a TUI smoke test to confirm live artifact refresh behaviour end-to-end.
 
 ---
 

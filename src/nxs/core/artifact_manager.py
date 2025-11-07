@@ -1,53 +1,42 @@
-"""ArtifactManager - Manages MCP artifacts (resources, prompts, tools).
+"""ArtifactManager - Facade for MCP artifact access and connection lifecycle."""
 
-The ArtifactManager is responsible for:
-- Loading and connecting to MCP servers from configuration
-- Providing access to resources (for NexusApp)
-- Providing access to prompts (for NexusApp)
-- Providing access to tools (for CommandControlAgent/AgentLoop)
-- Managing the lifecycle of MCP client connections
-- Publishing events for connection status changes, reconnection progress, and artifact fetches
-"""
+from __future__ import annotations
 
-import asyncio
-import time
-from contextlib import AsyncExitStack
-from functools import partial
 from typing import Callable, Optional
 
-from mcp.types import Prompt, Tool, Resource
+from mcp.types import Prompt, Tool
 
-from nxs.core.mcp_config import (
-    MCPServersConfig,
-    get_all_server_names,
-    get_server_config,
-    load_mcp_config,
+from nxs.core.artifacts import (
+    ArtifactCache,
+    ArtifactChangeDetector,
+    ArtifactCollection,
+    ArtifactRepository,
 )
-from nxs.core.events import (
-    ArtifactsFetched,
-    ConnectionStatusChanged,
-    EventBus,
-    ReconnectProgress,
-)
-from nxs.mcp_client.client import MCPAuthClient, ConnectionStatus
+from nxs.core.cache import Cache
+from nxs.core.events import ArtifactsFetched, EventBus
+from nxs.core.mcp_config import MCPServersConfig, load_mcp_config
 from nxs.core.protocols import MCPClient
-from nxs.core.cache import Cache, MemoryCache
 from nxs.logger import get_logger
+from nxs.mcp_client.client import ConnectionStatus, MCPAuthClient
 
 logger = get_logger("artifact_manager")
 
 
 class ArtifactManager:
-    """Manages artifacts from MCP servers: resources, prompts, and tools."""
+    """Facade that coordinates connections, artifact fetching, and caching."""
 
     def __init__(
         self,
         config: Optional[MCPServersConfig] = None,
         event_bus: Optional[EventBus] = None,
-        artifacts_cache: Optional[Cache[str, dict[str, list[dict[str, str | None]]]]] = None,
+        artifacts_cache: Optional[Cache[str, ArtifactCollection]] = None,
         # Legacy callback support (deprecated, use event_bus instead)
         on_status_change: Optional[Callable[[str, ConnectionStatus], None]] = None,
         on_reconnect_progress: Optional[Callable[[str, int, int, float], None]] = None,
+        *,
+        artifact_repository: Optional[ArtifactRepository] = None,
+        artifact_cache_service: Optional[ArtifactCache] = None,
+        change_detector: Optional[ArtifactChangeDetector] = None,
     ):
         """
         Initialize the ArtifactManager.
@@ -68,153 +57,75 @@ class ArtifactManager:
                                    Receives (server_name, attempts, max_attempts, next_retry_delay) as arguments.
         """
         self.config = config or load_mcp_config()
-        self.mcp_clients: dict[str, MCPClient] = {}
-        self._exit_stack: Optional[AsyncExitStack] = None
         self.event_bus = event_bus
-        # Legacy callback support (maintained for backward compatibility)
         self.on_status_change = on_status_change
         self.on_reconnect_progress = on_reconnect_progress
+        self.mcp_clients: dict[str, MCPClient] = {}
         self._server_statuses: dict[str, ConnectionStatus] = {}
-        # Track last check time for each server
         self._server_last_check: dict[str, float] = {}
-        # Cache artifacts for each server to avoid unnecessary fetches
-        self._artifacts_cache: Cache[str, dict[str, list[dict[str, str | None]]]] = (
-            artifacts_cache or MemoryCache[str, dict[str, list[dict[str, str | None]]]]()
+
+        clients_provider = lambda: self.mcp_clients
+        self._artifact_repository = artifact_repository or ArtifactRepository(
+            clients_provider=clients_provider
         )
-
-    def _handle_status_change(self, status: ConnectionStatus, server_name: str) -> None:
-        """
-        Handle connection status change for a specific server.
-
-        Publishes ConnectionStatusChanged event and calls legacy callback if present.
-
-        Args:
-            status: New connection status
-            server_name: Name of the server
-        """
-        previous_status = self._server_statuses.get(server_name)
-        self._server_statuses[server_name] = status
-
-        # Publish event if event bus is available
-        if self.event_bus:
-            try:
-                self.event_bus.publish(
-                    ConnectionStatusChanged(
-                        server_name=server_name,
-                        status=status,
-                        previous_status=previous_status,
-                    )
-                )
-            except Exception as e:
-                logger.error(
-                    f"Error publishing ConnectionStatusChanged event for {server_name}: {e}"
-                )
-
-        # Legacy callback support (maintained for backward compatibility)
-        if self.on_status_change:
-            try:
-                self.on_status_change(server_name, status)
-            except Exception as e:
-                logger.error(
-                    f"Error in status change callback for {server_name}: {e}"
-                )
-
-    def _handle_reconnect_progress(
-        self,
-        attempts: int,
-        max_attempts: int,
-        next_retry_delay: float,
-        server_name: str,
-    ) -> None:
-        """
-        Handle reconnection progress for a specific server.
-
-        Publishes ReconnectProgress event and calls legacy callback if present.
-
-        Args:
-            attempts: Current reconnection attempt number
-            max_attempts: Maximum reconnection attempts
-            next_retry_delay: Seconds until next retry
-            server_name: Name of the server
-        """
-        # Publish event if event bus is available
-        if self.event_bus:
-            try:
-                self.event_bus.publish(
-                    ReconnectProgress(
-                        server_name=server_name,
-                        attempts=attempts,
-                        max_attempts=max_attempts,
-                        next_retry_delay=next_retry_delay,
-                    )
-                )
-            except Exception as e:
-                logger.error(
-                    f"Error publishing ReconnectProgress event for {server_name}: {e}"
-                )
-
-        # Legacy callback support (maintained for backward compatibility)
-        if self.on_reconnect_progress:
-            try:
-                self.on_reconnect_progress(
-                    server_name, attempts, max_attempts, next_retry_delay
-                )
-            except Exception as e:
-                logger.error(
-                    f"Error in reconnect progress callback for {server_name}: {e}"
-                )
+        self._artifact_cache = artifact_cache_service or ArtifactCache(
+            cache=artifacts_cache
+        )
+        self._change_detector = change_detector or ArtifactChangeDetector(
+            self._artifact_cache
+        )
 
     async def initialize(self, use_auth: bool = False) -> None:
-        """
-        Initialize and connect to all MCP servers.
-
-        This method loads all remote MCP servers from configuration and
-        establishes connections to them.
-
-        Args:
-            use_auth: Whether to use OAuth authentication for remote servers
-        """
+        """Initialize and connect to all configured MCP servers."""
         logger.info("Initializing ArtifactManager")
-        logger.info(f"Loading {len(self.config.mcpServers)} MCP server(s) from configuration")
-
-        self._exit_stack = AsyncExitStack()
-
-        for server_name in get_all_server_names(self.config):
-            server = get_server_config(server_name, self.config)
-            if server and server.is_remote():
-                url = server.remote_url()
-                if url:
-                    logger.info(f"Connecting to remote MCP server: {server_name} at {url}")
-
-                    # Create callbacks using functools.partial for cleaner, more maintainable code
-                    status_callback = partial(self._handle_status_change, server_name=server_name)
-                    reconnect_callback = partial(self._handle_reconnect_progress, server_name=server_name)
-
-                    mcp_client = MCPAuthClient(
-                        url,
-                        on_status_change=status_callback,
-                        on_reconnect_progress=reconnect_callback
-                    )
-                    self.mcp_clients[server_name] = mcp_client
-                    self._server_statuses[server_name] = ConnectionStatus.DISCONNECTED
-
-                    try:
-                        await mcp_client.connect(use_auth=use_auth)
-                        logger.info(f"Successfully connected to {server_name}")
-                    except Exception as e:
-                        logger.error(f"Failed to connect to {server_name}: {e}")
-                        self._server_statuses[server_name] = ConnectionStatus.ERROR
-                        # Continue with other servers even if one fails
-                else:
-                    logger.warning(
-                        f"Remote server URL is not set for {server_name}, skipping"
-                    )
-            else:
-                logger.debug(f"Skipping non-remote server: {server_name}")
+        for server_name, client in self._create_clients():
+            try:
+                await client.connect(use_auth=use_auth)
+                logger.info("Successfully connected to %s", server_name)
+            except Exception as err:
+                logger.error("Failed to connect to %s: %s", server_name, err)
+                self._handle_status_change(
+                    status=ConnectionStatus.ERROR,
+                    server_name=server_name,
+                )
 
         logger.info(
-            f"ArtifactManager initialized with {len(self.mcp_clients)} connected client(s)"
+            "ArtifactManager initialized with %d client(s)",
+            len(self.mcp_clients),
         )
+
+    def _create_clients(self) -> list[tuple[str, MCPAuthClient]]:
+        """Instantiate MCPAuthClient objects for all configured servers."""
+        clients: list[tuple[str, MCPAuthClient]] = []
+
+        for server_name, server in self._iter_remote_servers():
+            url = server.remote_url()
+            if not url:
+                logger.warning("Remote server URL not set for %s, skipping", server_name)
+                continue
+
+            logger.info("Connecting to remote MCP server: %s", server_name)
+
+            client = MCPAuthClient(
+                url,
+                on_status_change=lambda status, name=server_name: self._handle_status_change(
+                    status=status,
+                    server_name=name,
+                ),
+                on_reconnect_progress=lambda attempts, max_attempts, delay, name=server_name: self._handle_reconnect_progress(
+                    attempts=attempts,
+                    max_attempts=max_attempts,
+                    next_retry_delay=delay,
+                    server_name=name,
+                ),
+            )
+
+            self.mcp_clients[server_name] = client
+            self._server_statuses.setdefault(server_name, ConnectionStatus.DISCONNECTED)
+            self._server_last_check.setdefault(server_name, 0.0)
+            clients.append((server_name, client))
+
+        return clients
 
     async def get_resources(self) -> dict[str, list[str]]:
         """
@@ -230,36 +141,13 @@ class ArtifactManager:
                 "fps_cv_mcp": ["mcp://fps_cv_mcp/image1.jpg", ...]
             }
         """
-        all_resource_ids: dict[str, list[str]] = {}
-
-        for mcp_name, mcp_client in self.mcp_clients.items():
-            # Only fetch from connected clients
-            if not mcp_client.is_connected:
-                continue
-                
-            try:
-                logger.debug(f"Listing resources from {mcp_name}")
-                resource_list: list[Resource] = await mcp_client.list_resources()
-                # list_resources() returns a list of Resource objects
-                if isinstance(resource_list, list):
-                    all_resource_ids[mcp_name] = [str(r.uri) for r in resource_list]
-                    logger.debug(
-                        f"Found {len(resource_list)} resource(s) from {mcp_name}"
-                    )
-                else:
-                    logger.warning(
-                        f"Unexpected return type from list_resources(): {type(resource_list)}"
-                    )
-                    all_resource_ids[mcp_name] = []
-            except Exception as e:
-                logger.error(f"Failed to list resources from {mcp_name}: {e}")
-                all_resource_ids[mcp_name] = []
-
+        resources = await self._artifact_repository.get_resources()
         logger.info(
-            f"Retrieved resources from {len(all_resource_ids)} server(s): "
-            f"{sum(len(uris) for uris in all_resource_ids.values())} total resource(s)"
+            "Retrieved resources from %d server(s): %d total resource(s)",
+            len(resources),
+            sum(len(uris) for uris in resources.values()),
         )
-        return all_resource_ids
+        return resources
 
     async def get_prompts(self) -> list[Prompt]:
         """
@@ -275,23 +163,9 @@ class ArtifactManager:
                 ...
             ]
         """
-        all_prompts: list[Prompt] = []
-
-        for mcp_name, mcp_client in self.mcp_clients.items():
-            # Only fetch from connected clients
-            if not mcp_client.is_connected:
-                continue
-                
-            try:
-                logger.debug(f"Listing prompts from {mcp_name}")
-                prompts = await mcp_client.list_prompts()
-                all_prompts.extend(prompts)
-                logger.debug(f"Found {len(prompts)} prompt(s) from {mcp_name}")
-            except Exception as e:
-                logger.error(f"Failed to list prompts from {mcp_name}: {e}")
-
-        logger.info(f"Retrieved {len(all_prompts)} prompt(s) from all servers")
-        return all_prompts
+        prompts = await self._artifact_repository.get_prompts()
+        logger.info("Retrieved %d prompt(s) from all servers", len(prompts))
+        return prompts
 
     async def get_tools(self) -> list[Tool]:
         """
@@ -308,29 +182,9 @@ class ArtifactManager:
                 ...
             ]
         """
-        all_tools: list[Tool] = []
-
-        for mcp_name, mcp_client in self.mcp_clients.items():
-            # Only fetch from connected clients
-            if not mcp_client.is_connected:
-                continue
-                
-            try:
-                logger.debug(f"Listing tools from {mcp_name}")
-                tools = await mcp_client.list_tools()
-                # list_tools() returns a list of Tool objects directly
-                if isinstance(tools, list):
-                    all_tools.extend(tools)
-                    logger.debug(f"Found {len(tools)} tool(s) from {mcp_name}")
-                else:
-                    logger.warning(
-                        f"Unexpected return type from list_tools(): {type(tools)}"
-                    )
-            except Exception as e:
-                logger.error(f"Failed to list tools from {mcp_name}: {e}")
-
-        logger.info(f"Retrieved {len(all_tools)} tool(s) from all servers")
-        return all_tools
+        tools = await self._artifact_repository.get_tools()
+        logger.info("Retrieved %d tool(s) from all servers", len(tools))
+        return tools
 
     async def get_resource_list(self) -> list[str]:
         """
@@ -372,9 +226,8 @@ class ArtifactManager:
                 ...
             ]
         """
-        prompts = await self.get_prompts()
-        command_names = [p.name for p in prompts]
-        logger.debug(f"Extracted {len(command_names)} command names from {len(prompts)} prompt(s)")
+        command_names = await self._artifact_repository.get_command_names()
+        logger.debug("Extracted %d command names", len(command_names))
         return command_names
 
     async def find_prompt(self, prompt_name: str) -> tuple[Prompt, str] | None:
@@ -388,22 +241,13 @@ class ArtifactManager:
             Tuple of (Prompt, server_name) if found, None otherwise.
             This allows calling get_prompt on the correct server.
         """
-        for mcp_name, mcp_client in self.mcp_clients.items():
-            # Only check connected clients
-            if not mcp_client.is_connected:
-                continue
-                
-            try:
-                prompts = await mcp_client.list_prompts()
-                for prompt in prompts:
-                    if prompt.name == prompt_name:
-                        logger.debug(f"Found prompt '{prompt_name}' in server '{mcp_name}'")
-                        return (prompt, mcp_name)
-            except Exception as e:
-                logger.error(f"Failed to search prompts in {mcp_name}: {e}")
-        
-        logger.warning(f"Prompt '{prompt_name}' not found in any MCP server")
-        return None
+        result = await self._artifact_repository.find_prompt(prompt_name)
+        if result:
+            prompt, server = result
+            logger.debug("Found prompt '%s' in server '%s'", prompt_name, server)
+        else:
+            logger.warning("Prompt '%s' not found in any MCP server", prompt_name)
+        return result
 
     @property
     def clients(self) -> dict[str, MCPClient]:
@@ -414,7 +258,7 @@ class ArtifactManager:
             Dictionary mapping server names to MCP client instances.
             This is used by CommandControlAgent/AgentLoop to execute tools.
         """
-        return self.mcp_clients
+        return dict(self.mcp_clients)
 
     def get_server_statuses(self) -> dict[str, ConnectionStatus]:
         """
@@ -435,7 +279,7 @@ class ArtifactManager:
         Returns:
             Unix timestamp of last check, or 0 if never checked
         """
-        return self._server_last_check.get(server_name, 0)
+        return self._server_last_check.get(server_name, 0.0)
 
     def update_server_last_check(self, server_name: str, timestamp: float | None = None) -> None:
         """
@@ -446,10 +290,12 @@ class ArtifactManager:
             timestamp: Unix timestamp. If None, uses current time
         """
         if timestamp is None:
+            import time
+
             timestamp = time.time()
         self._server_last_check[server_name] = timestamp
 
-    def get_cached_artifacts(self, server_name: str) -> dict[str, list[dict[str, str | None]]] | None:
+    def get_cached_artifacts(self, server_name: str) -> ArtifactCollection | None:
         """
         Get cached artifacts for a server.
 
@@ -460,13 +306,9 @@ class ArtifactManager:
             Cached artifacts dict or None if not cached. Returns a copy to prevent
             external modification of cached data.
         """
-        cached = self._artifacts_cache.get(server_name)
-        # Return a copy to prevent external modification of cached data
-        if cached is None:
-            return None
-        return cached.copy()
+        return self._artifact_cache.get(server_name)
 
-    def cache_artifacts(self, server_name: str, artifacts: dict[str, list[dict[str, str | None]]]) -> None:
+    def cache_artifacts(self, server_name: str, artifacts: ArtifactCollection) -> None:
         """
         Cache artifacts for a server.
 
@@ -474,8 +316,7 @@ class ArtifactManager:
             server_name: Name of the server
             artifacts: Artifacts dict with keys "tools", "prompts", "resources"
         """
-        # Store a copy to prevent external modification of cached data
-        self._artifacts_cache.set(server_name, artifacts.copy())
+        self._artifact_cache.set(server_name, artifacts)
 
     def clear_artifacts_cache(self, server_name: str | None = None) -> None:
         """
@@ -484,10 +325,12 @@ class ArtifactManager:
         Args:
             server_name: Name of the server. If None, clears all cache
         """
-        self._artifacts_cache.clear(server_name)
+        self._artifact_cache.clear(server_name)
 
     def have_artifacts_changed(
-        self, server_name: str, new_artifacts: dict[str, list[dict[str, str | None]]]
+        self,
+        server_name: str,
+        new_artifacts: ArtifactCollection,
     ) -> bool:
         """
         Check if artifacts have changed compared to cache.
@@ -502,62 +345,13 @@ class ArtifactManager:
         Returns:
             True if artifacts have changed, False otherwise
         """
-        return self._artifacts_cache.has_changed(server_name, new_artifacts)
-
-    async def _fetch_with_retry(
-        self,
-        fetch_func: Callable,
-        server_name: str,
-        artifact_type: str,
-        retry_on_empty: bool = False,
-        max_retries: int = 2,
-        retry_delay: float = 0.5
-    ) -> list:
-        """
-        Fetch artifacts with retry logic for reconnection scenarios.
-
-        Args:
-            fetch_func: Async function to fetch artifacts (list_tools, list_prompts, list_resources)
-            server_name: Name of the server (for logging)
-            artifact_type: Type of artifact being fetched (for logging)
-            retry_on_empty: If True, retry if result is empty
-            max_retries: Maximum number of retries
-            retry_delay: Delay between retries in seconds
-
-        Returns:
-            List of artifacts (tools, prompts, or resources)
-        """
-        for attempt in range(max_retries + 1):
-            try:
-                result = await fetch_func()
-                if result or not retry_on_empty or attempt == max_retries:
-                    return result or []
-
-                # If result is empty and we should retry, wait and try again
-                if attempt < max_retries:
-                    logger.debug(
-                        f"Empty {artifact_type} for {server_name} (attempt {attempt + 1}), "
-                        f"retrying in {retry_delay}s..."
-                    )
-                    await asyncio.sleep(retry_delay)
-            except Exception as e:
-                if attempt < max_retries:
-                    logger.debug(
-                        f"Error fetching {artifact_type} for {server_name} (attempt {attempt + 1}): {e}, "
-                        f"retrying in {retry_delay}s..."
-                    )
-                    await asyncio.sleep(retry_delay)
-                else:
-                    logger.warning(f"Failed to fetch {artifact_type} for {server_name} after {max_retries + 1} attempts: {e}")
-                    raise
-
-        return []
+        return self._change_detector.has_changed(server_name, new_artifacts)
 
     async def get_server_artifacts(
         self,
         server_name: str,
-        retry_on_empty: bool = False
-    ) -> dict[str, list[dict[str, str | None]]]:
+        retry_on_empty: bool = False,
+    ) -> ArtifactCollection:
         """
         Get artifacts (tools, prompts, resources) for a specific server.
 
@@ -569,121 +363,45 @@ class ArtifactManager:
             Dictionary with keys "tools", "prompts", "resources", each containing a list of dicts
             with "name" and "description" keys
         """
-        artifacts: dict[str, list[dict[str, str | None]]] = {
-            "tools": [],
-            "prompts": [],
-            "resources": []
-        }
+        artifacts = await self._artifact_repository.get_server_artifacts(
+            server_name,
+            retry_on_empty=retry_on_empty,
+        )
 
-        client = self.mcp_clients.get(server_name)
-        if not client:
-            logger.warning(f"Server {server_name} not found in clients")
-            return artifacts
-
-        # Update last check time
         self.update_server_last_check(server_name)
 
-        # Only fetch if connected
-        if not client.is_connected:
-            logger.debug(f"Server {server_name} is not connected, skipping artifact fetch")
-            return artifacts
+        changed = self.have_artifacts_changed(server_name, artifacts)
+        self.cache_artifacts(server_name, artifacts)
 
-        try:
-            # Fetch tools with retry
-            tools = await self._fetch_with_retry(
-                client.list_tools,
-                server_name,
-                "tools",
-                retry_on_empty=retry_on_empty
-            )
-            if tools:
-                artifacts["tools"] = [
-                    {"name": tool.name, "description": tool.description}
-                    for tool in tools
-                ]
-
-            # Fetch prompts with retry
-            prompts = await self._fetch_with_retry(
-                client.list_prompts,
-                server_name,
-                "prompts",
-                retry_on_empty=retry_on_empty
-            )
-            if prompts:
-                artifacts["prompts"] = [
-                    {"name": prompt.name, "description": prompt.description}
-                    for prompt in prompts
-                ]
-
-            # Fetch resources with retry
-            resources = await self._fetch_with_retry(
-                client.list_resources,
-                server_name,
-                "resources",
-                retry_on_empty=retry_on_empty
-            )
-            if resources:
-                artifacts["resources"] = [
-                    {
-                        "name": str(resource.uri),
-                        "description": (
-                            resource.description
-                            if hasattr(resource, "description") and resource.description
-                            else resource.name
-                            if hasattr(resource, "name") and resource.name
-                            else None
-                        )
-                    }
-                    for resource in resources
-                ]
-
-            logger.debug(
-                f"Fetched artifacts for {server_name}: "
-                f"{len(artifacts['tools'])} tools, "
-                f"{len(artifacts['prompts'])} prompts, "
-                f"{len(artifacts['resources'])} resources"
-            )
-
-            # Check if artifacts changed compared to cache
-            changed = self.have_artifacts_changed(server_name, artifacts)
-
-            # Cache the artifacts
-            self.cache_artifacts(server_name, artifacts)
-
-            # Publish ArtifactsFetched event if event bus is available
-            if self.event_bus:
-                try:
-                    self.event_bus.publish(
-                        ArtifactsFetched(
-                            server_name=server_name,
-                            artifacts=artifacts,
-                            changed=changed,
-                        )
+        if self.event_bus:
+            try:
+                self.event_bus.publish(
+                    ArtifactsFetched(
+                        server_name=server_name,
+                        artifacts=artifacts,
+                        changed=changed,
                     )
-                except Exception as e:
-                    logger.error(
-                        f"Error publishing ArtifactsFetched event for {server_name}: {e}"
-                    )
-
-        except Exception as e:
-            logger.error(f"Failed to fetch artifacts for {server_name}: {e}")
+                )
+            except Exception as err:
+                logger.error(
+                    "Error publishing ArtifactsFetched event for %s: %s",
+                    server_name,
+                    err,
+                )
 
         return artifacts
 
-    async def get_all_servers_artifacts(self) -> dict[str, dict[str, list[dict[str, str | None]]]]:
+    async def get_all_servers_artifacts(self) -> dict[str, ArtifactCollection]:
         """
         Get artifacts for all servers.
 
         Returns:
             Dictionary mapping server names to their artifacts dict
         """
-        all_artifacts: dict[str, dict[str, list[dict[str, str | None]]]] = {}
-
+        results: dict[str, ArtifactCollection] = {}
         for server_name in self.mcp_clients.keys():
-            artifacts = await self.get_server_artifacts(server_name)
-            all_artifacts[server_name] = artifacts
-
-        return all_artifacts
+            results[server_name] = await self.get_server_artifacts(server_name)
+        return results
 
     async def cleanup(self) -> None:
         """
@@ -694,23 +412,17 @@ class ArtifactManager:
         """
         logger.info("Cleaning up ArtifactManager connections")
 
-        for mcp_name, mcp_client in self.mcp_clients.items():
+        for server_name, client in list(self.mcp_clients.items()):
             try:
-                logger.debug(f"Disconnecting from {mcp_name}")
-                # disconnect is implementation-specific, not in protocol
-                if hasattr(mcp_client, 'disconnect'):
-                    await mcp_client.disconnect()  # type: ignore[attr-defined]
-            except Exception as e:
-                logger.error(f"Error disconnecting from {mcp_name}: {e}")
+                if hasattr(client, "disconnect"):
+                    await client.disconnect()  # type: ignore[attr-defined]
+            except Exception as err:
+                logger.error("Error disconnecting from %s: %s", server_name, err)
 
         self.mcp_clients.clear()
-
-        if self._exit_stack:
-            try:
-                await self._exit_stack.aclose()
-            except Exception as e:
-                logger.error(f"Error closing exit stack: {e}")
-
+        self._server_statuses.clear()
+        self._server_last_check.clear()
+        self._artifact_cache.clear()
         logger.info("ArtifactManager cleanup complete")
 
     async def __aenter__(self):
@@ -721,4 +433,91 @@ class ArtifactManager:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit."""
         await self.cleanup()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _iter_remote_servers(self):
+        """Yield configured remote servers."""
+        from nxs.core.mcp_config import get_all_server_names, get_server_config
+
+        for server_name in get_all_server_names(self.config):
+            server = get_server_config(server_name, self.config)
+            if server and server.is_remote():
+                yield server_name, server
+
+    def _handle_status_change(self, status: ConnectionStatus, server_name: str) -> None:
+        """Handle connection status change for a specific server."""
+        previous_status = self._server_statuses.get(server_name)
+        self._server_statuses[server_name] = status
+
+        if self.event_bus:
+            try:
+                from nxs.core.events import ConnectionStatusChanged
+
+                self.event_bus.publish(
+                    ConnectionStatusChanged(
+                        server_name=server_name,
+                        status=status,
+                        previous_status=previous_status,
+                    )
+                )
+            except Exception as err:
+                logger.error(
+                    "Error publishing ConnectionStatusChanged for %s: %s",
+                    server_name,
+                    err,
+                )
+
+        if self.on_status_change:
+            try:
+                self.on_status_change(server_name, status)
+            except Exception as err:
+                logger.error(
+                    "Legacy status change callback error for %s: %s",
+                    server_name,
+                    err,
+                )
+
+    def _handle_reconnect_progress(
+        self,
+        attempts: int,
+        max_attempts: int,
+        next_retry_delay: float,
+        server_name: str,
+    ) -> None:
+        """Handle reconnection progress events for a specific server."""
+        if self.event_bus:
+            try:
+                from nxs.core.events import ReconnectProgress
+
+                self.event_bus.publish(
+                    ReconnectProgress(
+                        server_name=server_name,
+                        attempts=attempts,
+                        max_attempts=max_attempts,
+                        next_retry_delay=next_retry_delay,
+                    )
+                )
+            except Exception as err:
+                logger.error(
+                    "Error publishing ReconnectProgress for %s: %s",
+                    server_name,
+                    err,
+                )
+
+        if self.on_reconnect_progress:
+            try:
+                self.on_reconnect_progress(
+                    server_name,
+                    attempts,
+                    max_attempts,
+                    next_retry_delay,
+                )
+            except Exception as err:
+                logger.error(
+                    "Legacy reconnect progress callback error for %s: %s",
+                    server_name,
+                    err,
+                )
 
