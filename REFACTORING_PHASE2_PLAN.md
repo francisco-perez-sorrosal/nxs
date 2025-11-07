@@ -347,13 +347,19 @@ This document outlines the **Phase 2 refinement strategy** for the Nexus codebas
 
 ---
 
-### Step 2.1.1: Decompose AutoComplete Widget (905 → ~300 lines)
+### Step 2.1.1: Decompose AutoComplete Widget (905 → ~300 lines) ✅ **Completed – 2025-11-07**
 
 **Target:** `tui/widgets/autocomplete.py` (905 lines)
 **Goal:** 67% reduction to ~300 lines
 **Estimated Effort:** 5-6 hours
 
-#### Current Problems
+#### Outcome Summary
+
+- Replaced the monolithic `NexusAutoComplete` with a slim orchestrator that wires `ResourceCompletionStrategy`, `CommandCompletionStrategy`, and `ArgumentCompletionStrategy`, reducing the widget to ~120 lines.
+- Introduced the `tui/completion/` package with strategy protocol, orchestrator, schema mapping, prompt helpers, and a dedicated `CompletionApplier`.
+- Added focused unit tests under `tests/tui/completion/` covering strategies, orchestrator, and applier.
+
+#### Current Problems *(resolved)*
 
 1. **Single giant class** handling multiple completion types:
    - @resource completions (lines 200-350)

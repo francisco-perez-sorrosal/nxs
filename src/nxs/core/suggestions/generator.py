@@ -5,6 +5,7 @@ This module handles the generation of argument suggestions from prompt schemas,
 formatting them appropriately for display in the autocomplete dropdown.
 """
 
+from collections.abc import Mapping
 from typing import Any
 from textual_autocomplete import DropdownItem
 from nxs.core.parsers.utils import parse_command_arguments, extract_value_part
@@ -19,7 +20,7 @@ class ArgumentSuggestionGenerator:
     out already-provided arguments.
     """
 
-    def __init__(self, schema_cache: dict):
+    def __init__(self, schema_cache: Mapping[str, tuple[Any, str]]):
         """
         Initialize the generator with a schema cache.
 
