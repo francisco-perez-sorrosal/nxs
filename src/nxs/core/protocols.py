@@ -145,4 +145,16 @@ class Cache(Protocol[K, V]):
             key: If provided, clear only this key. If None, clear all entries.
         """
         ...
+    
+    def has_changed(self, key: K, value: V) -> bool:
+        """Check if a value has changed compared to what's cached.
+        
+        Args:
+            key: The cache key
+            value: The new value to compare
+            
+        Returns:
+            True if the value has changed (or is not cached), False if unchanged
+        """
+        ...
 

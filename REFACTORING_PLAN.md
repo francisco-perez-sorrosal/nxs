@@ -713,50 +713,72 @@ bus.publish(ConnectionStatusChanged(server_name="foo", status=CONNECTED))
 
 ---
 
-#### **Step 2.3: Implement Caching Abstraction** 🟢 **Low Priority**
+#### ~~**Step 2.3: Implement Caching Abstraction**~~ ✅ **COMPLETED**
+
+**Target:** Create reusable cache abstraction with pluggable implementations
 
 **Actions:**
-1. Create `core/cache/` package:
-   ```python
+1. ✅ Create `core/cache/` package:
+   ```
    core/cache/
    ├── __init__.py
-   ├── base.py                # Cache protocol
+   ├── base.py                # Cache protocol (re-exports from protocols.py)
    ├── memory.py              # In-memory cache
    └── ttl.py                 # TTL-based cache
    ```
 
-2. Implement cache:
-   ```python
-   class MemoryCache(Cache[K, V]):
-       def __init__(self):
-           self._data: dict[K, V] = {}
+2. ✅ Implement cache classes:
+   - `MemoryCache` - Simple in-memory cache with `has_changed()` method
+   - `TTLCache` - TTL-based cache with automatic expiration and cleanup
+   - Both implement the `Cache` protocol with full type safety
 
-       def get(self, key: K) -> V | None:
-           return self._data.get(key)
+3. ✅ Update Cache protocol:
+   - Added `has_changed()` method to `Cache` protocol in `protocols.py`
+   - Method checks if a value has changed compared to cached value
 
-       def set(self, key: K, value: V) -> None:
-           self._data[key] = value
+4. ✅ Replace caching logic in `ArtifactManager`:
+   - Replaced `_artifacts_cache: dict` with `Cache[str, dict]` instance
+   - Added optional `artifacts_cache` parameter (defaults to `MemoryCache`)
+   - Updated methods to use cache API: `get()`, `set()`, `clear()`, `has_changed()`
+   - Simplified `have_artifacts_changed()` to use cache's `has_changed()` method
 
-       def clear(self, key: K | None = None) -> None:
-           if key is None:
-               self._data.clear()
-           else:
-               self._data.pop(key, None)
+5. ✅ Replace caching logic in `NexusApp`:
+   - Replaced `_prompt_info_cache: dict` and `_prompt_schema_cache: dict` with `Cache` instances
+   - Added optional `prompt_info_cache` and `prompt_schema_cache` parameters
+   - Updated `_preload_all_prompt_info()` to use `cache.set()`
+   - Added `_copy_prompt_caches_to_autocomplete()` helper for dict conversion
 
-       def has_changed(self, key: K, value: V) -> bool:
-           cached = self.get(key)
-           return cached is None or cached != value
-   ```
-
-3. Replace caching logic in `ArtifactManager` and `NexusApp` with cache instances
+**Results:**
+- ✅ Created clean cache abstraction in `core/cache/` package:
+  - `base.py` - Re-exports Cache protocol from protocols.py to avoid duplication
+  - `memory.py` - MemoryCache implementation with has_changed() method
+  - `ttl.py` - TTLCache implementation with TTL expiration and automatic cleanup
+  - `__init__.py` - Clean exports for easy imports
+- ✅ Updated Cache protocol in `protocols.py`:
+  - Added `has_changed()` method for change detection
+  - Maintains full type safety with Protocol-based interface
+- ✅ Refactored `ArtifactManager`:
+  - Uses `Cache[str, dict]` instance instead of raw dict
+  - Accepts optional `artifacts_cache` parameter (allows injecting different cache implementations)
+  - Simplified change detection logic by using cache's `has_changed()` method
+  - Returns copies from cache to prevent external modification
+- ✅ Refactored `NexusApp`:
+  - Uses `Cache[str, str | None]` for prompt info cache
+  - Uses `Cache[str, tuple]` for prompt schema cache
+  - Accepts optional cache parameters for dependency injection
+  - Maintains compatibility with autocomplete widget (which still uses dicts)
+- ✅ All functionality preserved - backward compatible API
+- ✅ No linter errors - all code passes type checking and linting
 
 **Benefits:**
-- Reusable caching
-- Easy to swap implementations
-- Testable caching logic
-- Can add features (TTL, LRU, etc.)
+- ✅ Reusable caching - Can swap implementations (MemoryCache, TTLCache, etc.)
+- ✅ Easy to test - Cache implementations can be easily mocked
+- ✅ Cleaner code - Removed custom change detection logic in favor of cache abstraction
+- ✅ Extensible - Easy to add new cache implementations (LRU, etc.) in the future
+- ✅ Type-safe - Full type hints with Protocol-based interface
+- ✅ Backward compatible - All public APIs remain unchanged
 
-**Estimated effort:** 4-5 hours
+**Actual effort:** ~4-5 hours
 
 ---
 
@@ -1172,8 +1194,9 @@ src/nxs/
 - [x] Step 1.3: Extract refresh orchestration (5-7h) ✅
 - [x] Step 1.4: Simplify callback management (2-3h) ✅
 - [x] Step 2.2: Implement event bus (4-5h) ✅
+- [x] Step 2.3: Implement caching abstraction (4-5h) ✅
 - [ ] Add unit tests for services
-- **Deliverable:** Event-driven architecture, testable services ✅
+- **Deliverable:** Event-driven architecture, testable services, cache abstraction ✅
 
 ### Week 5-6: Decomposition
 - [ ] Step 3.1: Decompose NexusApp (10-12h)

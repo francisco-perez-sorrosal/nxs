@@ -25,6 +25,7 @@ from nxs.core.events import (
     EventBus,
     ReconnectProgress,
 )
+from nxs.core.cache import Cache, MemoryCache
 from nxs.mcp_client.client import ConnectionStatus
 from nxs.logger import get_logger
 
@@ -71,6 +72,8 @@ class NexusApp(App):
         agent_loop,
         artifact_manager: ArtifactManager,
         event_bus: EventBus | None = None,
+        prompt_info_cache: Cache[str, str | None] | None = None,
+        prompt_schema_cache: Cache[str, tuple] | None = None,
     ):
         """
         Initialize the Nexus TUI application.
@@ -81,6 +84,10 @@ class NexusApp(App):
             event_bus: Optional EventBus instance. If None, a new EventBus will be created.
                       The EventBus is used for decoupled event-driven communication between
                       the core layer (ArtifactManager) and the UI layer (NexusApp).
+            prompt_info_cache: Optional Cache instance for caching prompt argument info strings.
+                              If None, a MemoryCache will be created.
+            prompt_schema_cache: Optional Cache instance for caching prompt schema tuples.
+                                If None, a MemoryCache will be created.
         """
         super().__init__()
         self.agent_loop = agent_loop
@@ -95,6 +102,14 @@ class NexusApp(App):
         # Set up event bus in ArtifactManager if not already set
         if self.artifact_manager.event_bus is None:
             self.artifact_manager.event_bus = self.event_bus
+
+        # Initialize prompt caches
+        self._prompt_info_cache: Cache[str, str | None] = (
+            prompt_info_cache or MemoryCache[str, str | None]()
+        )
+        self._prompt_schema_cache: Cache[str, tuple] = (
+            prompt_schema_cache or MemoryCache[str, tuple]()
+        )
 
         # Subscribe to events
         self.event_bus.subscribe(ConnectionStatusChanged, self._on_connection_status_changed)
@@ -398,22 +413,20 @@ class NexusApp(App):
         """Preload prompt argument information for all commands directly."""
         try:
             logger.info(f"Preloading prompt information for {len(self.commands)} commands...")
-            if not hasattr(self, '_prompt_info_cache'):
-                self._prompt_info_cache = {}
-            if not hasattr(self, '_prompt_schema_cache'):
-                self._prompt_schema_cache = {}
+            loaded_count = 0
                 
             for command in self.commands:
                 prompt_info = await self.artifact_manager.find_prompt(command)
                 if prompt_info:
                     prompt, server_name = prompt_info
                     # Store full prompt object for argument expansion
-                    self._prompt_schema_cache[command] = (prompt, server_name)
+                    self._prompt_schema_cache.set(command, (prompt, server_name))
                     # Extract argument info string for display
                     arg_info = self._format_prompt_arguments(prompt)
-                    self._prompt_info_cache[command] = arg_info
+                    self._prompt_info_cache.set(command, arg_info)
+                    loaded_count += 1
                     logger.debug(f"Preloaded info for '{command}': {arg_info}")
-            logger.info(f"Successfully preloaded prompt information for {len(getattr(self, '_prompt_info_cache', {}))} commands")
+            logger.info(f"Successfully preloaded prompt information for {loaded_count} commands")
             
             # Update autocomplete widget cache if it's already mounted
             try:
@@ -422,18 +435,44 @@ class NexusApp(App):
                 autocomplete_list = self.query(NexusAutoComplete)
                 if autocomplete_list:
                     autocomplete = autocomplete_list[0]
-                    if hasattr(self, '_prompt_info_cache') and self._prompt_info_cache:
-                        autocomplete._prompt_cache = self._prompt_info_cache.copy()
-                        logger.info(f"Updated autocomplete prompt cache with {len(self._prompt_info_cache)} items")
-                    if hasattr(self, '_prompt_schema_cache') and self._prompt_schema_cache:
-                        autocomplete._prompt_schema_cache = self._prompt_schema_cache.copy()
-                        logger.info(f"Updated autocomplete prompt schema cache with {len(self._prompt_schema_cache)} items")
+                    # Copy cache entries to autocomplete widget (which uses dicts)
+                    self._copy_prompt_caches_to_autocomplete(autocomplete)
             except Exception as e:
                 logger.debug(f"Autocomplete widget not found yet, will copy cache when mounted: {e}")
         except Exception as e:
             logger.error(f"Failed to preload prompt info: {e}")
             import traceback
             logger.error(traceback.format_exc())
+    
+    def _copy_prompt_caches_to_autocomplete(self, autocomplete) -> None:
+        """Copy prompt caches to autocomplete widget.
+        
+        The autocomplete widget uses dict-based caches, so we need to convert
+        from Cache instances to dicts by getting all known command entries.
+        
+        Args:
+            autocomplete: The NexusAutoComplete widget instance
+        """
+        # Build dicts from cache by iterating through known commands
+        prompt_info_dict: dict[str, str | None] = {}
+        prompt_schema_dict: dict[str, tuple] = {}
+        
+        for command in self.commands:
+            info = self._prompt_info_cache.get(command)
+            if info is not None:
+                prompt_info_dict[command] = info
+            
+            schema = self._prompt_schema_cache.get(command)
+            if schema is not None:
+                prompt_schema_dict[command] = schema
+        
+        if prompt_info_dict:
+            autocomplete._prompt_cache = prompt_info_dict
+            logger.info(f"Updated autocomplete prompt cache with {len(prompt_info_dict)} items")
+        
+        if prompt_schema_dict:
+            autocomplete._prompt_schema_cache = prompt_schema_dict
+            logger.info(f"Updated autocomplete prompt schema cache with {len(prompt_schema_dict)} items")
     
     def _format_prompt_arguments(self, prompt) -> str | None:
         """Format prompt arguments into a readable string (helper method)."""
@@ -489,18 +528,8 @@ class NexusApp(App):
             logger.info("AutoComplete overlay mounted successfully")
             
             # Copy preloaded prompt info cache to autocomplete (if available)
-            # This may be called before prompts are loaded, so we check if cache exists
-            if hasattr(self, '_prompt_info_cache') and self._prompt_info_cache:
-                autocomplete._prompt_cache = self._prompt_info_cache.copy()
-                logger.info(f"Copied {len(self._prompt_info_cache)} cached prompt info items to autocomplete")
-            else:
-                logger.debug("Prompt info cache not available yet when mounting autocomplete")
-                
-            if hasattr(self, '_prompt_schema_cache') and self._prompt_schema_cache:
-                autocomplete._prompt_schema_cache = self._prompt_schema_cache.copy()
-                logger.info(f"Copied {len(self._prompt_schema_cache)} cached prompt schemas to autocomplete")
-            else:
-                logger.warning("Prompt schema cache not available yet when mounting autocomplete - cache will be empty!")
+            # This may be called before prompts are loaded, so we check if cache has entries
+            self._copy_prompt_caches_to_autocomplete(autocomplete)
         except Exception as e:
             logger.error(f"Failed to mount AutoComplete overlay: {e}")
 

@@ -31,6 +31,7 @@ from nxs.core.events import (
 )
 from nxs.mcp_client.client import MCPAuthClient, ConnectionStatus
 from nxs.core.protocols import MCPClient
+from nxs.core.cache import Cache, MemoryCache
 from nxs.logger import get_logger
 
 logger = get_logger("artifact_manager")
@@ -43,6 +44,7 @@ class ArtifactManager:
         self,
         config: Optional[MCPServersConfig] = None,
         event_bus: Optional[EventBus] = None,
+        artifacts_cache: Optional[Cache[str, dict[str, list[dict[str, str | None]]]]] = None,
         # Legacy callback support (deprecated, use event_bus instead)
         on_status_change: Optional[Callable[[str, ConnectionStatus], None]] = None,
         on_reconnect_progress: Optional[Callable[[str, int, int, float], None]] = None,
@@ -55,6 +57,9 @@ class ArtifactManager:
             event_bus: Optional EventBus instance for publishing events. If provided,
                       events will be published for connection status changes, reconnection
                       progress, and artifact fetches. If None, events are not published.
+            artifacts_cache: Optional Cache instance for caching artifacts. If None, a
+                            MemoryCache will be created. This allows injecting different
+                            cache implementations (e.g., TTLCache for expiration).
             on_status_change: DEPRECATED - Use event_bus and subscribe to ConnectionStatusChanged instead.
                              Optional callback called when connection status changes.
                              Receives (server_name, status) as arguments.
@@ -73,7 +78,9 @@ class ArtifactManager:
         # Track last check time for each server
         self._server_last_check: dict[str, float] = {}
         # Cache artifacts for each server to avoid unnecessary fetches
-        self._artifacts_cache: dict[str, dict[str, list[dict[str, str | None]]]] = {}
+        self._artifacts_cache: Cache[str, dict[str, list[dict[str, str | None]]]] = (
+            artifacts_cache or MemoryCache[str, dict[str, list[dict[str, str | None]]]]()
+        )
 
     def _handle_status_change(self, status: ConnectionStatus, server_name: str) -> None:
         """
@@ -450,9 +457,14 @@ class ArtifactManager:
             server_name: Name of the server
 
         Returns:
-            Cached artifacts dict or None if not cached
+            Cached artifacts dict or None if not cached. Returns a copy to prevent
+            external modification of cached data.
         """
-        return self._artifacts_cache.get(server_name)
+        cached = self._artifacts_cache.get(server_name)
+        # Return a copy to prevent external modification of cached data
+        if cached is None:
+            return None
+        return cached.copy()
 
     def cache_artifacts(self, server_name: str, artifacts: dict[str, list[dict[str, str | None]]]) -> None:
         """
@@ -462,7 +474,8 @@ class ArtifactManager:
             server_name: Name of the server
             artifacts: Artifacts dict with keys "tools", "prompts", "resources"
         """
-        self._artifacts_cache[server_name] = artifacts.copy()
+        # Store a copy to prevent external modification of cached data
+        self._artifacts_cache.set(server_name, artifacts.copy())
 
     def clear_artifacts_cache(self, server_name: str | None = None) -> None:
         """
@@ -471,16 +484,16 @@ class ArtifactManager:
         Args:
             server_name: Name of the server. If None, clears all cache
         """
-        if server_name is None:
-            self._artifacts_cache.clear()
-        else:
-            self._artifacts_cache.pop(server_name, None)
+        self._artifacts_cache.clear(server_name)
 
     def have_artifacts_changed(
         self, server_name: str, new_artifacts: dict[str, list[dict[str, str | None]]]
     ) -> bool:
         """
         Check if artifacts have changed compared to cache.
+
+        This method uses the cache's has_changed method, which compares the
+        new artifacts against the cached value.
 
         Args:
             server_name: Name of the server
@@ -489,28 +502,7 @@ class ArtifactManager:
         Returns:
             True if artifacts have changed, False otherwise
         """
-        cached = self._artifacts_cache.get(server_name)
-        if cached is None:
-            return True
-
-        # Compare artifact counts
-        new_total = (
-            len(new_artifacts.get("tools", [])) +
-            len(new_artifacts.get("prompts", [])) +
-            len(new_artifacts.get("resources", []))
-        )
-        cached_total = (
-            len(cached.get("tools", [])) +
-            len(cached.get("prompts", [])) +
-            len(cached.get("resources", []))
-        )
-
-        # Check if going from 0 to >0 or >0 to 0
-        if (cached_total == 0 and new_total > 0) or (cached_total > 0 and new_total == 0):
-            return True
-
-        # Compare actual content (names and descriptions)
-        return new_artifacts != cached
+        return self._artifacts_cache.has_changed(server_name, new_artifacts)
 
     async def _fetch_with_retry(
         self,
