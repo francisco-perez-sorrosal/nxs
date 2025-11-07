@@ -19,7 +19,7 @@ from .services import (
     MCPCoordinator,
     PromptService,
     AutocompleteService,
-    MCPRefresher,
+    RefreshService,
 )
 from .handlers import (
     ConnectionHandler,
@@ -118,8 +118,8 @@ class NexusApp(App):
         # Initialize StatusQueue for asynchronous status updates
         self.status_queue = StatusQueue(status_panel_getter=self._get_status_panel)
 
-        # Initialize MCPRefresher for managing panel refresh operations
-        self.mcp_refresher = MCPRefresher(
+        # Initialize RefreshService for managing panel refresh operations
+        self.mcp_refresher = RefreshService(
             artifact_manager=artifact_manager,
             mcp_panel_getter=self._get_mcp_panel
         )

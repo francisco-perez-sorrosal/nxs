@@ -1,5 +1,5 @@
 """
-MCPRefresher service for managing MCP panel refresh operations.
+RefreshService for managing MCP panel refresh operations.
 
 This service encapsulates the logic for scheduling and coordinating
 refresh operations, including task management and debouncing.
@@ -14,10 +14,10 @@ from nxs.logger import get_logger
 if TYPE_CHECKING:
     from ..widgets.mcp_panel import MCPPanel
 
-logger = get_logger("mcp_refresher")
+logger = get_logger("refresh_service")
 
 
-class MCPRefresher:
+class RefreshService:
     """
     Service for coordinating MCP panel refresh operations.
 
@@ -38,7 +38,7 @@ class MCPRefresher:
         mcp_panel_getter: Callable[[], "MCPPanel"]
     ):
         """
-        Initialize the MCPRefresher.
+        Initialize the RefreshService.
 
         Args:
             artifact_manager: The ArtifactManager instance

@@ -4,12 +4,12 @@ NexusAutoComplete - AutoComplete overlay for NexusInput with command and resourc
 
 from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 from nxs.logger import get_logger
-from nxs.tui.widgets.command_parser import (
+from nxs.core.parsers.utils import (
     parse_command_arguments,
     extract_value_part,
     is_inside_quotes,
 )
-from nxs.tui.widgets.argument_suggestions import ArgumentSuggestionGenerator
+from nxs.core.suggestions import ArgumentSuggestionGenerator
 from nxs.tui.widgets.input_field import NexusInput
 
 logger = get_logger("nexus_input")

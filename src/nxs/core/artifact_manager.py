@@ -410,7 +410,7 @@ class ArtifactManager:
         for server_name, client in list(self.mcp_clients.items()):
             try:
                 if hasattr(client, "disconnect"):
-                    await client.disconnect()  # type: ignore
+                    await client.disconnect()
             except Exception as err:
                 logger.error("Error disconnecting from %s: %s", server_name, err)
 

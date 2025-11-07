@@ -16,7 +16,7 @@ from nxs.logger import get_logger
 
 if TYPE_CHECKING:
     from nxs.core.artifact_manager import ArtifactManager
-    from nxs.tui.services.mcp_refresher import MCPRefresher
+    from nxs.tui.services.mcp_refresher import RefreshService
     from nxs.tui.widgets.mcp_panel import MCPPanel
 
 logger = get_logger("connection_handler")
@@ -25,7 +25,7 @@ logger = get_logger("connection_handler")
 class ConnectionHandler:
     """
     Handles connection-related events.
-    
+
     This handler processes connection status changes and reconnection
     progress events, updating the MCP panel and coordinating refreshes.
     """
@@ -34,7 +34,7 @@ class ConnectionHandler:
         self,
         artifact_manager: "ArtifactManager",
         mcp_panel_getter: Callable[[], "MCPPanel"],
-        mcp_refresher: "MCPRefresher",
+        mcp_refresher: "RefreshService",
         reconnect_progress_debounce_interval: float = 1.0,
     ):
         """
@@ -43,7 +43,7 @@ class ConnectionHandler:
         Args:
             artifact_manager: The ArtifactManager instance
             mcp_panel_getter: Function to get the MCP panel widget
-            mcp_refresher: MCPRefresher service for coordinating refreshes
+            mcp_refresher: RefreshService for coordinating refreshes
             reconnect_progress_debounce_interval: Minimum seconds between reconnect progress updates
         """
         self.artifact_manager = artifact_manager

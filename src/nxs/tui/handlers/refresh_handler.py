@@ -3,7 +3,7 @@ RefreshHandler for handling artifact refresh events.
 
 This handler processes:
 - ArtifactsFetched events
-- Coordinates refresh operations with MCPRefresher
+- Coordinates refresh operations with RefreshService
 """
 
 from typing import TYPE_CHECKING
@@ -12,7 +12,7 @@ from nxs.core.events import ArtifactsFetched
 from nxs.logger import get_logger
 
 if TYPE_CHECKING:
-    from nxs.tui.services.mcp_refresher import MCPRefresher
+    from nxs.tui.services.mcp_refresher import RefreshService
 
 logger = get_logger("refresh_handler")
 
@@ -20,17 +20,17 @@ logger = get_logger("refresh_handler")
 class RefreshHandler:
     """
     Handles artifact refresh events.
-    
+
     This handler processes ArtifactsFetched events and coordinates
-    refresh operations with the MCPRefresher service.
+    refresh operations with the RefreshService.
     """
 
-    def __init__(self, mcp_refresher: "MCPRefresher"):
+    def __init__(self, mcp_refresher: "RefreshService"):
         """
         Initialize the RefreshHandler.
 
         Args:
-            mcp_refresher: MCPRefresher service for coordinating refreshes
+            mcp_refresher: RefreshService for coordinating refreshes
         """
         self.mcp_refresher = mcp_refresher
 

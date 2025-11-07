@@ -50,8 +50,9 @@ This document outlines the **Phase 2 refinement strategy** for the Nexus codebas
 
 **Phase 2 Progress Update:**
 - ✅ **HIGH Priority Issues (H1-H4):** All 4 completed (~220 lines removed, zero new type errors)
+- ✅ **MEDIUM Priority Issues (M1-M3):** Completed (~469 lines removed/restructured, proper layer separation achieved)
 - 🔄 **CRITICAL Issues (C1-C3):** In progress
-- ⏳ **MEDIUM Priority Issues (M1-M6):** Pending
+- ⏳ **MEDIUM Priority Issues (M4-M6):** Pending
 - ⏳ **LOW Priority Issues (L1-L2):** Pending
 
 ---
@@ -140,42 +141,41 @@ This document outlines the **Phase 2 refinement strategy** for the Nexus codebas
 
 ---
 
-#### MEDIUM Priority Issues
+#### ~~MEDIUM Priority Issues~~ ✅ **M1-M3 COMPLETED**
 
-**M1. Inconsistent Service Naming Patterns**
-- **Problem:** Mixing naming conventions:
-  - `MCPCoordinator` (Coordinator suffix)
-  - `PromptService` (Service suffix)
-  - `AutocompleteService` (Service suffix)
-  - `MCPRefresher` (neither suffix)
-  - `ArtifactFetcher` (Fetcher suffix)
-  - `ConnectionHandler` (Handler suffix)
-  - `QueryHandler` (Handler suffix)
-- **Impact:** Unclear what distinguishes a "Service" from a "Coordinator" from a "Handler"
+**~~M1. Inconsistent Service Naming Patterns~~** ✅ **COMPLETED**
+- **Solution Implemented:**
+  - Renamed `MCPRefresher` → `RefreshService` for consistency
+  - Services pattern: Handle stateful operations, lifecycle management
+  - Handlers pattern: Process events from EventBus
+  - Updated all imports in: `app.py`, `connection_handler.py`, `refresh_handler.py`, `__init__.py`
+- **Result:** Consistent naming: `RefreshService`, `PromptService`, `AutocompleteService` vs `ConnectionHandler`, `QueryHandler`, `RefreshHandler`
+- **Files Modified:** 5 files (~15 lines changed)
 
-**M2. Argument Suggestions Split Across Files**
-- **Files:**
-  - `tui/widgets/argument_suggestions.py` (283 lines)
-  - `tui/widgets/autocomplete.py` (uses ArgumentSuggestionGenerator)
-- **Problem:** Argument suggestion logic is business logic but lives in widgets package
-- **Impact:** Business logic mixed with UI layer, violates layer boundaries
+**~~M2. Argument Suggestions Split Across Files~~** ✅ **COMPLETED**
+- **Solution Implemented:**
+  - Created `core/suggestions/` package
+  - Moved `ArgumentSuggestionGenerator` from `tui/widgets/argument_suggestions.py` → `core/suggestions/generator.py`
+  - Updated imports in `autocomplete.py` to use `core.suggestions`
+  - Deleted `tui/widgets/argument_suggestions.py` (283 lines removed)
+- **Result:** Business logic properly separated from UI layer, can be reused and tested independently
+- **Files Created:** `core/suggestions/__init__.py`, `core/suggestions/generator.py`
+- **Files Deleted:** `tui/widgets/argument_suggestions.py`
 
-**M3. Command Parser Duplicated**
-- **Files:**
-  - `core/parsers/` - Core parsing logic for execution
-  - `tui/widgets/command_parser.py` - TUI-specific parsing helpers for autocomplete
-- **Problem:** Two different "command parsing" implementations:
-  ```python
-  # tui/widgets/command_parser.py
-  def parse_command_arguments(command_input: str, schema_dict: dict) -> dict:
-      # Parsing for autocomplete context
-
-  # core/parsers/composite.py
-  class CompositeArgumentParser:
-      def parse(self, query_remaining: str, arg_names: list[str], schema_dict: dict) -> dict:
-          # Parsing for execution context
-  ```
-- **Impact:** Risk of inconsistent parsing behavior
+**~~M3. Command Parser Duplicated~~** ✅ **COMPLETED**
+- **Solution Implemented:**
+  - Created `core/parsers/utils.py` with quote-aware parsing utilities
+  - Moved all reusable parsing functions from `tui/widgets/command_parser.py`:
+    - `parse_command_arguments()`, `extract_last_argument()`, `is_inside_quotes()`
+    - `extract_value_part()`, `is_complete_quoted_argument()`, `extract_provided_arg_names()`
+    - `ParsedArgument` NamedTuple
+  - Updated `core/parsers/__init__.py` to export utilities
+  - Updated `autocomplete.py` and `ArgumentSuggestionGenerator` to import from `core.parsers.utils`
+  - Deleted `tui/widgets/command_parser.py` (186 lines removed)
+- **Result:** Single source of truth for command parsing, eliminates duplication risk
+- **Files Created:** `core/parsers/utils.py` (188 lines)
+- **Files Deleted:** `tui/widgets/command_parser.py` (186 lines)
+- **Net Change:** +2 lines (but proper layer separation achieved)
 
 **M4. Unclear Distinction: Services vs Handlers**
 - **Problem:** Both live in `tui/` but unclear what makes something a "service" vs "handler"
