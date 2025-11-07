@@ -800,97 +800,31 @@ bus.publish(ConnectionStatusChanged(server_name="foo", status=CONNECTED))
 
 **Goal:** Break down large classes into focused, single-responsibility components.
 
-#### **Step 3.1: Decompose NexusApp** 🔴 **High Priority**
+#### ~~**Step 3.1: Decompose NexusApp**~~ ✅ **COMPLETED**
 
-**Current responsibilities:**
-1. UI lifecycle (mounting, composing)
-2. MCP connection orchestration
-3. Status change handling
-4. Refresh coordination
-5. Prompt caching
-6. Autocomplete setup
-7. Query processing
-8. Periodic tasks
-
-**Proposed structure:**
-```
-tui/
-├── app.py                        # Slim orchestrator (200-300 lines)
-├── services/
-│   ├── mcp_coordinator.py        # MCP initialization & coordination
-│   ├── refresh_coordinator.py    # Artifact refresh logic
-│   ├── prompt_service.py         # Prompt caching & preloading
-│   └── autocomplete_service.py   # Autocomplete setup & management
-└── handlers/
-    ├── connection_handler.py     # Handle connection events
-    ├── query_handler.py          # Handle query processing
-    └── refresh_handler.py        # Handle refresh events
-```
-
-**Refactored NexusApp:**
-```python
-class NexusApp(App):
-    """Slim TUI application orchestrator"""
-
-    def __init__(self, agent_loop, artifact_manager):
-        super().__init__()
-        self.agent_loop = agent_loop
-        self.artifact_manager = artifact_manager
-
-        # Inject services
-        self.mcp_coordinator = MCPCoordinator(artifact_manager)
-        self.refresh_coordinator = RefreshCoordinator(artifact_manager)
-        self.prompt_service = PromptService(artifact_manager)
-        self.query_manager = QueryManager(processor=self._process_query)
-        self.status_queue = StatusQueue(status_panel_getter=self._get_status_panel)
-
-    def compose(self) -> ComposeResult:
-        """Just UI composition"""
-        ...
-
-    async def on_mount(self) -> None:
-        """Delegate to coordinators"""
-        await self.query_manager.start()
-        await self.status_queue.start()
-        await self.mcp_coordinator.initialize()
-        ...
-```
-
-**Services:**
-```python
-class MCPCoordinator:
-    """Handles MCP initialization and lifecycle"""
-
-    async def initialize(self):
-        """Initialize all MCP connections"""
-        await self.artifact_manager.initialize()
-        await self._load_resources_and_commands()
-        await self.prompt_service.preload_all()
-
-class RefreshCoordinator:
-    """Handles artifact refresh scheduling"""
-
-    def schedule_refresh(self, server_name: str | None, delay: float = 0.0):
-        ...
-
-class PromptService:
-    """Handles prompt caching and preloading"""
-
-    async def preload_all(self):
-        ...
-
-    def get_cached_info(self, command: str) -> str | None:
-        ...
-```
+**Highlights:**
+- Extracted major responsibilities from `tui/app.py` into dedicated services and handlers
+- New services in `tui/services/`:
+  - `mcp_coordinator.py` for MCP initialization and resource/command loading
+  - `prompt_service.py` for prompt caching, schema storage, and preload flows
+  - `autocomplete_service.py` for lifecycle management of the autocomplete overlay
+  - Existing `mcp_refresher.py` reused for refresh orchestration
+- New handlers in `tui/handlers/`:
+  - `connection_handler.py` for connection status and reconnection progress events
+  - `query_handler.py` for query processing and agent loop callback orchestration
+  - `refresh_handler.py` for artifact refresh events
+- `tui/app.py` rewritten as a thin orchestrator (993 → 530 lines, ~47% reduction)
+  - Wires services/handlers, owns UI composition, delegates background work
+  - Query processing is now delegated to `QueryHandler` through `QueryManager`
+  - Prompt caches managed by `PromptService`, autocomplete updates via `AutocompleteService`
+  - EventBus subscriptions route through handlers for clearer separation
+- Maintained existing functionality, type coverage, and event-driven architecture
 
 **Benefits:**
-- NexusApp focused on UI orchestration only
-- Services are testable in isolation
-- Clear separation of concerns
-- Easy to modify/extend individual services
-- Reduced file size (993 → ~300 lines for app.py)
-
-**Estimated effort:** 10-12 hours
+- NexusApp now focuses purely on presentation/orchestration concerns
+- Services/handlers are independently testable and easy to extend
+- Clear dependency boundaries simplify further Phase 3 decomposition work
+- Established scaffolding for additional services (e.g., refresh extraction) without bloating the app class
 
 ---
 
