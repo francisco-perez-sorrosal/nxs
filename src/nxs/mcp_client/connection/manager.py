@@ -110,10 +110,9 @@ class ConnectionManager:
 
         # Calculate next retry delay if reconnecting
         if self._lifecycle.status == ConnectionStatus.RECONNECTING and self._reconnect_attempts > 0:
-            # Only calculate delay if strategy supports it (ExponentialBackoffStrategy)
-            if hasattr(self._reconnect_strategy, "calculate_delay"):
-                delay = self._reconnect_strategy.calculate_delay(self._reconnect_attempts)
-                info["next_retry_delay"] = delay
+            delay_getter = getattr(self._reconnect_strategy, "calculate_delay", None)
+            if callable(delay_getter):
+                info["next_retry_delay"] = delay_getter(self._reconnect_attempts)
 
         return info
 

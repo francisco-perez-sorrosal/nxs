@@ -855,70 +855,23 @@ bus.publish(ConnectionStatusChanged(server_name="foo", status=CONNECTED))
 
 ---
 
-#### **Step 3.3: Decompose MCPAuthClient** 🟡 **Medium Priority**
+#### ~~**Step 3.3: Decompose MCPAuthClient**~~ ✅ **COMPLETED**
 
-**Current responsibilities:**
-1. Low-level connection (streams, transports)
-2. Session management
-3. Reconnection with backoff
-4. Health checking
-5. All MCP operations (tools, prompts, resources)
-6. Interactive CLI mode
-
-**Proposed structure:**
-```
-mcp_client/
-├── client.py                     # Slim protocol client (200-300 lines)
-├── connection/
-│   ├── manager.py                # Connection lifecycle
-│   ├── health.py                 # Health checker
-│   └── reconnect.py              # Reconnection strategy
-├── operations/
-│   ├── tools.py                  # Tool operations
-│   ├── prompts.py                # Prompt operations
-│   └── resources.py              # Resource operations
-└── cli/
-    └── interactive.py            # CLI interactive mode
-```
-
-**Refactored MCPAuthClient:**
-```python
-class MCPAuthClient:
-    """MCP protocol client (slim wrapper)"""
-
-    def __init__(self, server_url: str, transport_type: str = "streamable_http"):
-        self.server_url = server_url
-        self.transport_type = transport_type
-        self.session: ClientSession | None = None
-
-        # Delegate to components
-        self.connection_manager = ConnectionLifecycleManager(server_url, transport_type)
-        self.tools_operations = ToolsOperations(lambda: self.session)
-        self.prompts_operations = PromptsOperations(lambda: self.session)
-        self.resources_operations = ResourcesOperations(lambda: self.session)
-
-    async def connect(self, use_auth: bool = False):
-        self.session = await self.connection_manager.connect(use_auth)
-
-    async def disconnect(self):
-        await self.connection_manager.disconnect()
-
-    # Delegate operations
-    async def list_tools(self) -> list[Tool]:
-        return await self.tools_operations.list_tools()
-
-    async def call_tool(self, name: str, args: dict) -> CallToolResult:
-        return await self.tools_operations.call_tool(name, args)
-```
+**Highlights:**
+- Slimmed `mcp_client/client.py` into a delegation-first wrapper that wires the existing `ConnectionManager` to dedicated operations classes. The file now focuses on lifecycle orchestration and public API surface (≈250 lines).
+- Introduced `mcp_client/operations/` with shared helpers and focused modules (`base.py`, `tools.py`, `prompts.py`, `resources.py`) that handle session access, logging, and error containment.
+- Relocated the Typer-powered interactive shell to `mcp_client/cli.py` (keeping it at package root per preference), removing CLI concerns from the core client.
+- Ensured structural typing compatibility with the `MCPClient` protocol while maintaining the existing async API consumed by higher layers.
 
 **Benefits:**
-- Clear separation of protocol operations
-- Testable components independently
-- Can mock individual operations
-- CLI extracted to separate module
-- Reduced file size (784 → ~250 lines for client)
+- Clear separation between connection lifecycle, protocol operations, and CLI concerns, reducing coupling and improving readability.
+- Easier unit testing and mocking of individual protocol surfaces thanks to standalone operations classes.
+- Safer error handling: each operation now guards against missing sessions and logs failures without destabilizing the caller.
+- Future feature work (additional operations, alternate transports) can be added by extending the operations package without touching the client core.
 
-**Estimated effort:** 8-10 hours
+**Follow-ups:**
+- Add focused unit tests for the new operations modules to lock in error handling behaviours.
+- Consider documenting the CLI entry point (`python -m nxs.mcp_client`) in developer tooling notes to surface the new location.
 
 ---
 
@@ -1089,7 +1042,7 @@ src/nxs/
 - **Deliverable:** Focused, single-responsibility classes
 
 ### Week 7-8: Polish & Cleanup
-- [ ] Step 3.3: Decompose MCPAuthClient (8-10h)
+- [x] Step 3.3: Decompose MCPAuthClient (8-10h)
 - [ ] Step 4.1-4.3: Remove dead code (4-6h)
 - [ ] Step 2.3: Implement caching abstraction (4-5h)
 - [ ] Add comprehensive tests
