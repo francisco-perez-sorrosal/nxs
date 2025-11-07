@@ -4,7 +4,6 @@ NexusApp - Main Textual application for the Nexus TUI.
 
 import asyncio
 import time
-from typing import Callable
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer
 from textual.containers import Container, Vertical, Horizontal

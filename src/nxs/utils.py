@@ -2,10 +2,8 @@
 Utility functions for the Nexus application.
 """
 
-import os
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 
 def read_prompt(prompt_file: str, prompts_dir: str = "prompts") -> str:

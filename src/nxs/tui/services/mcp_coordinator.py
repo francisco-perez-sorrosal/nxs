@@ -7,7 +7,6 @@ This service handles:
 - Coordinating with other services (PromptService, AutocompleteService)
 """
 
-import asyncio
 from typing import TYPE_CHECKING, Callable
 
 from nxs.core.artifact_manager import ArtifactManager

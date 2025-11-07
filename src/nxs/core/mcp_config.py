@@ -4,7 +4,6 @@ Parses JSON configuration files containing MCP server definitions.
 """
 
 import json
-import os
 from pathlib import Path
 from typing import Optional
 

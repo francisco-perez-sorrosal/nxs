@@ -60,7 +60,7 @@ A full MCP client implementation with authentication and storage support:
 - **auth.py**: Authentication handler for remote MCP servers
 - **storage.py**: Storage handler for MCP server state persistence
 - **callback.py**: UI callback helpers for progress/completion tracking
-- **mcp_client.py** (legacy): Simple async wrapper around MCP ClientSession (kept for backwards compatibility)
+- **cli/**: Typer-based interactive CLI (e.g., `python -m nxs.mcp_client`)
 
 **Note**: `mcp_server.py` is an example MCP server implementation showing how to define resources, tools, and prompts.
 

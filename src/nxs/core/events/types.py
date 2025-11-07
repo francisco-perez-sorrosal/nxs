@@ -6,7 +6,6 @@ to decouple components and enable event-driven communication.
 
 import time
 from dataclasses import dataclass, field
-from typing import Any
 
 from nxs.mcp_client.connection.lifecycle import ConnectionStatus
 

@@ -1,7 +1,6 @@
 """Key-value argument parser for key=value format."""
 
 from typing import Any
-from nxs.core.parsers.base import ArgumentParser
 from nxs.logger import get_logger
 
 logger = get_logger("parsers")

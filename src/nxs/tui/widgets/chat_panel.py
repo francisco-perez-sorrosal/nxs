@@ -7,7 +7,6 @@ from textual.widgets import RichLog
 from rich.syntax import Syntax
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.align import Align
 from rich.padding import Padding
 from rich.text import Text
 from rich.console import Group

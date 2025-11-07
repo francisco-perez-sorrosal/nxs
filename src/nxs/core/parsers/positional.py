@@ -1,7 +1,6 @@
 """Positional argument parser for space-separated arguments."""
 
 from typing import Any
-from nxs.core.parsers.base import ArgumentParser
 from nxs.logger import get_logger
 
 logger = get_logger("parsers")

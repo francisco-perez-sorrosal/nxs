@@ -1,7 +1,6 @@
 """Composite argument parser that combines multiple parsing strategies."""
 
 from typing import Any
-from nxs.core.parsers.base import ArgumentParser
 from nxs.core.parsers.positional import PositionalArgumentParser
 from nxs.core.parsers.key_value import KeyValueArgumentParser
 from nxs.core.parsers.schema_adapter import SchemaAdapter, SchemaInfo

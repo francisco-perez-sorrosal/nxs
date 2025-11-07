@@ -2,8 +2,8 @@
 MCPPanel - A scrollable panel displaying MCP servers and their artifacts.
 """
 
-from typing import Any, TYPE_CHECKING
-from textual.widgets import Static, Label
+from typing import Any
+from textual.widgets import Static
 from textual.containers import Vertical, ScrollableContainer
 from textual.app import ComposeResult
 from textual.message import Message

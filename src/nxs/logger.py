@@ -1,7 +1,6 @@
 """Logging configuration for the Nexus project using loguru."""
 
 import sys
-from pathlib import Path
 from loguru import logger
 from typing import Optional
 

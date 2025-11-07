@@ -144,7 +144,6 @@ nxs/
 │   ├── logger.py              # Logging configuration
 │   ├── utils.py               # Utility functions
 │   ├── mcp_server.py          # Example MCP server
-│   ├── mcp_client.py          # Legacy MCP client wrapper
 │   ├── config/                # Configuration files
 │   │   └── mcp_servers.json   # MCP server configurations
 │   ├── core/                  # Core application modules (UI-independent)
@@ -158,7 +157,8 @@ nxs/
 │   │   ├── client.py          # Main MCP client with reconnection
 │   │   ├── auth.py            # Authentication handler
 │   │   ├── storage.py         # Storage handler
-│   │   └── callback.py        # UI callback helpers
+│   │   ├── callback.py        # UI callback helpers
+│   │   └── cli/               # Typer-based CLI helpers
 │   ├── tui/                   # TUI layer (Textual + Rich)
 │   │   ├── app.py             # Main NexusApp
 │   │   ├── styles.tcss        # Textual CSS styling
