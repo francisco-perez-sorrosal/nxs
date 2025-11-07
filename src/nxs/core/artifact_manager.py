@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Optional
 
 from mcp.types import Prompt, Tool
 
@@ -30,9 +30,6 @@ class ArtifactManager:
         config: Optional[MCPServersConfig] = None,
         event_bus: Optional[EventBus] = None,
         artifacts_cache: Optional[Cache[str, ArtifactCollection]] = None,
-        # Legacy callback support (deprecated, use event_bus instead)
-        on_status_change: Optional[Callable[[str, ConnectionStatus], None]] = None,
-        on_reconnect_progress: Optional[Callable[[str, int, int, float], None]] = None,
         *,
         artifact_repository: Optional[ArtifactRepository] = None,
         artifact_cache_service: Optional[ArtifactCache] = None,
@@ -49,17 +46,9 @@ class ArtifactManager:
             artifacts_cache: Optional Cache instance for caching artifacts. If None, a
                             MemoryCache will be created. This allows injecting different
                             cache implementations (e.g., TTLCache for expiration).
-            on_status_change: DEPRECATED - Use event_bus and subscribe to ConnectionStatusChanged instead.
-                             Optional callback called when connection status changes.
-                             Receives (server_name, status) as arguments.
-            on_reconnect_progress: DEPRECATED - Use event_bus and subscribe to ReconnectProgress instead.
-                                   Optional callback called during reconnection progress.
-                                   Receives (server_name, attempts, max_attempts, next_retry_delay) as arguments.
         """
         self.config = config or load_mcp_config()
         self.event_bus = event_bus
-        self.on_status_change = on_status_change
-        self.on_reconnect_progress = on_reconnect_progress
         self.mcp_clients: dict[str, MCPClient] = {}
         self._server_statuses: dict[str, ConnectionStatus] = {}
         self._server_last_check: dict[str, float] = {}
@@ -351,6 +340,7 @@ class ArtifactManager:
         self,
         server_name: str,
         retry_on_empty: bool = False,
+        timeout: float | None = None,
     ) -> ArtifactCollection:
         """
         Get artifacts (tools, prompts, resources) for a specific server.
@@ -358,6 +348,7 @@ class ArtifactManager:
         Args:
             server_name: Name of the server
             retry_on_empty: If True, retry fetching if results are empty
+            timeout: Optional timeout in seconds for the fetch operation
 
         Returns:
             Dictionary with keys "tools", "prompts", "resources", each containing a list of dicts
@@ -366,6 +357,7 @@ class ArtifactManager:
         artifacts = await self._artifact_repository.get_server_artifacts(
             server_name,
             retry_on_empty=retry_on_empty,
+            timeout=timeout,
         )
 
         self.update_server_last_check(server_name)
@@ -391,17 +383,20 @@ class ArtifactManager:
 
         return artifacts
 
-    async def get_all_servers_artifacts(self) -> dict[str, ArtifactCollection]:
+    async def get_all_servers_artifacts(
+        self,
+        timeout: float | None = None,
+    ) -> dict[str, ArtifactCollection]:
         """
         Get artifacts for all servers.
+
+        Args:
+            timeout: Optional timeout in seconds for the entire operation
 
         Returns:
             Dictionary mapping server names to their artifacts dict
         """
-        results: dict[str, ArtifactCollection] = {}
-        for server_name in self.mcp_clients.keys():
-            results[server_name] = await self.get_server_artifacts(server_name)
-        return results
+        return await self._artifact_repository.get_all_servers_artifacts(timeout=timeout)
 
     async def cleanup(self) -> None:
         """
@@ -415,7 +410,7 @@ class ArtifactManager:
         for server_name, client in list(self.mcp_clients.items()):
             try:
                 if hasattr(client, "disconnect"):
-                    await client.disconnect()  # type: ignore[attr-defined]
+                    await client.disconnect()  # type: ignore
             except Exception as err:
                 logger.error("Error disconnecting from %s: %s", server_name, err)
 
@@ -469,16 +464,6 @@ class ArtifactManager:
                     err,
                 )
 
-        if self.on_status_change:
-            try:
-                self.on_status_change(server_name, status)
-            except Exception as err:
-                logger.error(
-                    "Legacy status change callback error for %s: %s",
-                    server_name,
-                    err,
-                )
-
     def _handle_reconnect_progress(
         self,
         attempts: int,
@@ -502,21 +487,6 @@ class ArtifactManager:
             except Exception as err:
                 logger.error(
                     "Error publishing ReconnectProgress for %s: %s",
-                    server_name,
-                    err,
-                )
-
-        if self.on_reconnect_progress:
-            try:
-                self.on_reconnect_progress(
-                    server_name,
-                    attempts,
-                    max_attempts,
-                    next_retry_delay,
-                )
-            except Exception as err:
-                logger.error(
-                    "Legacy reconnect progress callback error for %s: %s",
                     server_name,
                     err,
                 )

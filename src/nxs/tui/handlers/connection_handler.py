@@ -51,6 +51,8 @@ class ConnectionHandler:
         self.mcp_refresher = mcp_refresher
         self._reconnect_progress_debounce_interval = reconnect_progress_debounce_interval
         self._last_reconnect_progress_update: dict[str, float] = {}
+        # Cache reconnect info from events (instead of accessing client properties)
+        self._reconnect_info_cache: dict[str, dict | None] = {}
 
     def handle_connection_status_changed(self, event: ConnectionStatusChanged) -> None:
         """
@@ -87,11 +89,11 @@ class ConnectionHandler:
                         # Still update reconnect info to clear any stale progress
                         try:
                             mcp_panel = self.mcp_panel_getter()
-                            if client:
-                                # reconnect_info is implementation-specific, not in protocol
-                                reconnect_info = client.reconnect_info  # type: ignore[attr-defined]
+                            # Get cached reconnect info from events
+                            reconnect_info = self._reconnect_info_cache.get(server_name)
+                            if reconnect_info:
                                 mcp_panel.update_reconnect_info(server_name, reconnect_info)
-                                self.mcp_refresher.schedule_refresh()
+                            self.mcp_refresher.schedule_refresh()
                         except Exception:
                             pass
                         return
@@ -103,12 +105,14 @@ class ConnectionHandler:
             mcp_panel = self.mcp_panel_getter()
             mcp_panel.update_server_status(server_name, status)
 
-            # Update reconnect info from client
-            client = self.artifact_manager.clients.get(server_name)
-            if client:
-                # reconnect_info is implementation-specific, not in protocol
-                reconnect_info = client.reconnect_info  # type: ignore[attr-defined]
+            # Update reconnect info from cached events
+            reconnect_info = self._reconnect_info_cache.get(server_name)
+            if reconnect_info:
                 mcp_panel.update_reconnect_info(server_name, reconnect_info)
+
+            # Clear reconnect info cache when successfully connected
+            if status == ConnectionStatus.CONNECTED:
+                self._reconnect_info_cache.pop(server_name, None)
 
             # Update last check time when status changes
             self.artifact_manager.update_server_last_check(server_name)
@@ -144,6 +148,13 @@ class ConnectionHandler:
         server_name = event.server_name
         current_time = time.time()
 
+        # Cache reconnect info from event
+        self._reconnect_info_cache[server_name] = {
+            "attempts": event.attempts,
+            "max_attempts": event.max_attempts,
+            "next_retry_delay": event.next_retry_delay,
+        }
+
         # Debounce: only update if enough time has passed since last update for this server
         last_update = self._last_reconnect_progress_update.get(server_name, 0)
         if current_time - last_update < self._reconnect_progress_debounce_interval:
@@ -157,10 +168,9 @@ class ConnectionHandler:
 
         try:
             mcp_panel = self.mcp_panel_getter()
-            client = self.artifact_manager.clients.get(server_name)
-            if client:
-                # reconnect_info is implementation-specific, not in protocol
-                reconnect_info = client.reconnect_info  # type: ignore[attr-defined]
+            # Get cached reconnect info from events
+            reconnect_info = self._reconnect_info_cache.get(server_name)
+            if reconnect_info:
                 mcp_panel.update_reconnect_info(server_name, reconnect_info)
                 # Schedule refresh with task management to prevent accumulation
                 self.mcp_refresher.schedule_refresh()

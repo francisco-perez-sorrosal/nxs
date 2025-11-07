@@ -120,8 +120,19 @@ class ArtifactRepository:
         self,
         server_name: str,
         retry_on_empty: bool = False,
+        timeout: float | None = None,
     ) -> ArtifactCollection:
-        """Fetch all artifact categories for a server."""
+        """
+        Fetch all artifact categories for a server.
+
+        Args:
+            server_name: Name of the server
+            retry_on_empty: If True, retry if result is empty
+            timeout: Optional timeout in seconds for the fetch operation
+
+        Returns:
+            Dictionary with keys "tools", "prompts", "resources"
+        """
         artifacts: ArtifactCollection = {
             "tools": [],
             "prompts": [],
@@ -137,50 +148,64 @@ class ArtifactRepository:
             logger.debug("Server %s is not connected, skipping artifact fetch", server_name)
             return artifacts
 
-        # Tools
-        tools = await self._fetch_with_retry(
-            client.list_tools,
-            server_name,
-            "tools",
-            retry_on_empty=retry_on_empty,
-        )
-        artifacts["tools"] = [
-            {"name": tool.name, "description": tool.description}
-            for tool in tools
-        ]
+        # Wrap fetch operations with timeout if specified
+        async def _fetch_all():
+            # Tools
+            tools = await self._fetch_with_retry(
+                client.list_tools,
+                server_name,
+                "tools",
+                retry_on_empty=retry_on_empty,
+            )
+            artifacts["tools"] = [
+                {"name": tool.name, "description": tool.description}
+                for tool in tools
+            ]
 
-        # Prompts
-        prompts = await self._fetch_with_retry(
-            client.list_prompts,
-            server_name,
-            "prompts",
-            retry_on_empty=retry_on_empty,
-        )
-        artifacts["prompts"] = [
-            {"name": prompt.name, "description": prompt.description}
-            for prompt in prompts
-        ]
+            # Prompts
+            prompts = await self._fetch_with_retry(
+                client.list_prompts,
+                server_name,
+                "prompts",
+                retry_on_empty=retry_on_empty,
+            )
+            artifacts["prompts"] = [
+                {"name": prompt.name, "description": prompt.description}
+                for prompt in prompts
+            ]
 
-        # Resources
-        resources = await self._fetch_with_retry(
-            client.list_resources,
-            server_name,
-            "resources",
-            retry_on_empty=retry_on_empty,
-        )
-        artifacts["resources"] = [
-            {
-                "name": str(resource.uri),
-                "description": (
-                    resource.description
-                    if hasattr(resource, "description") and resource.description
-                    else resource.name
-                    if hasattr(resource, "name") and resource.name
-                    else None
-                ),
-            }
-            for resource in resources
-        ]
+            # Resources
+            resources = await self._fetch_with_retry(
+                client.list_resources,
+                server_name,
+                "resources",
+                retry_on_empty=retry_on_empty,
+            )
+            artifacts["resources"] = [
+                {
+                    "name": str(resource.uri),
+                    "description": (
+                        resource.description
+                        if hasattr(resource, "description") and resource.description
+                        else resource.name
+                        if hasattr(resource, "name") and resource.name
+                        else None
+                    ),
+                }
+                for resource in resources
+            ]
+
+        try:
+            if timeout is not None:
+                await asyncio.wait_for(_fetch_all(), timeout=timeout)
+            else:
+                await _fetch_all()
+        except asyncio.TimeoutError:
+            logger.warning("Timeout fetching artifacts for %s", server_name)
+            return artifacts  # Return empty artifacts on timeout
+        except Exception as err:
+            logger.error("Error fetching artifacts for %s: %s", server_name, err)
+            return artifacts  # Return empty artifacts on error
 
         logger.debug(
             "Fetched artifacts for %s: %d tools, %d prompts, %d resources",
@@ -192,12 +217,37 @@ class ArtifactRepository:
 
         return artifacts
 
-    async def get_all_servers_artifacts(self) -> dict[str, ArtifactCollection]:
-        """Fetch artifacts for all servers."""
-        results: dict[str, ArtifactCollection] = {}
-        for server_name in self._clients_provider().keys():
-            results[server_name] = await self.get_server_artifacts(server_name)
-        return results
+    async def get_all_servers_artifacts(
+        self,
+        timeout: float | None = None,
+    ) -> dict[str, ArtifactCollection]:
+        """
+        Fetch artifacts for all servers.
+
+        Args:
+            timeout: Optional timeout in seconds for the entire operation
+
+        Returns:
+            Dictionary mapping server names to their artifacts
+        """
+        async def _fetch_all_servers():
+            results: dict[str, ArtifactCollection] = {}
+            for server_name in self._clients_provider().keys():
+                results[server_name] = await self.get_server_artifacts(server_name)
+            return results
+
+        try:
+            if timeout is not None:
+                return await asyncio.wait_for(_fetch_all_servers(), timeout=timeout)
+            else:
+                return await _fetch_all_servers()
+        except asyncio.TimeoutError:
+            logger.warning("Timeout fetching artifacts for all servers")
+            # Return empty artifacts for all servers
+            return {
+                server_name: {"tools": [], "prompts": [], "resources": []}
+                for server_name in self._clients_provider().keys()
+            }
 
     # ------------------------------------------------------------------
     # Internal utilities

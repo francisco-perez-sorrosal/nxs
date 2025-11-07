@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Callable
 
 from nxs.core.artifact_manager import ArtifactManager
 from nxs.logger import get_logger
-from .artifact_fetcher import ArtifactFetcher
 
 if TYPE_CHECKING:
     from ..widgets.mcp_panel import MCPPanel
@@ -30,6 +29,9 @@ class MCPRefresher:
     - Status display coordination
     """
 
+    # Default timeout for artifact fetching (in seconds)
+    DEFAULT_TIMEOUT = 30.0
+
     def __init__(
         self,
         artifact_manager: ArtifactManager,
@@ -44,7 +46,6 @@ class MCPRefresher:
         """
         self.artifact_manager = artifact_manager
         self.mcp_panel_getter = mcp_panel_getter
-        self.artifact_fetcher = ArtifactFetcher(artifact_manager)
 
         # Task management
         self._refresh_tasks: set[asyncio.Task] = set()
@@ -141,17 +142,16 @@ class MCPRefresher:
         mcp_panel = self.mcp_panel_getter()
         mcp_panel.set_fetch_status(server_name, "[dim]Fetching artifacts...[/]")
 
-        # Fetch artifacts for the target server
-        artifacts = await self.artifact_fetcher.fetch_with_timeout(
+        # Fetch artifacts for the target server with timeout
+        artifacts = await self.artifact_manager.get_server_artifacts(
             server_name,
-            retry_on_empty=retry_on_empty
+            retry_on_empty=retry_on_empty,
+            timeout=self.DEFAULT_TIMEOUT,
         )
 
-        # Get all servers data, preserving existing artifacts for other servers
-        servers_data = await self.artifact_fetcher.fetch_and_merge(
-            server_name,
-            retry_on_empty=retry_on_empty
-        )
+        # Get all servers data (cached or empty for others)
+        servers_data = self._get_all_cached_or_empty()
+        servers_data[server_name] = artifacts
 
         # Check if artifacts changed
         if self.artifact_manager.have_artifacts_changed(server_name, artifacts):
@@ -179,8 +179,8 @@ class MCPRefresher:
 
     async def _refresh_all_servers(self) -> None:
         """Refresh all servers."""
-        # Fetch artifacts for all servers
-        servers_data = await self.artifact_fetcher.fetch_all()
+        # Fetch artifacts for all servers with timeout
+        servers_data = await self.artifact_manager.get_all_servers_artifacts(timeout=60.0)
 
         # Cache all artifacts
         for name, artifacts in servers_data.items():
@@ -245,6 +245,25 @@ class MCPRefresher:
             mcp_panel.set_fetch_status(server_name, status)
         except Exception as e:
             logger.debug(f"Error setting fetch status for {server_name}: {e}")
+
+    def _get_all_cached_or_empty(self) -> dict[str, dict[str, list]]:
+        """
+        Get cached artifacts for all servers, or empty dicts if not cached.
+
+        Returns:
+            Dictionary mapping server names to their cached artifacts
+        """
+        server_statuses = self.artifact_manager.get_server_statuses()
+        servers_data = {}
+
+        for server_name in server_statuses.keys():
+            cached = self.artifact_manager.get_cached_artifacts(server_name)
+            if cached:
+                servers_data[server_name] = cached
+            else:
+                servers_data[server_name] = {"tools": [], "prompts": [], "resources": []}
+
+        return servers_data
 
     def _count_artifacts(self, artifacts: dict[str, list]) -> int:
         """

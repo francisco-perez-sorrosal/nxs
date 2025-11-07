@@ -48,6 +48,14 @@ This document outlines the **Phase 2 refinement strategy** for the Nexus codebas
 
 ### 1.2 Remaining Issues After Phase 1-3
 
+**Phase 2 Progress Update:**
+- ✅ **HIGH Priority Issues (H1-H4):** All 4 completed (~220 lines removed, zero new type errors)
+- 🔄 **CRITICAL Issues (C1-C3):** In progress
+- ⏳ **MEDIUM Priority Issues (M1-M6):** Pending
+- ⏳ **LOW Priority Issues (L1-L2):** Pending
+
+---
+
 #### CRITICAL Issues
 
 **C1. AutoComplete Widget Too Large (905 lines) - Untouched**
@@ -85,64 +93,50 @@ This document outlines the **Phase 2 refinement strategy** for the Nexus codebas
 
 ---
 
-#### HIGH Priority Issues
+#### ~~HIGH Priority Issues~~ ✅ **COMPLETED**
 
-**H1. Empty `core/connection/` Directory**
+**~~H1. Empty `core/connection/` Directory~~** ✅ **COMPLETED**
 - **Location:** `/Users/fperez/dev/nxs/src/nxs/core/connection/`
 - **Problem:** Directory exists but contains only `__pycache__`
-- **Likely Cause:** Leftover from refactoring, forgotten cleanup
-- **Impact:** Confusing structure
+- **Solution:** Removed empty directory
+- **Status:** ✅ Complete
 
-**H2. Redundant Artifact Fetching Logic**
+**~~H2. Redundant Artifact Fetching Logic~~** ✅ **COMPLETED**
 - **Files:**
-  - `tui/services/artifact_fetcher.py` (167 lines)
-  - `core/artifacts/repository.py` (251 lines)
-- **Problem:** Three-layer delegation chain:
-  ```
-  ArtifactFetcher (TUI)
-      ↓ wraps with timeout
-  ArtifactManager (Core)
-      ↓ delegates
-  ArtifactRepository (Core)
-      ↓ fetches
-  MCPClient operations
-  ```
-- **Duplication:**
-  - Timeout handling in multiple places
-  - Empty result handling duplicated
-  - Error recovery logic repeated
-- **Impact:** Unclear single source of truth, excessive indirection
+  - ~~`tui/services/artifact_fetcher.py` (167 lines)~~ **REMOVED**
+  - `core/artifacts/repository.py` (updated with timeout support)
+- **Problem:** Three-layer delegation chain (Fetcher → Manager → Repository)
+- **Solution:**
+  - Added `timeout` parameter to `ArtifactRepository.get_server_artifacts()` and `get_all_servers_artifacts()`
+  - Updated `ArtifactManager` to pass timeout through
+  - Updated `MCPRefresher` to call `ArtifactManager` directly with timeout
+  - Removed `ArtifactFetcher` service (167 lines)
+  - Removed from `tui/services/__init__.py` exports
+- **Impact:** 167 lines removed, cleaner two-layer delegation
+- **Status:** ✅ Complete
 
-**H3. Legacy Callback Support Cluttering Code**
+**~~H3. Legacy Callback Support Cluttering Code~~** ✅ **COMPLETED**
 - **File:** `core/artifact_manager.py`
 - **Problem:** Maintaining both EventBus and legacy callbacks
-- **Evidence:**
-  ```python
-  # Lines 33-35, 61-62: Deprecated parameters
-  on_status_change: Optional[Callable] = None,  # DEPRECATED
-  on_reconnect_progress: Optional[Callable] = None,  # DEPRECATED
+- **Solution:**
+  - Removed `on_status_change` and `on_reconnect_progress` parameters from `ArtifactManager.__init__()`
+  - Removed dual handling code from `_handle_status_change()` and `_handle_reconnect_progress()`
+  - Removed unused `Callable` import
+  - EventBus is now the single communication mechanism
+- **Impact:** ~50 lines removed, cleaner code paths
+- **Status:** ✅ Complete
 
-  # Lines 152-168: Dual handling
-  if self.event_bus:
-      self.event_bus.publish(ConnectionStatusChanged(...))
-  # Legacy callback support (deprecated)
-  if self.on_status_change:
-      try:
-          self.on_status_change(server_name, status)
-      except Exception as e:
-          logger.warning("Legacy status change callback error...")
-  ```
-- **Impact:** Increased cognitive load, more code paths to test
-
-**H4. `type: ignore` Comments Indicate Design Issues**
-- **Files:** 3 files with `type: ignore` comments
-- **Example:** `tui/handlers/connection_handler.py` (lines 92, 110, 163)
-  ```python
-  reconnect_info = client.reconnect_info  # type: ignore[attr-defined]
-  # Reason: reconnect_info not in MCPClient protocol
-  ```
-- **Root Cause:** `MCPClient` protocol doesn't include `reconnect_info`, but `ConnectionHandler` needs it
-- **Impact:** Type safety compromised, tight coupling to `MCPAuthClient` despite protocol abstraction
+**~~H4. `type: ignore` Comments Indicate Design Issues~~** ✅ **COMPLETED**
+- **Files:** `tui/handlers/connection_handler.py`
+- **Problem:** 3 instances of `type: ignore[attr-defined]` accessing `client.reconnect_info`
+- **Solution:**
+  - Added `_reconnect_info_cache` dictionary to `ConnectionHandler`
+  - Updated `handle_reconnect_progress()` to cache reconnect info from `ReconnectProgress` events
+  - Updated `handle_connection_status_changed()` to use cached info instead of client property
+  - Removed all 3 `type: ignore` comments
+  - Added automatic cache cleanup when successfully connected
+- **Impact:** Type-safe, event-driven, no protocol violations
+- **Status:** ✅ Complete
 
 ---
 
