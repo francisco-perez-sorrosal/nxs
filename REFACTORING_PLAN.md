@@ -593,10 +593,10 @@ bus.publish(ConnectionStatusChanged(server_name="foo", status=CONNECTED))
 
 **Goal:** Add interfaces/protocols for key components to enable better testing and extensibility.
 
-#### **Step 2.1: Define Core Protocols** 🔴 **High Priority**
+#### ~~**Step 2.1: Define Core Protocols**~~ ✅ **COMPLETED**
 
 **Actions:**
-1. Create `core/protocols.py`:
+1. ✅ Create `core/protocols.py`:
    ```python
    from typing import Protocol
 
@@ -622,7 +622,7 @@ bus.publish(ConnectionStatusChanged(server_name="foo", status=CONNECTED))
        def clear(self, key: K | None = None) -> None: ...
    ```
 
-2. Update type hints across codebase to use protocols:
+2. ✅ Update type hints across codebase to use protocols:
    ```python
    # Before
    clients: dict[str, MCPAuthClient]
@@ -631,13 +631,27 @@ bus.publish(ConnectionStatusChanged(server_name="foo", status=CONNECTED))
    clients: dict[str, MCPClient]
    ```
 
-**Benefits:**
-- Clear contracts
-- Easy mocking for tests
-- Type safety
-- Documentation via types
+**Results:**
+- ✅ Created `core/protocols.py` with three core protocols:
+  - `MCPClient` - Protocol for MCP client operations with all required methods (list_tools, call_tool, list_prompts, get_prompt, list_resources, read_resource, is_connected property)
+  - `ArgumentParser` - Re-exported from `core/parsers/base.py` for centralized protocol access
+  - `Cache` - Generic protocol for caching implementations (get, set, clear methods)
+- ✅ Updated type hints in `core/artifact_manager.py`: Changed `dict[str, MCPAuthClient]` → `dict[str, MCPClient]`
+- ✅ Updated type hints in `core/chat.py`: Changed `dict[str, MCPAuthClient]` → `dict[str, MCPClient]`
+- ✅ Updated type hints in `core/tools.py`: Changed all `MCPAuthClient` references → `MCPClient` in `get_all_tools()`, `_find_client_with_tool()`, and `execute_tool_requests()`
+- ✅ Removed unused `MCPAuthClient` imports from `core/chat.py` and `core/tools.py`
+- ✅ Verified `MCPAuthClient` conforms to `MCPClient` protocol (structural typing)
+- ✅ Clear contracts enable better type safety and documentation
+- ✅ Protocols enable easy mocking for testing without tight coupling to concrete classes
+- ✅ Backward compatible - all existing functionality preserved
 
-**Estimated effort:** 3-4 hours
+**Benefits:**
+- ✅ Clear contracts - Protocols define expected interfaces
+- ✅ Easy mocking for tests - Can mock `MCPClient` protocol instead of concrete class
+- ✅ Type safety - Type checker verifies protocol conformance
+- ✅ Documentation via types - Protocols serve as living documentation
+
+**Actual effort:** ~2-3 hours
 
 ---
 
@@ -1171,7 +1185,7 @@ src/nxs/
 ### Week 1-2: Foundation
 - [x] Step 1.1: Extract command parsing (4-6h) ✅
 - [x] Step 1.2: Extract connection management (6-8h) ✅
-- [ ] Step 2.1: Define core protocols (3-4h)
+- [x] Step 2.1: Define core protocols (3-4h) ✅
 - [x] Add unit tests for parsers ✅
 - [x] Add unit tests for connection logic ✅
 - **Deliverable:** Reusable parsers, connection components with tests ✅

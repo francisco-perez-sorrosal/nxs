@@ -23,6 +23,7 @@ from nxs.core.mcp_config import (
     load_mcp_config,
 )
 from nxs.mcp_client.client import MCPAuthClient, ConnectionStatus
+from nxs.core.protocols import MCPClient
 from nxs.logger import get_logger
 
 logger = get_logger("artifact_manager")
@@ -48,7 +49,7 @@ class ArtifactManager:
                                    Receives (server_name, attempts, max_attempts, next_retry_delay) as arguments.
         """
         self.config = config or load_mcp_config()
-        self.mcp_clients: dict[str, MCPAuthClient] = {}
+        self.mcp_clients: dict[str, MCPClient] = {}
         self._exit_stack: Optional[AsyncExitStack] = None
         self.on_status_change = on_status_change
         self.on_reconnect_progress = on_reconnect_progress
@@ -341,12 +342,12 @@ class ArtifactManager:
         return None
 
     @property
-    def clients(self) -> dict[str, MCPAuthClient]:
+    def clients(self) -> dict[str, MCPClient]:
         """
         Get the dictionary of MCP clients.
 
         Returns:
-            Dictionary mapping server names to AuthClient instances.
+            Dictionary mapping server names to MCP client instances.
             This is used by CommandControlAgent/AgentLoop to execute tools.
         """
         return self.mcp_clients

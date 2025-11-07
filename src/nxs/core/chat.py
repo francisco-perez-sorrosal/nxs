@@ -1,5 +1,5 @@
 from nxs.core.claude import Claude
-from nxs.mcp_client.client import MCPAuthClient
+from nxs.core.protocols import MCPClient
 from nxs.core.tools import ToolManager
 from nxs.logger import get_logger
 from anthropic.types import MessageParam
@@ -8,9 +8,9 @@ logger = get_logger("agent_loop")
 
 
 class AgentLoop:
-    def __init__(self, llm: Claude, clients: dict[str, MCPAuthClient], callbacks=None):
+    def __init__(self, llm: Claude, clients: dict[str, MCPClient], callbacks=None):
         self.llm: Claude = llm
-        self.tool_clients: dict[str, MCPAuthClient] = clients
+        self.tool_clients: dict[str, MCPClient] = clients
         self.messages: list[MessageParam] = []
         self.callbacks = callbacks or {}
 
