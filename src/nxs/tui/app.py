@@ -19,6 +19,12 @@ from .query_manager import QueryManager
 from .status_queue import StatusQueue
 from .services.mcp_refresher import MCPRefresher
 from nxs.core.artifact_manager import ArtifactManager
+from nxs.core.events import (
+    ArtifactsFetched,
+    ConnectionStatusChanged,
+    EventBus,
+    ReconnectProgress,
+)
 from nxs.mcp_client.client import ConnectionStatus
 from nxs.logger import get_logger
 
@@ -64,6 +70,7 @@ class NexusApp(App):
         self,
         agent_loop,
         artifact_manager: ArtifactManager,
+        event_bus: EventBus | None = None,
     ):
         """
         Initialize the Nexus TUI application.
@@ -71,6 +78,9 @@ class NexusApp(App):
         Args:
             agent_loop: The agent loop instance (core.chat.AgentLoop)
             artifact_manager: The ArtifactManager instance for accessing resources and commands
+            event_bus: Optional EventBus instance. If None, a new EventBus will be created.
+                      The EventBus is used for decoupled event-driven communication between
+                      the core layer (ArtifactManager) and the UI layer (NexusApp).
         """
         super().__init__()
         self.agent_loop = agent_loop
@@ -78,6 +88,18 @@ class NexusApp(App):
         self.resources: list[str] = []
         self.commands: list[str] = []
         self._mcp_initialized = False  # Track MCP initialization status
+
+        # Create or use provided event bus
+        self.event_bus = event_bus or EventBus()
+
+        # Set up event bus in ArtifactManager if not already set
+        if self.artifact_manager.event_bus is None:
+            self.artifact_manager.event_bus = self.event_bus
+
+        # Subscribe to events
+        self.event_bus.subscribe(ConnectionStatusChanged, self._on_connection_status_changed)
+        self.event_bus.subscribe(ReconnectProgress, self._on_reconnect_progress)
+        self.event_bus.subscribe(ArtifactsFetched, self._on_artifacts_fetched)
 
         # Initialize QueryManager with the processor function
         self.query_manager = QueryManager(processor=self._process_query)
@@ -141,10 +163,8 @@ class NexusApp(App):
         # Show loading message in status panel
         await self.status_queue.add_info_message("Initializing MCP connections...")
 
-        # Set up connection status change callback
-        # This must be done before initialization to catch all status changes
-        self.artifact_manager.on_status_change = self._on_mcp_status_change
-        self.artifact_manager.on_reconnect_progress = self._on_mcp_reconnect_progress
+        # Note: Event subscriptions are set up in __init__ via event_bus.subscribe()
+        # This ensures we catch all events published during initialization
 
         # Initialize MCP connections asynchronously in the background
         # This allows the TUI to appear immediately without blocking
@@ -239,21 +259,19 @@ class NexusApp(App):
             except Exception as panel_error:
                 logger.error(f"Failed to update MCP panel: {panel_error}")
     
-    def _on_mcp_status_change(self, server_name: str, status: ConnectionStatus):
+    def _on_connection_status_changed(self, event: ConnectionStatusChanged) -> None:
         """
-        Handle connection status change for an MCP server.
+        Handle connection status change event from ArtifactManager.
         
-        This callback is called whenever a server's connection status changes.
-        It updates the MCP panel to reflect the new status and shows user-friendly messages.
+        This event handler is called whenever a server's connection status changes.
+        It updates the MCP panel to reflect the new status.
         
         Args:
-            server_name: Name of the server
-            status: New connection status
+            event: ConnectionStatusChanged event
         """
+        server_name = event.server_name
+        status = event.status
         logger.info(f"Connection status changed for {server_name}: {status.value}")
-        
-        # Update MCP panel with connection status (status messages are shown in MCP panel, not status panel)
-        # No status queue messages for connection changes - they're shown in MCP panel
         
         # Check if this is a real status change (not just setting to already-connected)
         try:
@@ -262,15 +280,22 @@ class NexusApp(App):
                 # Check if already connected and has artifacts
                 cached = self.artifact_manager.get_cached_artifacts(server_name)
                 if cached and client.is_connected:
-                    total_cached = len(cached.get("tools", [])) + len(cached.get("prompts", [])) + len(cached.get("resources", []))
+                    total_cached = (
+                        len(cached.get("tools", []))
+                        + len(cached.get("prompts", []))
+                        + len(cached.get("resources", []))
+                    )
                     if total_cached > 0:
                         # Already connected with artifacts, don't refresh unnecessarily
-                        logger.debug(f"Server {server_name} already connected with {total_cached} artifact(s), skipping refresh")
+                        logger.debug(
+                            f"Server {server_name} already connected with {total_cached} artifact(s), skipping refresh"
+                        )
                         # Still update reconnect info to clear any stale progress
                         try:
                             mcp_panel = self.query_one("#mcp-panel", MCPPanel)
                             if client:
-                                reconnect_info = client.reconnect_info
+                                # reconnect_info is implementation-specific, not in protocol
+                                reconnect_info = client.reconnect_info  # type: ignore[attr-defined]
                                 mcp_panel.update_reconnect_info(server_name, reconnect_info)
                                 self.mcp_refresher.schedule_refresh()
                         except Exception:
@@ -287,7 +312,8 @@ class NexusApp(App):
             # Update reconnect info from client
             client = self.artifact_manager.clients.get(server_name)
             if client:
-                reconnect_info = client.reconnect_info
+                # reconnect_info is implementation-specific, not in protocol
+                reconnect_info = client.reconnect_info  # type: ignore[attr-defined]
                 mcp_panel.update_reconnect_info(server_name, reconnect_info)
             
             # Update last check time when status changes
@@ -311,20 +337,17 @@ class NexusApp(App):
         except Exception as e:
             logger.error(f"Error updating MCP panel status: {e}")
 
-    def _on_mcp_reconnect_progress(self, server_name: str, attempts: int, max_attempts: int, next_retry_delay: float):
+    def _on_reconnect_progress(self, event: ReconnectProgress) -> None:
         """
-        Handle reconnection progress updates for an MCP server.
+        Handle reconnection progress event from ArtifactManager.
         
-        This callback is called periodically during reconnection to update progress information.
+        This event handler is called periodically during reconnection to update progress information.
         Debounced to prevent creating too many refresh tasks.
         
         Args:
-            server_name: Name of the server
-            attempts: Current reconnection attempt number
-            max_attempts: Maximum reconnection attempts
-            next_retry_delay: Seconds until next retry attempt
+            event: ReconnectProgress event
         """
-        import time
+        server_name = event.server_name
         current_time = time.time()
         
         # Debounce: only update if enough time has passed since last update for this server
@@ -333,18 +356,42 @@ class NexusApp(App):
             return  # Skip this update to avoid too many refresh tasks
         
         self._last_reconnect_progress_update[server_name] = current_time
-        logger.debug(f"Reconnection progress for {server_name}: attempt {attempts}/{max_attempts}, retry in {next_retry_delay:.1f}s")
+        logger.debug(
+            f"Reconnection progress for {server_name}: attempt {event.attempts}/{event.max_attempts}, "
+            f"retry in {event.next_retry_delay:.1f}s"
+        )
         
         try:
             mcp_panel = self.query_one("#mcp-panel", MCPPanel)
             client = self.artifact_manager.clients.get(server_name)
             if client:
-                reconnect_info = client.reconnect_info
+                # reconnect_info is implementation-specific, not in protocol
+                reconnect_info = client.reconnect_info  # type: ignore[attr-defined]
                 mcp_panel.update_reconnect_info(server_name, reconnect_info)
                 # Schedule refresh with task management to prevent accumulation
                 self.mcp_refresher.schedule_refresh()
         except Exception as e:
             logger.debug(f"Error updating reconnect progress for {server_name}: {e}")
+
+    def _on_artifacts_fetched(self, event: ArtifactsFetched) -> None:
+        """
+        Handle artifacts fetched event from ArtifactManager.
+        
+        This event handler is called when artifacts are fetched for a server.
+        It schedules a refresh of the MCP panel if artifacts changed.
+        
+        Args:
+            event: ArtifactsFetched event
+        """
+        if event.changed:
+            logger.debug(
+                f"Artifacts changed for {event.server_name}, scheduling refresh"
+            )
+            self.mcp_refresher.schedule_refresh(server_name=event.server_name)
+        else:
+            logger.debug(
+                f"Artifacts fetched for {event.server_name} (no changes)"
+            )
 
     
     async def _preload_all_prompt_info(self) -> None:
@@ -700,7 +747,8 @@ class NexusApp(App):
                 # Check all servers asynchronously
                 for server_name, client in self.artifact_manager.clients.items():
                     try:
-                        status = client.connection_status
+                        # connection_status is implementation-specific, not in protocol
+                        status = client.connection_status  # type: ignore[attr-defined]
                         
                         # Handle ERROR status servers - retry connection periodically (every 60 seconds)
                         if status == ConnectionStatus.ERROR:
@@ -710,7 +758,8 @@ class NexusApp(App):
                             if time_since_check >= 60.0:
                                 logger.info(f"Retrying connection for ERROR status server: {server_name}")
                                 try:
-                                    await client.retry_connection(use_auth=False)
+                                    # retry_connection is implementation-specific, not in protocol
+                                    await client.retry_connection(use_auth=False)  # type: ignore[attr-defined]
                                     # Update last check time
                                     self.artifact_manager.update_server_last_check(server_name)
                                 except Exception as e:

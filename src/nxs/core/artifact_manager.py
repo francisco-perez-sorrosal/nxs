@@ -6,13 +6,14 @@ The ArtifactManager is responsible for:
 - Providing access to prompts (for NexusApp)
 - Providing access to tools (for CommandControlAgent/AgentLoop)
 - Managing the lifecycle of MCP client connections
+- Publishing events for connection status changes, reconnection progress, and artifact fetches
 """
 
 import asyncio
 import time
 from contextlib import AsyncExitStack
 from functools import partial
-from typing import Optional, Callable
+from typing import Callable, Optional
 
 from mcp.types import Prompt, Tool, Resource
 
@@ -21,6 +22,12 @@ from nxs.core.mcp_config import (
     get_all_server_names,
     get_server_config,
     load_mcp_config,
+)
+from nxs.core.events import (
+    ArtifactsFetched,
+    ConnectionStatusChanged,
+    EventBus,
+    ReconnectProgress,
 )
 from nxs.mcp_client.client import MCPAuthClient, ConnectionStatus
 from nxs.core.protocols import MCPClient
@@ -35,6 +42,8 @@ class ArtifactManager:
     def __init__(
         self,
         config: Optional[MCPServersConfig] = None,
+        event_bus: Optional[EventBus] = None,
+        # Legacy callback support (deprecated, use event_bus instead)
         on_status_change: Optional[Callable[[str, ConnectionStatus], None]] = None,
         on_reconnect_progress: Optional[Callable[[str, int, int, float], None]] = None,
     ):
@@ -43,14 +52,21 @@ class ArtifactManager:
 
         Args:
             config: MCP servers configuration. If None, loads from default location.
-            on_status_change: Optional callback called when connection status changes.
+            event_bus: Optional EventBus instance for publishing events. If provided,
+                      events will be published for connection status changes, reconnection
+                      progress, and artifact fetches. If None, events are not published.
+            on_status_change: DEPRECATED - Use event_bus and subscribe to ConnectionStatusChanged instead.
+                             Optional callback called when connection status changes.
                              Receives (server_name, status) as arguments.
-            on_reconnect_progress: Optional callback called during reconnection progress.
+            on_reconnect_progress: DEPRECATED - Use event_bus and subscribe to ReconnectProgress instead.
+                                   Optional callback called during reconnection progress.
                                    Receives (server_name, attempts, max_attempts, next_retry_delay) as arguments.
         """
         self.config = config or load_mcp_config()
         self.mcp_clients: dict[str, MCPClient] = {}
         self._exit_stack: Optional[AsyncExitStack] = None
+        self.event_bus = event_bus
+        # Legacy callback support (maintained for backward compatibility)
         self.on_status_change = on_status_change
         self.on_reconnect_progress = on_reconnect_progress
         self._server_statuses: dict[str, ConnectionStatus] = {}
@@ -63,30 +79,50 @@ class ArtifactManager:
         """
         Handle connection status change for a specific server.
 
-        Centralized error handling for status change callbacks.
+        Publishes ConnectionStatusChanged event and calls legacy callback if present.
 
         Args:
             status: New connection status
             server_name: Name of the server
         """
+        previous_status = self._server_statuses.get(server_name)
         self._server_statuses[server_name] = status
+
+        # Publish event if event bus is available
+        if self.event_bus:
+            try:
+                self.event_bus.publish(
+                    ConnectionStatusChanged(
+                        server_name=server_name,
+                        status=status,
+                        previous_status=previous_status,
+                    )
+                )
+            except Exception as e:
+                logger.error(
+                    f"Error publishing ConnectionStatusChanged event for {server_name}: {e}"
+                )
+
+        # Legacy callback support (maintained for backward compatibility)
         if self.on_status_change:
             try:
                 self.on_status_change(server_name, status)
             except Exception as e:
-                logger.error(f"Error in status change callback for {server_name}: {e}")
+                logger.error(
+                    f"Error in status change callback for {server_name}: {e}"
+                )
 
     def _handle_reconnect_progress(
         self,
         attempts: int,
         max_attempts: int,
         next_retry_delay: float,
-        server_name: str
+        server_name: str,
     ) -> None:
         """
         Handle reconnection progress for a specific server.
 
-        Centralized error handling for reconnect progress callbacks.
+        Publishes ReconnectProgress event and calls legacy callback if present.
 
         Args:
             attempts: Current reconnection attempt number
@@ -94,11 +130,32 @@ class ArtifactManager:
             next_retry_delay: Seconds until next retry
             server_name: Name of the server
         """
+        # Publish event if event bus is available
+        if self.event_bus:
+            try:
+                self.event_bus.publish(
+                    ReconnectProgress(
+                        server_name=server_name,
+                        attempts=attempts,
+                        max_attempts=max_attempts,
+                        next_retry_delay=next_retry_delay,
+                    )
+                )
+            except Exception as e:
+                logger.error(
+                    f"Error publishing ReconnectProgress event for {server_name}: {e}"
+                )
+
+        # Legacy callback support (maintained for backward compatibility)
         if self.on_reconnect_progress:
             try:
-                self.on_reconnect_progress(server_name, attempts, max_attempts, next_retry_delay)
+                self.on_reconnect_progress(
+                    server_name, attempts, max_attempts, next_retry_delay
+                )
             except Exception as e:
-                logger.error(f"Error in reconnect progress callback for {server_name}: {e}")
+                logger.error(
+                    f"Error in reconnect progress callback for {server_name}: {e}"
+                )
 
     async def initialize(self, use_auth: bool = False) -> None:
         """
@@ -595,6 +652,27 @@ class ArtifactManager:
                 f"{len(artifacts['resources'])} resources"
             )
 
+            # Check if artifacts changed compared to cache
+            changed = self.have_artifacts_changed(server_name, artifacts)
+
+            # Cache the artifacts
+            self.cache_artifacts(server_name, artifacts)
+
+            # Publish ArtifactsFetched event if event bus is available
+            if self.event_bus:
+                try:
+                    self.event_bus.publish(
+                        ArtifactsFetched(
+                            server_name=server_name,
+                            artifacts=artifacts,
+                            changed=changed,
+                        )
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Error publishing ArtifactsFetched event for {server_name}: {e}"
+                    )
+
         except Exception as e:
             logger.error(f"Failed to fetch artifacts for {server_name}: {e}")
 
@@ -627,7 +705,9 @@ class ArtifactManager:
         for mcp_name, mcp_client in self.mcp_clients.items():
             try:
                 logger.debug(f"Disconnecting from {mcp_name}")
-                await mcp_client.disconnect()
+                # disconnect is implementation-specific, not in protocol
+                if hasattr(mcp_client, 'disconnect'):
+                    await mcp_client.disconnect()  # type: ignore[attr-defined]
             except Exception as e:
                 logger.error(f"Error disconnecting from {mcp_name}: {e}")
 
