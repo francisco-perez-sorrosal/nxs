@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from nxs.core.claude import Claude
 from nxs.core.protocols import MCPClient
 from nxs.core.tools import ToolManager
@@ -8,9 +9,9 @@ logger = get_logger("agent_loop")
 
 
 class AgentLoop:
-    def __init__(self, llm: Claude, clients: dict[str, MCPClient], callbacks=None):
+    def __init__(self, llm: Claude, clients: Mapping[str, MCPClient], callbacks=None):
         self.llm: Claude = llm
-        self.tool_clients: dict[str, MCPClient] = clients
+        self.tool_clients: Mapping[str, MCPClient] = clients
         self.messages: list[MessageParam] = []
         self.callbacks = callbacks or {}
 

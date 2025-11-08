@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from typing import Optional, Literal, List
 from mcp.types import CallToolResult, Tool, TextContent
 from nxs.core.protocols import MCPClient
@@ -7,7 +8,7 @@ from anthropic.types import Message, ToolResultBlockParam
 
 class ToolManager:
     @classmethod
-    async def get_all_tools(cls, clients: dict[str, MCPClient]) -> list[Tool]:
+    async def get_all_tools(cls, clients: Mapping[str, MCPClient]) -> list[Tool]:
         """Gets all tools from the provided clients."""
         tools = []
         for client in clients.values():
@@ -48,7 +49,7 @@ class ToolManager:
         }
 
     @classmethod
-    async def execute_tool_requests(cls, clients: dict[str, MCPClient], message: Message) -> List[ToolResultBlockParam]:
+    async def execute_tool_requests(cls, clients: Mapping[str, MCPClient], message: Message) -> List[ToolResultBlockParam]:
         """Executes a list of tool requests against the provided clients."""
         tool_requests = [block for block in message.content if block.type == "tool_use"]
         tool_result_blocks: list[ToolResultBlockParam] = []

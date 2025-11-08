@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from typing import Dict, Optional
+from types import MappingProxyType
 
 from mcp.types import Prompt, Tool
 
@@ -121,9 +123,9 @@ class ArtifactManager:
     # Client access
     # --------------------------------------------------------------------- #
     @property
-    def clients(self) -> dict[str, MCPClient]:
-        """Return a shallow copy of configured MCP clients."""
-        return dict(self._clients)
+    def clients(self) -> Mapping[str, MCPClient]:
+        """Return a read-only mapping of configured MCP clients."""
+        return MappingProxyType(self._clients)
 
     def get_server_statuses(self) -> dict[str, ConnectionStatus]:
         """Derive server connection statuses from the underlying clients."""
