@@ -30,6 +30,8 @@ class MCPAuthClient:
         self,
         server_url: str,
         transport_type: str = "streamable_http",
+        *,
+        connection_manager: Optional[ConnectionManager] = None,
         on_status_change: Optional[Callable[[ConnectionStatus], None]] = None,
         on_reconnect_progress: Optional[Callable[[int, int, float], None]] = None,
     ):
@@ -37,7 +39,13 @@ class MCPAuthClient:
         self.transport_type = transport_type
         self._use_auth = False
 
-        self._connection_manager = ConnectionManager(
+        if connection_manager is not None and (on_status_change or on_reconnect_progress):
+            logger.debug(
+                "MCPAuthClient received both connection_manager and callbacks; "
+                "callbacks will be ignored because the manager should already be configured.",
+            )
+
+        self._connection_manager = connection_manager or ConnectionManager(
             on_status_change=on_status_change,
             on_reconnect_progress=on_reconnect_progress,
         )
@@ -74,6 +82,11 @@ class MCPAuthClient:
     def reconnect_info(self) -> dict[str, Any]:
         """Reconnection metadata from the connection manager."""
         return self._connection_manager.reconnect_info
+
+    @property
+    def connection_manager(self) -> ConnectionManager:
+        """Expose the underlying connection manager."""
+        return self._connection_manager
 
     # --------------------------------------------------------------------- #
     # Connection lifecycle

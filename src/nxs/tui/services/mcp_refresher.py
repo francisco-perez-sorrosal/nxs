@@ -6,6 +6,7 @@ refresh operations, including task management and debouncing.
 """
 
 import asyncio
+import time
 from typing import TYPE_CHECKING, Callable
 
 from nxs.core.artifact_manager import ArtifactManager
@@ -50,6 +51,20 @@ class RefreshService:
         # Task management
         self._refresh_tasks: set[asyncio.Task] = set()
         self._refresh_lock = asyncio.Lock()
+        self._server_last_check: dict[str, float] = {}
+    def get_server_last_check(self, server_name: str) -> float:
+        """Return the last artifact check timestamp for a server."""
+        return self._server_last_check.get(server_name, 0.0)
+
+    def update_server_last_check(self, server_name: str, timestamp: float | None = None) -> None:
+        """Record the last artifact check time for a server."""
+        if timestamp is None:
+            timestamp = time.time()
+        self._server_last_check[server_name] = timestamp
+
+    def get_all_last_checks(self) -> dict[str, float]:
+        """Expose a copy of the last-check timestamps."""
+        return dict(self._server_last_check)
 
     def schedule_refresh(
         self,
@@ -148,6 +163,7 @@ class RefreshService:
             retry_on_empty=retry_on_empty,
             timeout=self.DEFAULT_TIMEOUT,
         )
+        self.update_server_last_check(server_name)
 
         # Get all servers data (cached or empty for others)
         servers_data = self._get_all_cached_or_empty()
@@ -185,6 +201,7 @@ class RefreshService:
         # Cache all artifacts
         for name, artifacts in servers_data.items():
             self.artifact_manager.cache_artifacts(name, artifacts)
+            self.update_server_last_check(name)
 
         # Update panel
         mcp_panel = self.mcp_panel_getter()
@@ -207,9 +224,10 @@ class RefreshService:
         server_statuses = self.artifact_manager.get_server_statuses()
 
         server_names = set(servers_data.keys()) if servers_data else set(server_statuses.keys())
-        server_last_check = {}
-        for server_name in server_names:
-            server_last_check[server_name] = self.artifact_manager.get_server_last_check(server_name)
+        server_last_check = {
+            server_name: self.get_server_last_check(server_name)
+            for server_name in server_names
+        }
 
         logger.debug(
             f"Updating panel: {len(servers_data)} servers in data, "
@@ -262,6 +280,7 @@ class RefreshService:
                 servers_data[server_name] = cached
             else:
                 servers_data[server_name] = {"tools": [], "prompts": [], "resources": []}
+            self._server_last_check.setdefault(server_name, 0.0)
 
         return servers_data
 

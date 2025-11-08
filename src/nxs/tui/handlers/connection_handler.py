@@ -115,7 +115,7 @@ class ConnectionHandler:
                 self._reconnect_info_cache.pop(server_name, None)
 
             # Update last check time when status changes
-            self.artifact_manager.update_server_last_check(server_name)
+            self.mcp_refresher.update_server_last_check(server_name)
 
             # Refresh the panel with current data
             # For CONNECTED status, add a small delay to ensure session is fully ready

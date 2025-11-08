@@ -105,11 +105,8 @@ class NexusApp(App):
         self._mcp_initialized = False  # Track MCP initialization status
 
         # Create or use provided event bus
-        self.event_bus = event_bus or EventBus()
-
-        # Set up event bus in ArtifactManager if not already set
-        if self.artifact_manager.event_bus is None:
-            self.artifact_manager.event_bus = self.event_bus
+        self.event_bus = event_bus or artifact_manager.event_bus or EventBus()
+        self.artifact_manager.event_bus = self.event_bus
 
         # Initialize prompt caches
         prompt_info_cache = prompt_info_cache or MemoryCache[str, str | None]()
@@ -461,7 +458,7 @@ class NexusApp(App):
                         # Handle ERROR status servers - retry connection periodically (every 60 seconds)
                         if status == ConnectionStatus.ERROR:
                             # Check if we should retry (every 60 seconds)
-                            last_check = self.artifact_manager.get_server_last_check(server_name)
+                            last_check = self.mcp_refresher.get_server_last_check(server_name)
                             time_since_check = time.time() - last_check
                             if time_since_check >= 60.0:
                                 logger.info(f"Retrying connection for ERROR status server: {server_name}")
@@ -469,11 +466,11 @@ class NexusApp(App):
                                     # retry_connection is implementation-specific, not in protocol
                                     await client.retry_connection(use_auth=False)  # type: ignore[attr-defined]
                                     # Update last check time
-                                    self.artifact_manager.update_server_last_check(server_name)
+                                    self.mcp_refresher.update_server_last_check(server_name)
                                 except Exception as e:
                                     logger.debug(f"Error retrying connection for {server_name}: {e}")
                                     # Update last check time even on failure to avoid retrying too frequently
-                                    self.artifact_manager.update_server_last_check(server_name)
+                                    self.mcp_refresher.update_server_last_check(server_name)
                             continue
 
                         # Handle connected servers - check for artifacts
@@ -481,7 +478,7 @@ class NexusApp(App):
                             logger.debug(f"Periodic refresh check for {server_name}")
 
                             # Update last check time
-                            self.artifact_manager.update_server_last_check(server_name)
+                            self.mcp_refresher.update_server_last_check(server_name)
 
                             # Get cached artifacts
                             cached_artifacts = self.artifact_manager.get_cached_artifacts(server_name)

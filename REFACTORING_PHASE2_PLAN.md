@@ -637,245 +637,32 @@ async def test_orchestrator_selects_correct_strategy():
 
 ---
 
-### Step 2.1.3: Further Decompose ArtifactManager (523 → ~250 lines)
+### Step 2.1.3: Further Decompose ArtifactManager (523 → ~250 lines) ✅ **Completed – 2025-11-08**
 
-**Target:** `core/artifact_manager.py` (523 lines)
-**Goal:** 52% reduction to ~250 lines
-**Estimated Effort:** 3-4 hours
+**Target:** `core/artifact_manager.py`  
+**Result:** 313 lines (~40% reduction) with supporting infrastructure extracted
 
-#### Current Problems
+#### Outcome Summary
 
-1. **Client creation logic embedded** (lines 97-130, 33 lines):
-   ```python
-   def _create_clients(self) -> list[tuple[str, MCPAuthClient]]:
-       # Creates MCPAuthClient instances
-       # Wires callbacks and event bus
-       # 33 lines of instantiation logic
-   ```
+- Extracted MCP client instantiation into `nxs/mcp_client/factory.py`, leaving `ArtifactManager` focused on orchestration and event publication.
+- Removed redundant `_server_statuses` / `_server_last_check` tracking; connection status now comes from each client's `ConnectionManager`, while last-check bookkeeping lives in the presentation layer refresh service.
+- Normalized event wiring so the manager always owns the `EventBus`, with UI components reacting exclusively through published events and cache APIs.
+- Added regression tests for the factory + manager initialization path to keep client creation decoupled and verifiable.
 
-2. **Server status tracking** duplicated:
-   ```python
-   self._server_statuses: dict[str, ConnectionStatus] = {}
-   self._server_last_check: dict[str, float] = {}
-   ```
-   - Should be in `ConnectionManager`, not `ArtifactManager`
+#### Key Changes
 
-3. **15+ public methods** mixing high-level and low-level concerns
-
-4. **Legacy callback support** adds complexity
-
-#### Proposed Solution: Extract ClientFactory
-
-**Create new module:** `mcp_client/factory.py`
-
-```python
-# mcp_client/factory.py (~150 lines)
-from typing import Callable, Optional
-from .client import MCPAuthClient
-from .connection import ConnectionManager
-from nxs.core.events import EventBus
-from nxs.core.mcp_config import MCPServerConfig
-
-class ClientFactory:
-    """Factory for creating and configuring MCPAuthClient instances."""
-
-    def __init__(self, event_bus: Optional[EventBus] = None):
-        self.event_bus = event_bus
-
-    def create_client(
-        self,
-        server_name: str,
-        config: MCPServerConfig,
-        on_status_change: Optional[Callable] = None,
-        on_reconnect_progress: Optional[Callable] = None,
-    ) -> MCPAuthClient:
-        """Create a configured MCPAuthClient for a server."""
-
-        # Create connection manager
-        conn_manager = ConnectionManager(
-            server_name=server_name,
-            config=config,
-            event_bus=self.event_bus,
-        )
-
-        # Wire callbacks if provided
-        if on_status_change:
-            conn_manager.on_status_change = on_status_change
-        if on_reconnect_progress:
-            conn_manager.on_reconnect_progress = on_reconnect_progress
-
-        # Create and return client
-        client = MCPAuthClient(
-            server_name=server_name,
-            connection_manager=conn_manager,
-        )
-        return client
-
-    def create_clients(
-        self,
-        configs: dict[str, MCPServerConfig],
-        status_callback: Optional[Callable] = None,
-        progress_callback: Optional[Callable] = None,
-    ) -> dict[str, MCPAuthClient]:
-        """Create clients for all server configurations."""
-        clients = {}
-        for name, config in configs.items():
-            # Wire per-server callbacks using partial
-            server_status_callback = None
-            if status_callback:
-                server_status_callback = lambda status, n=name: status_callback(n, status)
-
-            server_progress_callback = None
-            if progress_callback:
-                server_progress_callback = lambda *args, n=name: progress_callback(n, *args)
-
-            clients[name] = self.create_client(
-                name,
-                config,
-                server_status_callback,
-                server_progress_callback,
-            )
-        return clients
-```
-
-**Refactored ArtifactManager:**
-```python
-# core/artifact_manager.py (~250 lines)
-from nxs.mcp_client.factory import ClientFactory
-from .artifacts import ArtifactRepository, ArtifactCache, ArtifactChangeDetector
-from .events import EventBus, ConnectionStatusChanged, ArtifactsFetched
-
-class ArtifactManager:
-    """High-level facade for MCP artifact management."""
-
-    def __init__(
-        self,
-        config_path: str,
-        event_bus: Optional[EventBus] = None,
-        client_factory: Optional[ClientFactory] = None,
-        artifact_cache: Optional[Cache] = None,
-    ):
-        self.config_path = config_path
-        self.event_bus = event_bus or EventBus()
-
-        # Use provided factory or create default
-        self._client_factory = client_factory or ClientFactory(self.event_bus)
-
-        # Artifact components
-        self._artifact_repository = ArtifactRepository()
-        self._artifact_cache = ArtifactCache(artifact_cache or MemoryCache())
-        self._change_detector = ArtifactChangeDetector(self._artifact_cache)
-
-        # Clients (created during initialize)
-        self.clients: dict[str, MCPClient] = {}
-
-    async def initialize(self):
-        """Initialize MCP connections."""
-        # Load config
-        config = load_mcp_config(self.config_path)
-
-        # Create clients using factory
-        self.clients = self._client_factory.create_clients(
-            config.mcp_servers,
-            status_callback=self._handle_status_change,
-            progress_callback=self._handle_reconnect_progress,
-        )
-
-        # Connect all clients
-        await asyncio.gather(*[
-            client.connect() for client in self.clients.values()
-        ])
-
-    # High-level artifact access (delegates to repository)
-    async def get_resource_list(self) -> list[str]:
-        return await self._artifact_repository.get_resource_list(self.clients)
-
-    async def get_server_artifacts(self, server_name: str) -> dict:
-        artifacts = await self._artifact_repository.get_server_artifacts(
-            server_name, self.clients[server_name]
-        )
-
-        # Check for changes and publish event
-        changed = self._change_detector.has_changed(server_name, artifacts)
-        if changed:
-            self._artifact_cache.set(server_name, artifacts)
-            self.event_bus.publish(ArtifactsFetched(
-                server_name=server_name,
-                artifacts=artifacts,
-                changed=True,
-            ))
-
-        return artifacts
-
-    def _handle_status_change(self, server_name: str, status: ConnectionStatus):
-        """Handle connection status changes."""
-        # Publish event
-        self.event_bus.publish(ConnectionStatusChanged(
-            server_name=server_name,
-            status=status,
-        ))
-
-    def _handle_reconnect_progress(self, server_name: str, attempts: int, ...):
-        """Handle reconnection progress."""
-        # Publish event
-        self.event_bus.publish(ReconnectProgress(
-            server_name=server_name,
-            attempts=attempts,
-            ...
-        ))
-```
+- `nxs/mcp_client/factory.py`: new `ClientFactory` that builds `MCPAuthClient` instances with callback adapters and injected `ConnectionManager`.
+- `nxs/mcp_client/client.py`: constructor now accepts an injected `ConnectionManager`, maintaining legacy callback parameters for backwards compatibility.
+- `nxs/core/artifact_manager.py`: consumes `ClientFactory`, keeps only `_clients`, derives connection status on demand, and handles async cleanup via `gather`.
+- UI updates (`tui/app.py`, `tui/services/mcp_refresher.py`, `tui/handlers/connection_handler.py`): presentation layer owns last-check timestamps and continues to react via events.
+- Tests: added `tests/mcp_client/test_factory.py` covering factory wiring and manager initialization/cleanup behaviour.
 
 #### Benefits
 
-✅ **Single Responsibility:** Factory handles client creation, Manager handles artifacts
-✅ **Testability:** Can inject mock factory for testing
-✅ **Status in Right Place:** ConnectionManager owns status, not ArtifactManager
-✅ **Cleaner Code:** Removed 273 lines of complexity
-✅ **Dependency Injection:** Easy to swap implementations
-
-#### Migration Steps
-
-1. Create `mcp_client/factory.py` with `ClientFactory` class
-2. Move `_create_clients()` logic to factory
-3. Remove `_server_statuses` and `_server_last_check` from `ArtifactManager`
-4. Update `ArtifactManager.__init__()` to accept `ClientFactory`
-5. Update `ArtifactManager.initialize()` to use factory
-6. Add unit tests for `ClientFactory`
-7. Update integration tests for `ArtifactManager`
-
-#### Testing Strategy
-
-```python
-# tests/mcp_client/test_factory.py
-def test_client_factory_creates_client():
-    factory = ClientFactory(event_bus=mock_event_bus)
-    client = factory.create_client("test-server", mock_config)
-    assert isinstance(client, MCPAuthClient)
-    assert client.server_name == "test-server"
-
-async def test_factory_creates_multiple_clients():
-    factory = ClientFactory()
-    clients = factory.create_clients({
-        "server1": mock_config1,
-        "server2": mock_config2,
-    })
-    assert len(clients) == 2
-    assert "server1" in clients
-    assert "server2" in clients
-
-# tests/core/test_artifact_manager.py
-async def test_artifact_manager_with_mock_factory():
-    mock_factory = Mock(spec=ClientFactory)
-    mock_factory.create_clients.return_value = {"server1": mock_client}
-
-    manager = ArtifactManager(
-        config_path="test.json",
-        client_factory=mock_factory,
-    )
-    await manager.initialize()
-
-    mock_factory.create_clients.assert_called_once()
-```
+- ✅ `ArtifactManager` now has a single responsibility: coordinating artifacts and emitting events.
+- ✅ Infrastructure concerns are isolated in the factory/connection manager, easing transport changes and testing.
+- ✅ Presentation logic keeps its own state, eliminating hidden domain caches in the core layer.
+- ✅ Dedicated tests protect the client creation flow against regressions.
 
 ---
 
