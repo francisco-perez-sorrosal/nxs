@@ -610,198 +610,30 @@ async def test_orchestrator_selects_correct_strategy():
 
 ---
 
-### Step 2.1.2: Decompose MCPPanel Widget (838 → ~300 lines)
+### Step 2.1.2: Decompose MCPPanel Widget (838 → ~300 lines) ✅ **Completed – 2025-11-08**
 
-**Target:** `tui/widgets/mcp_panel.py` (838 lines)
-**Goal:** 64% reduction to ~300 lines
-**Estimated Effort:** 4-5 hours
+**Target:** `tui/widgets/mcp_panel.py`
 
-#### Current Problems
+#### Outcome Summary
 
-1. **Module-level helpers** (lines 20-172, 152 lines):
-   - `sanitize_widget_id()`
-   - `get_status_icon()`
-   - `get_status_text()`
-   - `_format_server_display()` (106 lines!)
+- Broke the monolithic MCP panel into focused components: status formatting helpers, `ServerWidget`, `ArtifactItem`, and the thin `MCPPanel` orchestrator.
+- Eliminated the blank-space regression by introducing zero-padding statics and compact container styles; multiple servers now render back-to-back with their dividers.
+- Added targeted unit tests covering status formatting, per-server rendering, and full panel orchestration.
 
-2. **Three classes in one file:**
-   - `ArtifactItem` (35 lines)
-   - `ServerWidget` (375 lines!)
-   - `MCPPanel` (254 lines)
+#### Key Changes
 
-3. **Complex update logic** with cache comparison
-
-4. **Mixed concerns:** Formatting, state management, rendering
-
-#### Proposed Solution: Extract Components
-
-**Create new modules:**
-
-```
-tui/
-├── formatters/
-│   ├── __init__.py
-│   └── status.py           # Status formatting functions
-├── widgets/
-│   ├── mcp_panel.py        # Main MCPPanel (~300 lines)
-│   ├── server_widget.py    # ServerWidget (~400 lines, further decomposable)
-│   └── artifact_item.py    # ArtifactItem (~50 lines)
-```
-
-**Extract Status Formatters:**
-```python
-# tui/formatters/status.py (~150 lines)
-from rich.text import Text
-from nxs.mcp_client.connection import ConnectionStatus
-
-def sanitize_widget_id(name: str) -> str:
-    """Sanitize server name for use as widget ID."""
-    ...
-
-def get_status_icon(status: ConnectionStatus) -> str:
-    """Get icon for connection status."""
-    if status == ConnectionStatus.CONNECTED:
-        return "🟢"
-    elif status == ConnectionStatus.CONNECTING:
-        return "🟡"
-    ...
-
-def get_status_text(status: ConnectionStatus) -> str:
-    """Get text description for connection status."""
-    ...
-
-def format_server_display(
-    name: str,
-    status: ConnectionStatus,
-    has_error: bool,
-    error_message: str | None,
-    reconnect_info: dict | None,
-) -> Text:
-    """Format server display text with status and reconnection info."""
-    ...
-```
-
-**Extract ArtifactItem:**
-```python
-# tui/widgets/artifact_item.py (~50 lines)
-from textual.widgets import Static
-
-class ArtifactItem(Static):
-    """Widget representing a single artifact (resource/prompt/tool)."""
-
-    def __init__(self, artifact_type: str, name: str, description: str = ""):
-        super().__init__()
-        self.artifact_type = artifact_type
-        self.name = name
-        self.description = description
-
-    def render(self):
-        # Render artifact with icon and name
-        ...
-```
-
-**Extract ServerWidget:**
-```python
-# tui/widgets/server_widget.py (~400 lines)
-from textual.containers import Vertical
-from textual.widgets import Label, Collapsible
-from ..formatters.status import format_server_display
-from .artifact_item import ArtifactItem
-
-class ServerWidget(Vertical):
-    """Widget displaying a single MCP server and its artifacts."""
-
-    def __init__(self, server_name: str, ...):
-        super().__init__()
-        self.server_name = server_name
-        self._status_label = Label()
-        self._artifacts_container = Vertical()
-
-    def update_status(self, status: ConnectionStatus, reconnect_info=None):
-        """Update server status display."""
-        display_text = format_server_display(
-            self.server_name, status, reconnect_info
-        )
-        self._status_label.update(display_text)
-
-    def update_artifacts(self, resources, prompts, tools):
-        """Update artifact display."""
-        self._artifacts_container.clear()
-        for resource in resources:
-            self._artifacts_container.mount(ArtifactItem("resource", resource))
-        ...
-```
-
-**Simplified MCPPanel:**
-```python
-# tui/widgets/mcp_panel.py (~300 lines)
-from textual.containers import Vertical, VerticalScroll
-from .server_widget import ServerWidget
-
-class MCPPanel(Vertical):
-    """Panel displaying all MCP servers and their artifacts."""
-
-    def __init__(self):
-        super().__init__()
-        self._server_widgets: dict[str, ServerWidget] = {}
-        self._server_container = VerticalScroll()
-
-    def compose(self):
-        yield self._server_container
-
-    def update_servers(self, servers_data: dict):
-        """Update all server displays."""
-        for server_name, data in servers_data.items():
-            if server_name not in self._server_widgets:
-                widget = ServerWidget(server_name)
-                self._server_widgets[server_name] = widget
-                self._server_container.mount(widget)
-
-            widget = self._server_widgets[server_name]
-            widget.update_status(data["status"], data.get("reconnect_info"))
-            widget.update_artifacts(
-                data.get("resources", []),
-                data.get("prompts", []),
-                data.get("tools", [])
-            )
-```
+- New formatter module: `tui/formatters/status.py` (+ exports in `__init__.py`)
+- Widget extractions & helpers: `tui/widgets/server_widget.py`, `tui/widgets/artifact_item.py`, `tui/widgets/static_no_margin.py`
+- Refactored panel: `tui/widgets/mcp_panel.py`
+- Tests: `tests/tui/formatters/test_status.py`, `tests/tui/widgets/test_server_widget.py`, `tests/tui/widgets/test_mcp_panel.py`
 
 #### Benefits
 
-✅ **Separation of Concerns:** Formatting, widget logic, main panel separated
-✅ **Reusable Formatters:** Status formatting can be used elsewhere
-✅ **Testable Components:** Each widget can be tested independently
-✅ **Cleaner Code:** Smaller, focused files instead of one giant file
-✅ **Easier Maintenance:** Changes to formatting don't affect widget logic
+- ✅ Clear separation of concerns (formatting vs. presentation vs. orchestration)
+- ✅ Lean MCP panel (<150 lines) with straightforward update flow
+- ✅ Reliable layout—no hidden second server, no excessive whitespace
+- ✅ Regression coverage for future refactors
 
-#### Migration Steps
-
-1. Create `tui/formatters/` package
-2. Extract formatters → `tui/formatters/status.py`
-3. Create `tui/widgets/artifact_item.py` with `ArtifactItem` class
-4. Create `tui/widgets/server_widget.py` with `ServerWidget` class
-5. Refactor `MCPPanel` to compose `ServerWidget` instances
-6. Update imports throughout codebase
-7. Add unit tests for formatters
-8. Add widget tests for components
-
-#### Testing Strategy
-
-```python
-# tests/tui/formatters/test_status.py
-def test_get_status_icon_connected():
-    assert get_status_icon(ConnectionStatus.CONNECTED) == "🟢"
-
-def test_format_server_display_with_reconnect():
-    text = format_server_display("server1", ConnectionStatus.RECONNECTING, ...)
-    assert "Reconnecting" in str(text)
-
-# tests/tui/widgets/test_server_widget.py
-async def test_server_widget_updates_status():
-    widget = ServerWidget("test-server")
-    widget.update_status(ConnectionStatus.CONNECTED)
-    # Assert status label updated correctly
-```
 
 ---
 
