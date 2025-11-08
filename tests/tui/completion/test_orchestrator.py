@@ -1,7 +1,7 @@
 from textual_autocomplete import DropdownItem, TargetState
 
-from nxs.tui.completion.orchestrator import CompletionOrchestrator
-from nxs.tui.completion.strategy import CompletionRequest, CompletionStrategy
+from nxs.presentation.completion.orchestrator import CompletionOrchestrator
+from nxs.presentation.completion.strategy import CompletionRequest, CompletionStrategy
 
 
 class StubStrategy(CompletionStrategy):

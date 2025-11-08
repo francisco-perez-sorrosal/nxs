@@ -12,8 +12,8 @@ class TestMainApplication:
         """Test that main modules can be imported."""
         from nxs.mcp_client import MCPClient
         from nxs.mcp_server import mcp
-        from nxs.core.claude import Claude
-        from nxs.core.command_control import CommandControlAgent
+        from nxs.application.claude import Claude
+        from nxs.application.command_control import CommandControlAgent
 
         assert MCPClient is not None
         assert mcp is not None
@@ -33,7 +33,7 @@ class TestMainApplication:
 
     def test_claude_service_initialization(self):
         """Test Claude service can be initialized."""
-        from nxs.core.claude import Claude
+        from nxs.application.claude import Claude
 
         # Test with mock model
         claude = Claude(model="claude-3-haiku-20240307")

@@ -1,11 +1,12 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from nxs.core.artifact_manager import ArtifactManager
-from nxs.core.events import EventBus
-from nxs.core.mcp_config import MCPServerConfig, MCPServersConfig
-from nxs.mcp_client.client import ConnectionStatus, MCPAuthClient
-from nxs.mcp_client.factory import ClientFactory
+from nxs.application.artifact_manager import ArtifactManager
+from nxs.domain.events import EventBus
+from nxs.application.mcp_config import MCPServerConfig, MCPServersConfig
+from nxs.domain.types import ConnectionStatus
+from nxs.infrastructure.mcp.client import MCPAuthClient
+from nxs.infrastructure.mcp.factory import ClientFactory
 
 
 def _remote_config(url: str) -> MCPServerConfig:

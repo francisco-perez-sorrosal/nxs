@@ -1,8 +1,8 @@
 import pytest
 from textual.app import App, ComposeResult
 
-from nxs.mcp_client.client import ConnectionStatus
-from nxs.tui.widgets.server_widget import ServerWidget
+from nxs.infrastructure.mcp.client import ConnectionStatus
+from nxs.presentation.widgets.server_widget import ServerWidget
 
 
 class _ServerWidgetApp(App):

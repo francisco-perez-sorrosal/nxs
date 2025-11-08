@@ -2,7 +2,7 @@
 
 import asyncio
 import pytest
-from nxs.mcp_client.connection import (
+from nxs.infrastructure.mcp.connection import (
     ExponentialBackoffStrategy,
     HealthChecker,
     ConnectionLifecycle,

@@ -1,7 +1,7 @@
 from textual_autocomplete import TargetState, DropdownItem
 
-from nxs.tui.completion.resource_completion import ResourceCompletionStrategy
-from nxs.tui.completion.strategy import CompletionRequest
+from nxs.presentation.completion.resource_completion import ResourceCompletionStrategy
+from nxs.presentation.completion.strategy import CompletionRequest
 
 
 def make_state(text: str, cursor: int | None = None) -> TargetState:

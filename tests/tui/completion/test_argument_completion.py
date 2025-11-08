@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 from textual_autocomplete import TargetState
 
-from nxs.core.suggestions import ArgumentSuggestionGenerator
-from nxs.tui.completion.argument_completion import ArgumentCompletionStrategy
-from nxs.tui.completion.strategy import CompletionRequest
+from nxs.application.suggestions import ArgumentSuggestionGenerator
+from nxs.presentation.completion.argument_completion import ArgumentCompletionStrategy
+from nxs.presentation.completion.strategy import CompletionRequest
 
 
 class StubPromptService:

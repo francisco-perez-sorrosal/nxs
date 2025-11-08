@@ -1,8 +1,8 @@
 import pytest
 from textual.app import App, ComposeResult
 
-from nxs.mcp_client.client import ConnectionStatus
-from nxs.tui.widgets.mcp_panel import MCPPanel
+from nxs.infrastructure.mcp.client import ConnectionStatus
+from nxs.presentation.widgets.mcp_panel import MCPPanel
 
 
 class _MCPPanelApp(App):

@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from textual_autocomplete import TargetState
 
-from nxs.tui.completion.applier import (
+from nxs.presentation.completion.applier import (
     CompletionApplier,
     compute_search_string,
     should_show_dropdown,

@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 from textual_autocomplete import TargetState
 
-from nxs.tui.completion.command_completion import CommandCompletionStrategy
-from nxs.tui.completion.strategy import CompletionRequest
+from nxs.presentation.completion.command_completion import CommandCompletionStrategy
+from nxs.presentation.completion.strategy import CompletionRequest
 
 
 class StubPromptService:

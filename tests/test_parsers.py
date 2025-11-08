@@ -1,10 +1,10 @@
 """Unit tests for argument parsers."""
 
 import pytest
-from nxs.core.parsers.key_value import KeyValueArgumentParser
-from nxs.core.parsers.positional import PositionalArgumentParser
-from nxs.core.parsers.schema_adapter import SchemaAdapter, SchemaInfo
-from nxs.core.parsers.composite import CompositeArgumentParser
+from nxs.application.parsers.key_value import KeyValueArgumentParser
+from nxs.application.parsers.positional import PositionalArgumentParser
+from nxs.application.parsers.schema_adapter import SchemaAdapter, SchemaInfo
+from nxs.application.parsers.composite import CompositeArgumentParser
 
 
 class TestKeyValueArgumentParser:

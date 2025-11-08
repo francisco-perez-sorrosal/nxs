@@ -6,10 +6,10 @@ import typer
 
 # Import logger setup first to ensure logging is configured
 from nxs.logger import get_logger, setup_logger
-from nxs.core.claude import Claude
-from nxs.core.command_control import CommandControlAgent
-from nxs.core.artifact_manager import ArtifactManager
-from nxs.tui.app import NexusApp
+from nxs.application.claude import Claude
+from nxs.application.command_control import CommandControlAgent
+from nxs.application.artifact_manager import ArtifactManager
+from nxs.presentation.tui import NexusApp
 
 load_dotenv()
 

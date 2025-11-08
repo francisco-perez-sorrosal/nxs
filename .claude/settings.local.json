@@ -33,7 +33,10 @@
       "Bash(lsof:*)",
       "Bash(xargs kill:*)",
       "Bash(tree:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(git mv:*)",
+      "Bash(reset:*)",
+      "Bash(tput reset:*)"
     ],
     "deny": [],
     "ask": []

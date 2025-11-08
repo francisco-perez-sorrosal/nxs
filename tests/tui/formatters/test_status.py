@@ -1,5 +1,5 @@
-from nxs.mcp_client.client import ConnectionStatus
-from nxs.tui.formatters import (
+from nxs.infrastructure.mcp.client import ConnectionStatus
+from nxs.presentation.formatters import (
     format_artifact_counts_text,
     format_last_check_text,
     format_server_header_text,
