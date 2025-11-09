@@ -7,7 +7,6 @@ This handler processes:
 - Status updates during query processing
 """
 
-import asyncio
 from typing import TYPE_CHECKING, Callable
 
 from nxs.logger import get_logger
@@ -65,27 +64,13 @@ class QueryHandler:
             f"'{query[:50]}{'...' if len(query) > 50 else ''}'"
         )
 
-        # Wait for MCP connections to be ready if they're still initializing
+        # Check if MCP connections are still initializing (non-blocking)
+        # Tools will be dynamically discovered - they'll be empty at first, then populate as servers connect
         if not self.mcp_initialized_getter():
-            logger.info("MCP connections not ready yet, waiting...")
+            logger.info("MCP connections still initializing, but proceeding with query")
             await self.status_queue.add_info_message(
-                "Waiting for MCP connections to be ready..."
+                "Processing query (MCP tools will be available once servers connect)..."
             )
-            # Wait up to 30 seconds for MCP initialization
-            for _ in range(300):  # 300 * 0.1s = 30s timeout
-                await asyncio.sleep(0.1)
-                if self.mcp_initialized_getter():
-                    break
-
-            if not self.mcp_initialized_getter():
-                logger.warning("MCP connections still not ready after timeout")
-                chat = self.chat_panel_getter()
-                chat.add_panel(
-                    "[bold red]Error:[/] MCP connections not ready. Please try again.",
-                    title="Error",
-                    style="red",
-                )
-                return
 
         try:
             # Add assistant message start marker when processing begins

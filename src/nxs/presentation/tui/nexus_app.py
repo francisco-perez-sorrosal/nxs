@@ -297,12 +297,12 @@ class NexusApp(App):
 
         # Check if MCP connections are ready (non-blocking check)
         if not self._mcp_initialized:
-            # MCP connections are still initializing - show message but allow queuing
-            # The query will wait in queue until connections are ready
+            # MCP connections are still initializing - show message
+            # The query will proceed immediately, tools will be available when servers connect
             chat.add_panel(
-                "[yellow]⏳ MCP connections are still initializing...[/]\n"
-                "Your query will be processed once connections are ready.",
-                title="Initializing",
+                "[yellow]⏳ MCP tools are still loading in the background.[/]\n"
+                "Your query is being processed now. Tools will be available once servers connect.",
+                title="Tools Loading",
                 style="yellow"
             )
 
