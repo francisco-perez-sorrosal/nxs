@@ -2,13 +2,12 @@
 Event handlers for NexusApp.
 
 This package contains handlers for different types of events:
-- ConnectionHandler: Handles connection status changes and reconnection progress
 - QueryHandler: Handles query processing and agent loop callbacks
-- RefreshHandler: Handles artifact refresh events
+
+Note: Connection and refresh event handling has been moved directly into
+RefreshService to eliminate unnecessary indirection layers.
 """
 
-from .connection_handler import ConnectionHandler
 from .query_handler import QueryHandler
-from .refresh_handler import RefreshHandler
 
-__all__ = ["ConnectionHandler", "QueryHandler", "RefreshHandler"]
+__all__ = ["QueryHandler"]

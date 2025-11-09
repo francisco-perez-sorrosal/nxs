@@ -10,26 +10,25 @@ class TestMainApplication:
 
     def test_imports(self):
         """Test that main modules can be imported."""
-        from nxs.mcp_client import MCPClient
+        from nxs.infrastructure.mcp import MCPAuthClient
         from nxs.mcp_server import mcp
         from nxs.application.claude import Claude
         from nxs.application.command_control import CommandControlAgent
 
-        assert MCPClient is not None
+        assert MCPAuthClient is not None
         assert mcp is not None
         assert Claude is not None
         assert CommandControlAgent is not None
 
     @pytest.mark.asyncio
     async def test_mcp_client_initialization(self):
-        """Test MCPClient can be initialized."""
-        from nxs.mcp_client import MCPClient
+        """Test MCPAuthClient can be initialized."""
+        from nxs.infrastructure.mcp import MCPAuthClient
 
-        client = MCPClient(command="python", args=["-m", "nxs.mcp_server"], env=None)
+        client = MCPAuthClient(server_url="http://localhost:8080", transport_type="streamable_http")
 
-        assert client._command == "python"
-        assert client._args == ["-m", "nxs.mcp_server"]
-        assert client._env is None
+        assert client.server_url == "http://localhost:8080"
+        assert client.transport_type == "streamable_http"
 
     def test_claude_service_initialization(self):
         """Test Claude service can be initialized."""

@@ -3,8 +3,17 @@
 The EventBus allows components to publish and subscribe to events without
 direct coupling. This enables clean separation between layers (e.g., core
 layer publishing events, UI layer subscribing to them).
+
+Event Handler Contract:
+    Event handlers MUST be synchronous (non-async) functions. This is enforced
+    at subscription time. Handlers should be fast coordinators that schedule
+    async work rather than executing it directly.
+
+    Good: handler schedules async work via asyncio.create_task()
+    Bad:  handler is async and tries to await operations
 """
 
+import asyncio
 from typing import Callable, Type, TypeVar
 
 from nxs.logger import get_logger
@@ -14,6 +23,9 @@ from .types import Event
 logger = get_logger("events.bus")
 
 T = TypeVar("T", bound=Event)
+
+# Type alias for event handlers - must be synchronous
+EventHandler = Callable[[Event], None]
 
 
 class EventBus:
@@ -58,6 +70,10 @@ class EventBus:
             event_type: The type of event to subscribe to (e.g., ConnectionStatusChanged)
             handler: Callback function that will be called when events of this type are published.
                     The handler receives the event instance as its argument.
+                    MUST be synchronous (non-async). Async handlers will raise TypeError.
+
+        Raises:
+            TypeError: If handler is an async function (coroutine function)
 
         Example:
             ```python
@@ -68,9 +84,25 @@ class EventBus:
             ```
 
         Note:
-            The same handler can be subscribed multiple times, and it will be called
-            once for each subscription. To unsubscribe, use `unsubscribe()`.
+            Event handlers must be synchronous. If you need to perform async operations,
+            schedule them using asyncio.create_task() rather than making the handler async.
+
+            Good pattern:
+                def handler(event):
+                    asyncio.create_task(async_operation())
+
+            Bad pattern:
+                async def handler(event):  # ← Will raise TypeError
+                    await async_operation()
         """
+        # Validate handler is synchronous
+        if asyncio.iscoroutinefunction(handler):
+            raise TypeError(
+                f"Event handlers must be synchronous functions. "
+                f"Handler {handler.__name__} is an async function (coroutine function). "
+                f"To perform async work, schedule it using asyncio.create_task() instead."
+            )
+
         if event_type not in self._handlers:
             self._handlers[event_type] = []
 
@@ -106,9 +138,17 @@ class EventBus:
         Args:
             event: The event instance to publish
 
-        Handlers are called synchronously in the order they were subscribed.
-        If a handler raises an exception, it is logged and does not prevent
-        other handlers from being called.
+        Execution Model:
+            Handlers are called synchronously in the order they were subscribed.
+            This method blocks until all handlers have completed. Handlers must
+            be synchronous (non-async) - this is enforced at subscription time.
+
+            If handlers need to perform async work, they should schedule it using
+            asyncio.create_task() rather than awaiting it directly.
+
+        Error Handling:
+            If a handler raises an exception, it is logged and does not prevent
+            other handlers from being called.
 
         Example:
             ```python

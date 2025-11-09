@@ -7,8 +7,9 @@ from typing import Optional
 
 from mcp.types import Prompt, Tool
 
+from copy import deepcopy
+
 from nxs.application.artifacts import (
-    ArtifactCache,
     ArtifactCollection,
     ArtifactRepository,
 )
@@ -37,7 +38,6 @@ class ArtifactManager:
         artifacts_cache: Optional[Cache[str, ArtifactCollection]] = None,
         *,
         artifact_repository: Optional[ArtifactRepository] = None,
-        artifact_cache_service: Optional[ArtifactCache] = None,
         # Legacy parameters for backward compatibility
         config: Optional[MCPServersConfig] = None,
         client_provider: Optional[ClientProvider] = None,
@@ -50,7 +50,6 @@ class ArtifactManager:
             event_bus: Event bus for publishing artifact events
             artifacts_cache: Cache for storing artifacts
             artifact_repository: Repository for fetching artifacts
-            artifact_cache_service: Service for managing artifact cache
             config: Legacy parameter - used only if connection_manager is None
             client_provider: Legacy parameter - used only if connection_manager is None
         """
@@ -65,9 +64,11 @@ class ArtifactManager:
         self.event_bus = event_bus or connection_manager.event_bus
 
         # Artifact management components
+        from nxs.infrastructure.cache import MemoryCache
+
         clients_provider = lambda: self._connection_manager.clients
         self._artifact_repository = artifact_repository or ArtifactRepository(clients_provider=clients_provider)
-        self._artifact_cache = artifact_cache_service or ArtifactCache(cache=artifacts_cache)
+        self._cache: Cache[str, ArtifactCollection] = artifacts_cache or MemoryCache()
 
     # --------------------------------------------------------------------- #
     # Lifecycle (delegated to MCPConnectionManager)
@@ -91,7 +92,7 @@ class ArtifactManager:
         Delegates connection cleanup to MCPConnectionManager and clears artifact cache.
         """
         await self._connection_manager.cleanup()
-        self._artifact_cache.clear()
+        self._cache.clear()
         logger.info("ArtifactManager cleanup complete")
 
     async def __aenter__(self) -> "ArtifactManager":
@@ -183,16 +184,20 @@ class ArtifactManager:
     # Artifact caching helpers
     # --------------------------------------------------------------------- #
     def get_cached_artifacts(self, server_name: str) -> ArtifactCollection | None:
-        """Get cached artifacts for a server."""
-        return self._artifact_cache.get(server_name)
+        """Get cached artifacts for a server (returns deep copy for safety)."""
+        cached = self._cache.get(server_name)
+        return deepcopy(cached) if cached is not None else None
 
     def cache_artifacts(self, server_name: str, artifacts: ArtifactCollection) -> None:
-        """Store artifacts for a server."""
-        self._artifact_cache.set(server_name, artifacts)
+        """Store artifacts for a server (stores deep copy to prevent mutations)."""
+        self._cache.set(server_name, deepcopy(artifacts))
 
     def clear_artifacts_cache(self, server_name: str | None = None) -> None:
         """Clear cache for a single server or all servers."""
-        self._artifact_cache.clear(server_name)
+        if server_name is None:
+            self._cache.clear()
+        else:
+            self._cache.delete(server_name)
 
     def have_artifacts_changed(
         self,
@@ -200,7 +205,7 @@ class ArtifactManager:
         new_artifacts: ArtifactCollection,
     ) -> bool:
         """Check if artifacts differ from cached values."""
-        return self._artifact_cache.has_changed(server_name, new_artifacts)
+        return self._cache.has_changed(server_name, new_artifacts)
 
     async def get_server_artifacts(
         self,

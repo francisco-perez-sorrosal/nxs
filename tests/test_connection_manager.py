@@ -7,7 +7,7 @@ from nxs.infrastructure.mcp.connection import (
     HealthChecker,
     ConnectionLifecycle,
     ConnectionStatus,
-    ClientConnectionManager,
+    SingleConnectionManager,
 )
 
 
@@ -209,11 +209,11 @@ class TestHealthChecker:
 
 
 class TestConnectionManager:
-    """Tests for ClientConnectionManager."""
+    """Tests for SingleConnectionManager."""
 
     def test_initial_state(self):
         """Test initial connection manager state."""
-        manager = ClientConnectionManager()
+        manager = SingleConnectionManager()
 
         assert manager.status == ConnectionStatus.DISCONNECTED
         assert not manager.is_connected
@@ -221,7 +221,7 @@ class TestConnectionManager:
 
     def test_reconnect_info(self):
         """Test reconnect info structure."""
-        manager = ClientConnectionManager()
+        manager = SingleConnectionManager()
         info = manager.reconnect_info
 
         assert "attempts" in info
@@ -232,7 +232,7 @@ class TestConnectionManager:
     @pytest.mark.asyncio
     async def test_set_session(self):
         """Test setting session."""
-        manager = ClientConnectionManager()
+        manager = SingleConnectionManager()
 
         class MockSession:
             async def list_tools(self):

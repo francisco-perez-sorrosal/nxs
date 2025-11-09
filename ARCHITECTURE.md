@@ -25,8 +25,8 @@ NXS is a full-screen TUI that orchestrates conversations between a user and Anth
 ### Application Layer — `src/nxs/application`
 - Coordinates the core runtime use cases without UI or infrastructure details.
 - `AgentLoop` in `chat.py` runs the Claude conversation loop, handles tool-calling, and streams output via callbacks.
-- `ConnectionManager` translates MCP server configuration into live `MCPClient` instances, tracks lifecycle, and emits connection events.
-- `ArtifactManager` composes repository, cache, and change-detection services to fetch MCP resources/prompts/tools and publishes `ArtifactsFetched` events.
+- `MCPConnectionManager` translates MCP server configuration into live `MCPClient` instances, tracks lifecycle across ALL servers, and emits connection events.
+- `ArtifactManager` composes repository and cache to fetch MCP resources/prompts/tools and publishes `ArtifactsFetched` events.
 - `command_control.py` wraps the agent loop with command parsing and context enrichment.
 - Subpackages like `artifacts/`, `parsers/`, and `suggestions/` encapsulate reusable behaviours for formatting completions and validating user input.
 
@@ -87,4 +87,63 @@ NXS is a full-screen TUI that orchestrates conversations between a user and Anth
 - Logging is centralized via `nxs.logger.get_logger`, ensuring consistent, colorized output across layers and simplifying traceability during debugging.
 
 This architecture enables the TUI to stay responsive while background tasks connect to remote services, fetch artifacts, and execute tools, all without hard-coupling UI components to networking or storage concerns. Developers can extend or replace each layer independently by targeting the domain protocols and event contracts described above.
+
+## Naming Conventions
+
+To maintain consistency and clarity across the codebase, the following naming conventions are established:
+
+### Class Suffixes and Their Meanings
+
+**Manager**
+- **Purpose**: Owns lifecycle and state of specific resources
+- **Scope**: Resource creation, destruction, tracking, and state queries
+- **Examples**:
+  - `MCPConnectionManager`: Manages ALL MCP server connections (aggregate)
+  - `ToolManager`: Manages tool discovery and execution
+- **When to use**: When a class is responsible for the full lifecycle of a set of resources
+
+**Service**
+- **Purpose**: Long-lived background operations and stateful processes
+- **Scope**: Runs continuously, maintains internal state, provides async operations
+- **Examples**:
+  - `StatusQueue`: Async queue service for status panel updates
+  - `AutocompleteService`: Manages autocomplete widget lifecycle and state
+- **When to use**: When a class provides ongoing background functionality or maintains significant state
+
+**Handler**
+- **Purpose**: Event subscribers that react to domain events
+- **Scope**: Subscribe to EventBus, delegate to services, typically stateless
+- **Examples**:
+  - `QueryHandler`: Processes queries through agent loop
+  - `ConnectionHandler`: Handles connection status events
+- **When to use**: When a class primarily responds to events from the EventBus
+
+**Coordinator**
+- **Purpose**: Multi-service orchestration and wiring
+- **Scope**: Initializes multiple services, coordinates cross-cutting concerns
+- **Examples**:
+  - `MCPCoordinator`: Initializes MCP connections and coordinates related services
+- **When to use**: When a class's main job is to wire together and orchestrate multiple services
+
+**Orchestrator**
+- **Purpose**: Strategy/algorithm selection (behavioral pattern)
+- **Scope**: Chooses appropriate strategy based on context, delegates execution
+- **Examples**:
+  - `CompletionOrchestrator`: Selects completion strategy based on input type
+- **When to use**: When implementing the Strategy pattern for runtime algorithm selection
+
+### Connection Management Naming
+
+The codebase uses two distinct connection managers with clear scopes:
+
+- **`MCPConnectionManager`** (application layer): Manages ALL MCP server connections (aggregate/global scope)
+- **`SingleConnectionManager`** (infrastructure layer): Manages a SINGLE connection's lifecycle (per-client scope)
+
+This naming makes the scope distinction immediately clear without reading implementation details.
+
+### Cache Abstractions
+
+- **`Cache`** (protocol): Generic caching protocol for dependency injection
+- **`MemoryCache`**: Simple in-memory dictionary-based implementation
+- Direct usage preferred over wrapper classes for simplicity
 

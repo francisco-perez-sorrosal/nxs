@@ -3,7 +3,7 @@
 from .reconnect import ReconnectionStrategy, ExponentialBackoffStrategy
 from .health import HealthChecker
 from .lifecycle import ConnectionLifecycle, ConnectionStatus
-from .manager import ClientConnectionManager
+from .manager import SingleConnectionManager
 
 __all__ = [
     "ReconnectionStrategy",
@@ -11,5 +11,5 @@ __all__ = [
     "HealthChecker",
     "ConnectionLifecycle",
     "ConnectionStatus",
-    "ClientConnectionManager",
+    "SingleConnectionManager",
 ]

@@ -4,15 +4,16 @@ This review inventories areas where functionality, naming, or assets overlap in 
 
 ## Summary Table
 
-| ID | Category | Description | Impact | Suggested Follow-up |
-|----|----------|-------------|--------|----------------------|
-| R1 | Build Tasks | Duplicate Pixi tasks for the same commands | Medium | Collapse aliases or justify intentional duplication |
-| R2 | Naming | Two different `ConnectionManager` classes with overlapping responsibility surface | Medium | Rename and document scopes or merge responsibilities |
-| R3 | Cache Layering | `ArtifactChangeDetector` simply proxies cache comparison | Low | Inline logic into `ArtifactManager` or enrich detector |
-| R4 | Argument Defaults | Repeated default-value sanitisation logic | Low | Centralise helper in shared module |
-| R5 | Repository API | `ArtifactRepository.get_resource_list` unused due to higher-level wrapper | Low | Remove unused helper or adopt it in manager |
-| R6 | Docs | Embedded docs reference the deprecated `nxs.core` package | Low | Update docstrings/templates to new module paths |
-| R7 | Environment Assets | Runtime log files and compiled requirements tracked alongside Pixi | Medium | Exclude generated artifacts to avoid drift |
+| ID | Category | Description | Impact | Status |
+|----|----------|-------------|--------|--------|
+| R1 | Build Tasks | Duplicate Pixi tasks for the same commands | Medium | Open |
+| R2 | Naming | Two different `ConnectionManager` classes with overlapping responsibility surface | Medium | Open |
+| R3 | Cache Layering | `ArtifactChangeDetector` simply proxies cache comparison | Low | Open |
+| R4 | Argument Defaults | Repeated default-value sanitisation logic | Low | Open |
+| R5 | Repository API | `ArtifactRepository.get_resource_list` unused due to higher-level wrapper | Low | Open |
+| R6 | Docs | Embedded docs reference the deprecated `nxs.core` package | Low | Open |
+| R7 | Environment Assets | Runtime log files and compiled requirements tracked alongside Pixi | Medium | Open |
+| R8 | ServiceContainer | Complex 6-step initialization ceremony | Medium | ✅ **COMPLETED** |
 
 ## Detailed Notes
 
@@ -121,6 +122,40 @@ Two runtime log files and a compiled requirements lock coexist with the Pixi wor
 Tracking these artifacts invites merge conflicts and stale information, especially because Pixi already manages dependencies through `pyproject.toml`/`pixi.lock`.
 
 *Follow-up*: Add these paths to `.gitignore` (and remove the committed copies) unless there is a specific reason to version them.
+
+### R8 — ServiceContainer Complex Initialization Ceremony ✅ **COMPLETED**
+
+**Status**: ✅ Resolved (2025-11-09)
+
+**Original Problem**: ServiceContainer required a fragile six-step initialization sequence that had to be performed in exact order:
+
+1. Create container with core dependencies
+2. Call `set_widget_getters()` with lambdas
+3. Call `create_handlers()`
+4. Call `create_query_manager()`
+5. Call `subscribe_events()`
+6. Call `start()` in `on_mount()`
+
+This ceremony was error-prone, hard to understand, and violated the principle of least surprise.
+
+**Solution Implemented**: Refactored to use **lazy initialization with properties**:
+
+- Services are now created on first access via `@property` decorators
+- All dependencies (widget getters, callbacks, caches) are passed at construction time
+- No multi-step ceremony required—just create the container and call `start()`
+- Event subscription is idempotent and can be called multiple times safely
+- MCP initialization remains **eager** (not lazy) to ensure resources/prompts are available for autocomplete when users press `@` or `/`
+
+**Benefits**:
+- Eliminated fragile initialization order dependencies
+- Services created only when needed (lazy)
+- Clear dependency chain enforced by property access
+- Simpler NexusApp initialization (from 6 steps to 2)
+- MCP eagerly initialized for immediate autocomplete availability
+
+**Files Modified**:
+- `src/nxs/presentation/services/container.py` - Converted to lazy initialization with properties
+- `src/nxs/presentation/tui/nexus_app.py` - Simplified initialization to single constructor call
 
 ---
 

@@ -89,34 +89,30 @@ class NexusApp(App):
         self.event_bus = event_bus or artifact_manager.event_bus or EventBus()
         self.artifact_manager.event_bus = self.event_bus
 
-        # Create ServiceContainer to manage all services, handlers, and dependencies
+        # Create ServiceContainer with all dependencies
+        # Services are created lazily on first access via properties
         self.services = ServiceContainer(
             app=self,
             agent_loop=agent_loop,
             artifact_manager=artifact_manager,
             event_bus=self.event_bus,
-            prompt_info_cache=prompt_info_cache,
-            prompt_schema_cache=prompt_schema_cache,
-        )
-
-        # Set widget getters for services that need them
-        self.services.set_widget_getters(
+            # Widget getters (lambdas that return widgets after compose())
             get_status_panel=self._get_status_panel,
             get_mcp_panel=self._get_mcp_panel,
             get_chat_panel=self._get_chat_panel,
             get_input=self._get_input,
             get_autocomplete=self._get_autocomplete,
+            # Callbacks for MCP initialization
             on_resources_loaded=self._on_resources_loaded,
             on_commands_loaded=self._on_commands_loaded,
             focus_input=self._focus_input,
             mcp_initialized_getter=lambda: self._mcp_initialized,
+            # Optional caches
+            prompt_info_cache=prompt_info_cache,
+            prompt_schema_cache=prompt_schema_cache,
         )
 
-        # Create handlers and query manager
-        self.services.create_handlers()
-        self.services.create_query_manager()
-
-        # Subscribe to all events
+        # Subscribe to events (idempotent, can be called multiple times)
         self.services.subscribe_events()
 
     def compose(self) -> ComposeResult:
@@ -147,11 +143,8 @@ class NexusApp(App):
         """Called when the app is mounted."""
         logger.info("Nexus TUI mounted and ready")
 
-        # Verify services are initialized
-        assert self.services.status_queue is not None, "Services should be initialized"
-        assert self.services.autocomplete_service is not None, "Services should be initialized"
-
-        # Start all services (QueryManager, StatusQueue, etc.)
+        # Start all services (QueryManager, StatusQueue)
+        # Services are created lazily on first access via properties
         await self.services.start()
 
         # Show welcome message immediately (TUI is ready)
@@ -166,11 +159,8 @@ class NexusApp(App):
             style="green",
         )
 
-        # Show loading message in status panel
-        await self.services.status_queue.add_info_message("Initializing MCP connections...")
-
         # Initialize MCP connections asynchronously in the background
-        # This allows the TUI to appear immediately without blocking
+        # This MUST run before autocomplete is used so resources/prompts are available
         asyncio.create_task(self._initialize_mcp_connections_async())
 
         # Mount AutoComplete overlay after the app is fully mounted
@@ -188,19 +178,16 @@ class NexusApp(App):
         """
         logger.info("Starting asynchronous MCP connection initialization")
 
-        # Verify services are initialized
-        assert self.services.mcp_coordinator is not None, "Services should be initialized"
-
-        # Use MCPCoordinator to perform full initialization
+        # Use ServiceContainer to perform full MCP initialization
         # This includes: connections, resources/commands, prompt preloading,
-        # panel refresh, and starting background tasks
-        resources, commands = await self.services.mcp_coordinator.initialize_and_load()
+        # panel refresh, and starting background periodic refresh task
+        resources, commands = await self.services.initialize_mcp()
 
         # Store resources and commands
         self.resources = resources
         self.commands = commands
 
-        # Mark MCP as initialized
+        # Mark MCP as initialized (also tracked in services)
         self._mcp_initialized = True
         logger.info("MCP connection initialization completed")
 

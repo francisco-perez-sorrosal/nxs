@@ -1,8 +1,9 @@
-"""MCP client with OAuth support and modular operations."""
+"""MCP client with OAuth support and connection management."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import timedelta
 from typing import Any, Callable, Optional, cast
 
@@ -10,29 +11,31 @@ from mcp import types
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import CallToolResult
+from pydantic import AnyUrl
 
 from nxs.logger import get_logger
 from nxs.infrastructure.mcp.auth import oauth_context
-from nxs.infrastructure.mcp.connection import ClientConnectionManager
+from nxs.infrastructure.mcp.connection import SingleConnectionManager
 from nxs.domain.types import ConnectionStatus
-from nxs.infrastructure.mcp.operations import (
-    PromptsOperations,
-    ResourcesOperations,
-    ToolsOperations,
-)
 
 logger = get_logger("mcp_client")
 
 
 class MCPAuthClient:
-    """Thin MCP protocol client that delegates concerns to dedicated components."""
+    """MCP protocol client with connection management and session operations.
+    
+    This client handles:
+    - Connection lifecycle (connect, disconnect, reconnect)
+    - Session management with health monitoring
+    - Direct MCP operations (tools, prompts, resources)
+    """
 
     def __init__(
         self,
         server_url: str,
         transport_type: str = "streamable_http",
         *,
-        connection_manager: Optional[ClientConnectionManager] = None,
+        connection_manager: Optional[SingleConnectionManager] = None,
         on_status_change: Optional[Callable[[ConnectionStatus], None]] = None,
         on_reconnect_progress: Optional[Callable[[int, int, float], None]] = None,
     ):
@@ -46,15 +49,10 @@ class MCPAuthClient:
                 "callbacks will be ignored because the manager should already be configured.",
             )
 
-        self._connection_manager = connection_manager or ClientConnectionManager(
+        self._connection_manager = connection_manager or SingleConnectionManager(
             on_status_change=on_status_change,
             on_reconnect_progress=on_reconnect_progress,
         )
-
-        session_getter = self._get_session
-        self._tools = ToolsOperations(session_getter)
-        self._prompts = PromptsOperations(session_getter)
-        self._resources = ResourcesOperations(session_getter)
 
     # --------------------------------------------------------------------- #
     # Properties
@@ -85,7 +83,7 @@ class MCPAuthClient:
         return self._connection_manager.reconnect_info
 
     @property
-    def connection_manager(self) -> ClientConnectionManager:
+    def connection_manager(self) -> SingleConnectionManager:
         """Expose the underlying connection manager."""
         return self._connection_manager
 
@@ -121,12 +119,23 @@ class MCPAuthClient:
         logger.info("Disconnected from %s", self.server_url)
 
     # --------------------------------------------------------------------- #
-    # Operations delegation
+    # MCP Operations - Tools
     # --------------------------------------------------------------------- #
 
     async def list_tools(self) -> list[types.Tool]:
         """List tools exposed by the connected server."""
-        return await self._tools.list_tools()
+        session = self._get_session()
+        if session is None:
+            logger.warning("Cannot list tools: no active MCP session")
+            return []
+
+        try:
+            result = await session.list_tools()
+            tools = getattr(result, "tools", None)
+            return list(tools or [])
+        except Exception as exc:
+            logger.error("Failed to list tools: %s", exc)
+            return []
 
     async def call_tool(
         self,
@@ -134,11 +143,35 @@ class MCPAuthClient:
         arguments: Optional[dict[str, Any]] = None,
     ) -> Optional[CallToolResult]:
         """Invoke a tool on the connected server."""
-        return await self._tools.call_tool(tool_name, arguments)
+        session = self._get_session()
+        if session is None:
+            logger.warning("Cannot call tool '%s': no active MCP session", tool_name)
+            return None
+
+        try:
+            return await session.call_tool(tool_name, arguments or {})
+        except Exception as exc:
+            logger.error("Failed to call tool '%s': %s", tool_name, exc)
+            return None
+
+    # --------------------------------------------------------------------- #
+    # MCP Operations - Prompts
+    # --------------------------------------------------------------------- #
 
     async def list_prompts(self) -> list[types.Prompt]:
         """List prompts exposed by the connected server."""
-        return await self._prompts.list_prompts()
+        session = self._get_session()
+        if session is None:
+            logger.warning("Cannot list prompts: no active MCP session")
+            return []
+
+        try:
+            result = await session.list_prompts()
+            prompts = getattr(result, "prompts", None)
+            return list(prompts or [])
+        except Exception as exc:
+            logger.error("Failed to list prompts: %s", exc)
+            return []
 
     async def get_prompt(
         self,
@@ -146,15 +179,65 @@ class MCPAuthClient:
         args: dict[str, Any],
     ) -> list[types.PromptMessage]:
         """Retrieve a prompt with the provided arguments."""
-        return await self._prompts.get_prompt(prompt_name, args)
+        session = self._get_session()
+        if session is None:
+            logger.warning("Cannot get prompt '%s': no active MCP session", prompt_name)
+            return []
+
+        try:
+            result = await session.get_prompt(prompt_name, args)
+            messages = getattr(result, "messages", None)
+            return list(messages or [])
+        except Exception as exc:
+            logger.error("Failed to get prompt '%s': %s", prompt_name, exc)
+            return []
+
+    # --------------------------------------------------------------------- #
+    # MCP Operations - Resources
+    # --------------------------------------------------------------------- #
 
     async def list_resources(self) -> list[types.Resource]:
         """List resources exposed by the connected server."""
-        return await self._resources.list_resources()
+        session = self._get_session()
+        if session is None:
+            logger.warning("Cannot list resources: no active MCP session")
+            return []
+
+        try:
+            result = await session.list_resources()
+            resources = getattr(result, "resources", None)
+            return list(resources or [])
+        except Exception as exc:
+            logger.error("Failed to list resources: %s", exc)
+            return []
 
     async def read_resource(self, uri: str) -> Optional[Any]:
         """Read and return the contents of a resource."""
-        return await self._resources.read_resource(uri)
+        session = self._get_session()
+        if session is None:
+            logger.warning("Cannot read resource '%s': no active MCP session", uri)
+            return None
+
+        try:
+            result = await session.read_resource(AnyUrl(uri))
+            contents = getattr(result, "contents", None)
+            if not contents:
+                return None
+
+            resource = contents[0]
+            if isinstance(resource, types.TextResourceContents):
+                if resource.mimeType == "application/json":
+                    try:
+                        return json.loads(resource.text)
+                    except json.JSONDecodeError as exc:
+                        logger.error("Invalid JSON in resource '%s': %s", uri, exc)
+                        return None
+                return resource.text
+
+            return None
+        except Exception as exc:
+            logger.error("Failed to read resource '%s': %s", uri, exc)
+            return None
 
     # --------------------------------------------------------------------- #
     # Internal connection helpers

@@ -8,9 +8,8 @@ from typing import Awaitable, Callable, Mapping
 from mcp.types import Prompt, Resource, Tool
 
 from nxs.domain.protocols import MCPClient
+from nxs.domain.types import ArtifactCollection
 from nxs.logger import get_logger
-
-from .cache import ArtifactCollection
 
 
 logger = get_logger("artifact_repository")

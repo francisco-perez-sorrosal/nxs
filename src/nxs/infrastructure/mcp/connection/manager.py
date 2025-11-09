@@ -19,12 +19,12 @@ class SessionProtocol(Protocol):
         ...
 
 
-class ClientConnectionManager:
+class SingleConnectionManager:
     """
     Orchestrates connection management for a SINGLE MCP client connection.
 
-    This manager handles per-client connection lifecycle (not aggregate/global management).
-    For aggregate status across all MCP servers, see MCPConnectionManager in
+    This manages one connection's full lifecycle (not aggregate/global management).
+    For aggregate management across ALL MCP servers, see MCPConnectionManager in
     application/connection_manager.py
 
     Responsibilities:

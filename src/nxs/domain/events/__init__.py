@@ -26,7 +26,7 @@ Example:
     ```
 """
 
-from .bus import EventBus
+from .bus import EventBus, EventHandler
 from .types import (
     ArtifactsFetched,
     ConnectionStatusChanged,
@@ -36,6 +36,7 @@ from .types import (
 
 __all__ = [
     "EventBus",
+    "EventHandler",
     "Event",
     "ConnectionStatusChanged",
     "ReconnectProgress",

@@ -7,7 +7,7 @@ from typing import Callable, Dict, Optional
 from nxs.application.mcp_config import MCPServerConfig
 from nxs.logger import get_logger
 from nxs.infrastructure.mcp.client import MCPAuthClient
-from nxs.infrastructure.mcp.connection import ClientConnectionManager
+from nxs.infrastructure.mcp.connection import SingleConnectionManager
 from nxs.domain.types import ConnectionStatus
 
 logger = get_logger("mcp_client.factory")
@@ -61,7 +61,7 @@ class ClientFactory:
 
             progress_cb = _progress_cb
 
-        connection_manager = ClientConnectionManager(
+        connection_manager = SingleConnectionManager(
             on_status_change=status_cb,
             on_reconnect_progress=progress_cb,
         )
