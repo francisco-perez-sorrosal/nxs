@@ -1,11 +1,9 @@
-"""ArtifactManager - facade coordinating MCP clients, artifacts, and caching."""
+"""ArtifactManager - facade for MCP artifact access and caching."""
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping
-from typing import Dict, Optional
-from types import MappingProxyType
+from typing import Optional
 
 from mcp.types import Prompt, Tool
 
@@ -15,46 +13,62 @@ from nxs.application.artifacts import (
     ArtifactCollection,
     ArtifactRepository,
 )
-from nxs.domain.protocols import Cache
-from nxs.domain.events import (
-    ArtifactsFetched,
-    ConnectionStatusChanged,
-    EventBus,
-    ReconnectProgress,
-)
-from nxs.application.mcp_config import MCPServersConfig, load_mcp_config
-from nxs.domain.protocols import MCPClient, ClientProvider
-from nxs.logger import get_logger
+from nxs.application.connection_manager import ConnectionManager
+from nxs.application.mcp_config import MCPServersConfig
+from nxs.domain.protocols import Cache, MCPClient, ClientProvider
+from nxs.domain.events import ArtifactsFetched, EventBus
 from nxs.domain.types import ConnectionStatus
+from nxs.logger import get_logger
 
 logger = get_logger("artifact_manager")
 
 
 class ArtifactManager:
-    """High-level facade for MCP artifact access and connection lifecycle."""
+    """
+    High-level facade for MCP artifact access and caching.
+
+    Focuses on artifact retrieval and caching. Connection lifecycle
+    is delegated to ConnectionManager.
+    """
 
     def __init__(
         self,
-        config: Optional[MCPServersConfig] = None,
+        connection_manager: Optional[ConnectionManager] = None,
         event_bus: Optional[EventBus] = None,
         artifacts_cache: Optional[Cache[str, ArtifactCollection]] = None,
         *,
         artifact_repository: Optional[ArtifactRepository] = None,
         artifact_cache_service: Optional[ArtifactCache] = None,
         change_detector: Optional[ArtifactChangeDetector] = None,
+        # Legacy parameters for backward compatibility
+        config: Optional[MCPServersConfig] = None,
         client_provider: Optional[ClientProvider] = None,
     ):
-        self._config = config or load_mcp_config()
-        self.event_bus = event_bus or EventBus()
+        """
+        Initialize the ArtifactManager.
 
-        self._clients: Dict[str, MCPClient] = {}
-        # Pragmatic fallback: import concrete implementation only when needed
-        if client_provider is None:
-            from nxs.infrastructure.mcp.factory import ClientFactory
-            client_provider = ClientFactory()  # type: ignore[assignment]
-        self._client_factory: ClientProvider = client_provider
+        Args:
+            connection_manager: ConnectionManager instance (creates new if None)
+            event_bus: Event bus for publishing artifact events
+            artifacts_cache: Cache for storing artifacts
+            artifact_repository: Repository for fetching artifacts
+            artifact_cache_service: Service for managing artifact cache
+            change_detector: Detector for artifact changes
+            config: Legacy parameter - used only if connection_manager is None
+            client_provider: Legacy parameter - used only if connection_manager is None
+        """
+        # Create or use provided ConnectionManager
+        if connection_manager is None:
+            connection_manager = ConnectionManager(
+                config=config,
+                event_bus=event_bus,
+                client_provider=client_provider,
+            )
+        self._connection_manager = connection_manager
+        self.event_bus = event_bus or connection_manager.event_bus
 
-        clients_provider = lambda: self._clients
+        # Artifact management components
+        clients_provider = lambda: self._connection_manager.clients
         self._artifact_repository = artifact_repository or ArtifactRepository(
             clients_provider=clients_provider
         )
@@ -64,80 +78,66 @@ class ArtifactManager:
         self._change_detector = change_detector or ArtifactChangeDetector(
             self._artifact_cache
         )
-        self._previous_statuses: Dict[str, ConnectionStatus] = {}
 
     # --------------------------------------------------------------------- #
-    # Lifecycle
+    # Lifecycle (delegated to ConnectionManager)
     # --------------------------------------------------------------------- #
     async def initialize(self, use_auth: bool = False) -> None:
-        """Instantiate and connect MCP clients for all configured servers."""
+        """
+        Initialize MCP connections.
+
+        Delegates to ConnectionManager for connection lifecycle.
+
+        Args:
+            use_auth: Whether to use OAuth authentication for remote servers
+        """
         logger.info("Initializing ArtifactManager")
-
-        created_clients = self._client_factory.create_clients(
-            self._config.mcpServers,
-            status_callback=self._handle_status_change,
-            progress_callback=self._handle_reconnect_progress,
-        )
-
-        self._clients.update(created_clients)
-        logger.info("Prepared %d MCP client(s)", len(created_clients))
-
-        for server_name, client in created_clients.items():
-            try:
-                await client.connect(use_auth=use_auth)
-                logger.info("Successfully connected to %s", server_name)
-            except Exception as err:  # pragma: no cover - defensive logging
-                logger.error("Failed to connect to %s: %s", server_name, err)
-                self._handle_status_change(server_name, ConnectionStatus.ERROR)
+        await self._connection_manager.initialize(use_auth=use_auth)
 
     async def cleanup(self) -> None:
-        """Disconnect all clients and clear caches."""
-        if not self._clients:
-            return
+        """
+        Cleanup resources.
 
-        logger.info("Cleaning up %d MCP client(s)", len(self._clients))
-        tasks = []
-        for server_name, client in list(self._clients.items()):
-            disconnect = getattr(client, "disconnect", None)
-            if callable(disconnect):
-                tasks.append(self._disconnect_client(server_name, disconnect))
-
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-        self._clients.clear()
+        Delegates connection cleanup to ConnectionManager and clears artifact cache.
+        """
+        await self._connection_manager.cleanup()
         self._artifact_cache.clear()
         logger.info("ArtifactManager cleanup complete")
 
     async def __aenter__(self) -> "ArtifactManager":
+        """Async context manager entry."""
         await self.initialize()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Async context manager exit."""
         await self.cleanup()
 
-    async def _disconnect_client(self, server_name: str, disconnect_callable) -> None:
-        try:
-            await disconnect_callable()
-        except Exception as err:  # pragma: no cover - defensive logging
-            logger.error("Error disconnecting from %s: %s", server_name, err)
-
     # --------------------------------------------------------------------- #
-    # Client access
+    # Client access (delegated to ConnectionManager)
     # --------------------------------------------------------------------- #
     @property
     def clients(self) -> Mapping[str, MCPClient]:
-        """Return a read-only mapping of configured MCP clients."""
-        return MappingProxyType(self._clients)
+        """
+        Return a read-only mapping of configured MCP clients.
+
+        Delegates to ConnectionManager.
+
+        Returns:
+            Immutable mapping of server name to MCPClient
+        """
+        return self._connection_manager.clients
 
     def get_server_statuses(self) -> dict[str, ConnectionStatus]:
-        """Derive server connection statuses from the underlying clients."""
-        statuses: dict[str, ConnectionStatus] = {}
-        for server_name, client in self._clients.items():
-            status = getattr(client, "connection_status", None)
-            if isinstance(status, ConnectionStatus):
-                statuses[server_name] = status
-        return statuses
+        """
+        Get connection status for all servers.
+
+        Delegates to ConnectionManager.
+
+        Returns:
+            Dictionary mapping server name to connection status
+        """
+        return self._connection_manager.get_server_statuses()
 
     # --------------------------------------------------------------------- #
     # Artifact access
@@ -247,6 +247,14 @@ class ArtifactManager:
         artifacts: ArtifactCollection,
         changed: bool,
     ) -> None:
+        """
+        Publish ArtifactsFetched event.
+
+        Args:
+            server_name: Name of the server
+            artifacts: Fetched artifacts
+            changed: Whether artifacts have changed
+        """
         if not self.event_bus:
             return
         try:
@@ -260,57 +268,6 @@ class ArtifactManager:
         except Exception as err:  # pragma: no cover - defensive logging
             logger.error(
                 "Error publishing ArtifactsFetched for %s: %s",
-                server_name,
-                err,
-            )
-
-    def _handle_status_change(
-        self,
-        server_name: str,
-        status: ConnectionStatus,
-    ) -> None:
-        if not self.event_bus:
-            return
-
-        previous_status = self._previous_statuses.get(server_name)
-        try:
-            self.event_bus.publish(
-                ConnectionStatusChanged(
-                    server_name=server_name,
-                    status=status,
-                    previous_status=previous_status,
-                )
-            )
-        except Exception as err:  # pragma: no cover - defensive logging
-            logger.error(
-                "Error publishing ConnectionStatusChanged for %s: %s",
-                server_name,
-                err,
-            )
-        else:
-            self._previous_statuses[server_name] = status
-
-    def _handle_reconnect_progress(
-        self,
-        server_name: str,
-        attempts: int,
-        max_attempts: int,
-        next_retry_delay: float,
-    ) -> None:
-        if not self.event_bus:
-            return
-        try:
-            self.event_bus.publish(
-                ReconnectProgress(
-                    server_name=server_name,
-                    attempts=attempts,
-                    max_attempts=max_attempts,
-                    next_retry_delay=next_retry_delay,
-                )
-            )
-        except Exception as err:  # pragma: no cover - defensive logging
-            logger.error(
-                "Error publishing ReconnectProgress for %s: %s",
                 server_name,
                 err,
             )
