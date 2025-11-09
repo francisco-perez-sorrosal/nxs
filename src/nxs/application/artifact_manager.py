@@ -9,11 +9,10 @@ from mcp.types import Prompt, Tool
 
 from nxs.application.artifacts import (
     ArtifactCache,
-    ArtifactChangeDetector,
     ArtifactCollection,
     ArtifactRepository,
 )
-from nxs.application.connection_manager import ConnectionManager
+from nxs.application.connection_manager import MCPConnectionManager
 from nxs.application.mcp_config import MCPServersConfig
 from nxs.domain.protocols import Cache, MCPClient, ClientProvider
 from nxs.domain.events import ArtifactsFetched, EventBus
@@ -28,18 +27,17 @@ class ArtifactManager:
     High-level facade for MCP artifact access and caching.
 
     Focuses on artifact retrieval and caching. Connection lifecycle
-    is delegated to ConnectionManager.
+    is delegated to MCPConnectionManager.
     """
 
     def __init__(
         self,
-        connection_manager: Optional[ConnectionManager] = None,
+        connection_manager: Optional[MCPConnectionManager] = None,
         event_bus: Optional[EventBus] = None,
         artifacts_cache: Optional[Cache[str, ArtifactCollection]] = None,
         *,
         artifact_repository: Optional[ArtifactRepository] = None,
         artifact_cache_service: Optional[ArtifactCache] = None,
-        change_detector: Optional[ArtifactChangeDetector] = None,
         # Legacy parameters for backward compatibility
         config: Optional[MCPServersConfig] = None,
         client_provider: Optional[ClientProvider] = None,
@@ -48,18 +46,17 @@ class ArtifactManager:
         Initialize the ArtifactManager.
 
         Args:
-            connection_manager: ConnectionManager instance (creates new if None)
+            connection_manager: MCPConnectionManager instance (creates new if None)
             event_bus: Event bus for publishing artifact events
             artifacts_cache: Cache for storing artifacts
             artifact_repository: Repository for fetching artifacts
             artifact_cache_service: Service for managing artifact cache
-            change_detector: Detector for artifact changes
             config: Legacy parameter - used only if connection_manager is None
             client_provider: Legacy parameter - used only if connection_manager is None
         """
-        # Create or use provided ConnectionManager
+        # Create or use provided MCPConnectionManager
         if connection_manager is None:
-            connection_manager = ConnectionManager(
+            connection_manager = MCPConnectionManager(
                 config=config,
                 event_bus=event_bus,
                 client_provider=client_provider,
@@ -69,24 +66,17 @@ class ArtifactManager:
 
         # Artifact management components
         clients_provider = lambda: self._connection_manager.clients
-        self._artifact_repository = artifact_repository or ArtifactRepository(
-            clients_provider=clients_provider
-        )
-        self._artifact_cache = artifact_cache_service or ArtifactCache(
-            cache=artifacts_cache
-        )
-        self._change_detector = change_detector or ArtifactChangeDetector(
-            self._artifact_cache
-        )
+        self._artifact_repository = artifact_repository or ArtifactRepository(clients_provider=clients_provider)
+        self._artifact_cache = artifact_cache_service or ArtifactCache(cache=artifacts_cache)
 
     # --------------------------------------------------------------------- #
-    # Lifecycle (delegated to ConnectionManager)
+    # Lifecycle (delegated to MCPConnectionManager)
     # --------------------------------------------------------------------- #
     async def initialize(self, use_auth: bool = False) -> None:
         """
         Initialize MCP connections.
 
-        Delegates to ConnectionManager for connection lifecycle.
+        Delegates to MCPConnectionManager for connection lifecycle.
 
         Args:
             use_auth: Whether to use OAuth authentication for remote servers
@@ -98,7 +88,7 @@ class ArtifactManager:
         """
         Cleanup resources.
 
-        Delegates connection cleanup to ConnectionManager and clears artifact cache.
+        Delegates connection cleanup to MCPConnectionManager and clears artifact cache.
         """
         await self._connection_manager.cleanup()
         self._artifact_cache.clear()
@@ -114,14 +104,14 @@ class ArtifactManager:
         await self.cleanup()
 
     # --------------------------------------------------------------------- #
-    # Client access (delegated to ConnectionManager)
+    # Client access (delegated to MCPConnectionManager)
     # --------------------------------------------------------------------- #
     @property
     def clients(self) -> Mapping[str, MCPClient]:
         """
         Return a read-only mapping of configured MCP clients.
 
-        Delegates to ConnectionManager.
+        Delegates to MCPConnectionManager.
 
         Returns:
             Immutable mapping of server name to MCPClient
@@ -132,7 +122,7 @@ class ArtifactManager:
         """
         Get connection status for all servers.
 
-        Delegates to ConnectionManager.
+        Delegates to MCPConnectionManager.
 
         Returns:
             Dictionary mapping server name to connection status
@@ -210,7 +200,7 @@ class ArtifactManager:
         new_artifacts: ArtifactCollection,
     ) -> bool:
         """Check if artifacts differ from cached values."""
-        return self._change_detector.has_changed(server_name, new_artifacts)
+        return self._artifact_cache.has_changed(server_name, new_artifacts)
 
     async def get_server_artifacts(
         self,
@@ -271,4 +261,3 @@ class ArtifactManager:
                 server_name,
                 err,
             )
-

@@ -46,4 +46,3 @@ class ResourceCompletionStrategy(CompletionStrategy):
 
         logger.debug("ResourceCompletionStrategy returning %d matches", len(filtered))
         return [DropdownItem(main=resource, prefix="📄") for resource in filtered]
-

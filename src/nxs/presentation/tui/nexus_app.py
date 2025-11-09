@@ -133,7 +133,7 @@ class NexusApp(App):
                         resources=self.resources,
                         commands=self.commands,
                         artifact_manager=self.artifact_manager,
-                        id="input"
+                        id="input",
                     )
 
                     yield StatusPanel(id="status")
@@ -163,7 +163,7 @@ class NexusApp(App):
             "Press [cyan]Ctrl+Q[/] to quit\n"
             "Press [cyan]Ctrl+L[/] to clear chat",
             title="Getting Started",
-            style="green"
+            style="green",
         )
 
         # Show loading message in status panel
@@ -254,6 +254,7 @@ class NexusApp(App):
         """Helper to get the autocomplete widget if mounted."""
         try:
             from nxs.presentation.widgets.autocomplete import NexusAutoComplete
+
             autocomplete_list = self.query(NexusAutoComplete)
             if autocomplete_list:
                 return autocomplete_list[0]
@@ -303,7 +304,7 @@ class NexusApp(App):
                 "[yellow]⏳ MCP tools are still loading in the background.[/]\n"
                 "Your query is being processed now. Tools will be available once servers connect.",
                 title="Tools Loading",
-                style="yellow"
+                style="yellow",
             )
 
         try:
@@ -312,11 +313,7 @@ class NexusApp(App):
             logger.debug(f"Added user message to chat panel (query_id={query_id})")
         except RuntimeError as e:
             logger.error(f"QueryManager not running: {e}")
-            chat.add_panel(
-                "[bold red]Error:[/] Query manager not initialized",
-                title="Error",
-                style="red"
-            )
+            chat.add_panel("[bold red]Error:[/] Query manager not initialized", title="Error", style="red")
 
     async def action_quit(self) -> None:
         """Handle app quit - cleanup background tasks."""
@@ -332,10 +329,7 @@ class NexusApp(App):
         """Clear the chat panel (Ctrl+L)."""
         chat = self._get_chat_panel()
         chat.clear_chat()
-        chat.add_panel(
-            "Chat history cleared",
-            style="dim"
-        )
+        chat.add_panel("Chat history cleared", style="dim")
 
     def update_resources(self, resources: list[str]):
         """
@@ -358,4 +352,3 @@ class NexusApp(App):
         assert self.services.autocomplete_service is not None, "Services should be initialized"
         self.commands = commands
         self.services.autocomplete_service.update_commands(commands)
-

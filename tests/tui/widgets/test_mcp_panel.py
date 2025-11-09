@@ -34,4 +34,3 @@ async def test_panel_renders_multiple_servers_with_special_names():
         assert set(panel._server_widgets.keys()) == set(servers.keys())
         empty_message = getattr(panel, "_empty_message")
         assert empty_message is None or empty_message.display is False
-

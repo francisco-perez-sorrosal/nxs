@@ -24,7 +24,7 @@ logger = get_logger("prompt_service")
 class PromptService:
     """
     Handles prompt caching and preloading.
-    
+
     This service manages the caching of prompt information and schemas,
     preloads prompt data for all commands, and provides cached data
     to other components like the autocomplete widget.
@@ -47,12 +47,8 @@ class PromptService:
                                 If None, a MemoryCache will be created.
         """
         self.artifact_manager = artifact_manager
-        self._prompt_info_cache: Cache[str, str | None] = (
-            prompt_info_cache or MemoryCache[str, str | None]()
-        )
-        self._prompt_schema_cache: Cache[str, tuple] = (
-            prompt_schema_cache or MemoryCache[str, tuple]()
-        )
+        self._prompt_info_cache: Cache[str, str | None] = prompt_info_cache or MemoryCache[str, str | None]()
+        self._prompt_schema_cache: Cache[str, tuple] = prompt_schema_cache or MemoryCache[str, tuple]()
 
     async def preload_all(self, commands: list[str]) -> None:
         """
@@ -81,12 +77,11 @@ class PromptService:
                     loaded_count += 1
                     logger.debug(f"Preloaded info for '{command}': {arg_info}")
 
-            logger.info(
-                f"Successfully preloaded prompt information for {loaded_count} commands"
-            )
+            logger.info(f"Successfully preloaded prompt information for {loaded_count} commands")
         except Exception as e:
             logger.error(f"Failed to preload prompt info: {e}")
             import traceback
+
             logger.error(traceback.format_exc())
 
     def get_cached_info(self, command: str) -> str | None:
@@ -164,4 +159,3 @@ class PromptService:
             return f"{arg_str} | Required: {req_str}"
 
         return arg_str
-

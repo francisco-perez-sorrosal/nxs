@@ -22,7 +22,7 @@ logger = get_logger("query_handler")
 class QueryHandler:
     """
     Handles query processing and agent loop callbacks.
-    
+
     This handler manages the processing of user queries through the agent loop,
     handles streaming chunks, tool calls, and status updates.
     """
@@ -60,8 +60,7 @@ class QueryHandler:
             query_id: Sequential ID of the query for ordering
         """
         logger.info(
-            f"Starting to process query (query_id={query_id}): "
-            f"'{query[:50]}{'...' if len(query) > 50 else ''}'"
+            f"Starting to process query (query_id={query_id}): " f"'{query[:50]}{'...' if len(query) > 50 else ''}'"
         )
 
         # Check if MCP connections are still initializing (non-blocking)
@@ -82,9 +81,7 @@ class QueryHandler:
             # Run the agent loop with UI callbacks
             # Note: User message was already added in on_input_submitted to ensure
             # it appears in submission order
-            logger.info(
-                f"Running agent loop with query (query_id={query_id}): {query[:100]}..."
-            )
+            logger.info(f"Running agent loop with query (query_id={query_id}): {query[:100]}...")
 
             await self.agent_loop.run(
                 query,
@@ -125,9 +122,7 @@ class QueryHandler:
         Args:
             chunk: A piece of the assistant's response
         """
-        logger.debug(
-            f"Received stream chunk: '{chunk[:30]}{'...' if len(chunk) > 30 else ''}'"
-        )
+        logger.debug(f"Received stream chunk: '{chunk[:30]}{'...' if len(chunk) > 30 else ''}'")
         chat = self.chat_panel_getter()
         chat.add_assistant_chunk(chunk)
 
@@ -157,8 +152,5 @@ class QueryHandler:
             result: Result text/data
             success: Whether the tool executed successfully
         """
-        logger.info(
-            f"Tool result: {tool_name} - success={success}, result length={len(str(result))}"
-        )
+        logger.info(f"Tool result: {tool_name} - success={success}, result length={len(str(result))}")
         await self.status_queue.add_tool_result(tool_name, result, success)
-

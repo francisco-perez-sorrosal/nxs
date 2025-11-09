@@ -51,4 +51,3 @@ def test_argument_strategy_requires_known_command() -> None:
     request = CompletionRequest(make_state("/unknown "))
 
     assert not strategy.can_handle(request)
-

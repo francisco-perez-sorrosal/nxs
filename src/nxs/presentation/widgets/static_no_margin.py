@@ -10,4 +10,3 @@ class StaticNoMargin(Static):
         self.styles.margin = 0
         self.styles.padding = 0
         self.styles.width = "100%"
-

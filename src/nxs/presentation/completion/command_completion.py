@@ -53,11 +53,7 @@ class CommandCompletionStrategy(CompletionStrategy):
         prefix = search_part.lower()
 
         if prefix:
-            filtered = [
-                cmd
-                for cmd in commands
-                if prefix in cmd.lower() or cmd.lower().startswith(prefix)
-            ]
+            filtered = [cmd for cmd in commands if prefix in cmd.lower() or cmd.lower().startswith(prefix)]
         else:
             filtered = commands
 
@@ -81,4 +77,3 @@ class CommandCompletionStrategy(CompletionStrategy):
             return f"{command} ({arg_info})"
         logger.debug("Command '%s' has no defaulted args", command)
         return command
-

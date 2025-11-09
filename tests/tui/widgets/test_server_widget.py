@@ -41,4 +41,3 @@ async def test_server_widget_renders_artifacts():
         await pilot.pause()
         container = getattr(widget, "_artifacts_container")
         assert len(container.children) == 3
-

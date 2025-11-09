@@ -37,17 +37,14 @@ class CommandControlAgent(AgentLoop):
                     content = await self.tool_clients[mcp_name].read_resource(resource_id)
                     mentioned_docs.append((mcp_name, resource_id, content))
 
-        resource_context = "".join(f'\n<resource id="{mcp_name}:{resource_id}">\n{content}\n</resource>\n' for mcp_name, resource_id, content in mentioned_docs)
+        resource_context = "".join(
+            f'\n<resource id="{mcp_name}:{resource_id}">\n{content}\n</resource>\n'
+            for mcp_name, resource_id, content in mentioned_docs
+        )
         logger.info(f"Extracted resource context: {resource_context}")
         return resource_context
 
-
-    def _parse_command_arguments(
-        self, 
-        query: str, 
-        command_name: str, 
-        prompt: Prompt
-    ) -> dict[str, str]:
+    def _parse_command_arguments(self, query: str, command_name: str, prompt: Prompt) -> dict[str, str]:
         """
         Parse command arguments from user query based on prompt's argument schema.
 
@@ -61,33 +58,33 @@ class CommandControlAgent(AgentLoop):
         """
         # Extract the prompt's argument schema
         # Prompts have an 'arguments' field which is a JSON schema
-        if not hasattr(prompt, 'arguments') or not prompt.arguments:
+        if not hasattr(prompt, "arguments") or not prompt.arguments:
             logger.debug(f"Prompt '{command_name}' has no arguments schema, returning empty dict")
             return {}
-        
+
         # Normalize schema using SchemaAdapter
         schema_info = self.argument_parser.normalize_schema(prompt.arguments, command_name)
         if not schema_info:
             return {}
-        
+
         # Remove the command name and split the rest
         # Query format: "/command arg1 arg2 ..." or "/command @resource_id"
-        remaining = query[len(f"/{command_name}"):].strip()
-        
+        remaining = query[len(f"/{command_name}") :].strip()
+
         # Parse arguments using the composite parser
         args = self.argument_parser.parse(
             query_remaining=remaining,
             arg_names=schema_info.arg_names,
             schema_dict=schema_info.schema_dict,
         )
-        
+
         # Apply defaults for optional arguments that weren't provided
         args = self.argument_parser.apply_defaults(
             args=args,
             schema_dict=schema_info.schema_dict,
             command_name=command_name,
         )
-        
+
         # Validate arguments against schema
         self.argument_parser.validate_arguments(
             args=args,
@@ -95,7 +92,7 @@ class CommandControlAgent(AgentLoop):
             schema_dict=schema_info.schema_dict,
             command_name=command_name,
         )
-        
+
         logger.info(f"Final arguments for '{command_name}' (after applying defaults): {args}")
         return args
 
@@ -116,34 +113,36 @@ class CommandControlAgent(AgentLoop):
         words = query.split()
         if not words:
             return False
-            
+
         command_name = words[0].replace("/", "")
-        
+
         # Find the prompt definition from MCP servers
         prompt_info = await self.artifact_manager.find_prompt(command_name)
         if not prompt_info:
             logger.warning(f"Command '{command_name}' not found in any MCP server")
             return False
-        
+
         prompt, mcp_server_name = prompt_info
-        
+
         # Parse arguments from the query based on the prompt's schema
         try:
             args = self._parse_command_arguments(query, command_name, prompt)
-            
+
             # Get the MCP client for this server
             mcp_client = self.tool_clients.get(mcp_server_name)
             if not mcp_client:
                 logger.error(f"MCP client not found for server '{mcp_server_name}'")
                 return False
-            
+
             # Call get_prompt with the parsed arguments
             logger.info(f"Executing prompt '{command_name}' on server '{mcp_server_name}' with arguments: {args}")
-            logger.info(f"Arguments dict structure: {type(args)}, keys: {list(args.keys())}, values: {list(args.values())}")
-            
+            logger.info(
+                f"Arguments dict structure: {type(args)}, keys: {list(args.keys())}, values: {list(args.values())}"
+            )
+
             try:
                 messages = await mcp_client.get_prompt(command_name, args)
-                
+
                 if messages:
                     prompt_messages = convert_prompt_messages_to_message_params(messages)
                     logger.info(f"Successfully processed command '{command_name}'")
@@ -157,12 +156,14 @@ class CommandControlAgent(AgentLoop):
             except Exception as e:
                 logger.error(f"Error calling get_prompt for '{command_name}': {e}")
                 import traceback
+
                 logger.error(traceback.format_exc())
                 raise
-                
+
         except Exception as e:
             logger.error(f"Error processing command '{command_name}': {e}")
             import traceback
+
             logger.error(traceback.format_exc())
             return False
 

@@ -122,9 +122,7 @@ class ExponentialBackoffStrategy(ReconnectionStrategy):
             return False
 
         delay = self.calculate_delay(attempt)
-        logger.info(
-            f"Waiting {delay:.1f}s before retry (attempt {attempt}/{self._max_attempts})"
-        )
+        logger.info(f"Waiting {delay:.1f}s before retry (attempt {attempt}/{self._max_attempts})")
 
         # Notify initial progress
         if on_progress:
@@ -155,9 +153,7 @@ class ExponentialBackoffStrategy(ReconnectionStrategy):
             # Update progress
             remaining = delay - elapsed
             if remaining > 0:
-                logger.debug(
-                    f"Reconnection in {remaining:.1f}s (attempt {attempt}/{self._max_attempts})"
-                )
+                logger.debug(f"Reconnection in {remaining:.1f}s (attempt {attempt}/{self._max_attempts})")
                 if on_progress:
                     try:
                         on_progress(attempt, self._max_attempts, remaining)

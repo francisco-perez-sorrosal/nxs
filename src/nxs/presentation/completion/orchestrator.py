@@ -26,9 +26,7 @@ class CompletionOrchestrator:
         for strategy in self._strategies:
             try:
                 if strategy.can_handle(request):
-                    logger.debug(
-                        "Strategy %s selected for completion", strategy.__class__.__name__
-                    )
+                    logger.debug("Strategy %s selected for completion", strategy.__class__.__name__)
                     return strategy.get_candidates(request)
             except Exception:
                 logger.exception(
@@ -37,4 +35,3 @@ class CompletionOrchestrator:
                 )
         logger.debug("No completion strategy matched current input")
         return []
-

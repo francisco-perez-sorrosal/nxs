@@ -12,4 +12,3 @@ from .query_handler import QueryHandler
 from .refresh_handler import RefreshHandler
 
 __all__ = ["ConnectionHandler", "QueryHandler", "RefreshHandler"]
-

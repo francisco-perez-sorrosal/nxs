@@ -49,4 +49,3 @@ def test_format_artifact_counts_text():
 def test_sanitize_widget_id_removes_special_characters():
     sanitized = sanitize_widget_id("http://example.com/resource")
     assert sanitized.isidentifier()
-

@@ -50,9 +50,7 @@ class NexusAutoComplete(AutoComplete):
 
         self._orchestrator = CompletionOrchestrator(
             [
-                ArgumentCompletionStrategy(
-                    command_provider, prompt_service, self._argument_generator
-                ),
+                ArgumentCompletionStrategy(command_provider, prompt_service, self._argument_generator),
                 CommandCompletionStrategy(command_provider, prompt_service),
                 ResourceCompletionStrategy(resource_provider),
             ]
@@ -117,4 +115,3 @@ class NexusAutoComplete(AutoComplete):
         decision = helper_should_show_dropdown(text_before_cursor)
         logger.debug("Dropdown visibility=%s for text=%r", decision, text_before_cursor)
         return decision
-

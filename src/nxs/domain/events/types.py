@@ -89,4 +89,3 @@ class ArtifactsFetched(Event):
     """Fetched artifacts dictionary with keys: tools, prompts, resources."""
     changed: bool = False
     """Whether the artifacts changed compared to the cached version."""
-

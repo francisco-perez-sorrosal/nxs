@@ -8,6 +8,7 @@ from nxs.logger import get_logger
 
 logger = get_logger("mcp_client_cb")
 
+
 class CallbackHandler(BaseHTTPRequestHandler):
     """Simple HTTP handler to capture OAuth callback."""
 
@@ -27,7 +28,8 @@ class CallbackHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "text/html")
             self.end_headers()
-            self.wfile.write(b"""
+            self.wfile.write(
+                b"""
             <!DOCTYPE html>
             <html lang="en">
             <head>
@@ -47,7 +49,8 @@ class CallbackHandler(BaseHTTPRequestHandler):
                 <script>setTimeout(() => window.close(), 2000);</script>
             </body>
             </html>
-            """)
+            """
+            )
         elif "error" in query_params:
             self.callback_data["error"] = query_params["error"][0]
             self.send_response(400)

@@ -20,15 +20,18 @@ from nxs.logger import get_logger
 logger = get_logger("connection_manager")
 
 
-class ConnectionManager:
+class MCPConnectionManager:
     """
-    Manages MCP client lifecycle and connection status.
+    Manages all MCP client lifecycles and connection statuses (aggregate/global scope).
 
     Responsibilities:
     - Create MCP clients from configuration
-    - Connect/disconnect clients
-    - Track connection status
-    - Publish connection events
+    - Connect/disconnect all clients
+    - Track connection status across all servers
+    - Publish connection events to event bus
+
+    Note: For single-connection management, see ClientConnectionManager in
+    infrastructure/mcp/connection/manager.py
     """
 
     def __init__(
@@ -38,7 +41,7 @@ class ConnectionManager:
         client_provider: Optional[ClientProvider] = None,
     ):
         """
-        Initialize the ConnectionManager.
+        Initialize the MCPConnectionManager.
 
         Args:
             config: MCP server configuration (loads from default if None)
@@ -51,6 +54,7 @@ class ConnectionManager:
         # Pragmatic fallback: import concrete implementation only when needed
         if client_provider is None:
             from nxs.infrastructure.mcp.factory import ClientFactory
+
             client_provider = ClientFactory()  # type: ignore[assignment]
         self._client_factory: ClientProvider = client_provider
 
@@ -64,7 +68,7 @@ class ConnectionManager:
         Args:
             use_auth: Whether to use OAuth authentication for remote servers
         """
-        logger.info("Initializing ConnectionManager")
+        logger.info("Initializing MCPConnectionManager")
 
         created_clients = self._client_factory.create_clients(
             self._config.mcpServers,
@@ -99,7 +103,7 @@ class ConnectionManager:
             await asyncio.gather(*tasks, return_exceptions=True)
 
         self._clients.clear()
-        logger.info("ConnectionManager cleanup complete")
+        logger.info("MCPConnectionManager cleanup complete")
 
     async def _disconnect_client(self, server_name: str, disconnect_callable) -> None:
         """

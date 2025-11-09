@@ -34,4 +34,3 @@ class OperationBase:
     def logger(self):
         """Expose the configured logger for subclasses."""
         return self._logger
-

@@ -25,4 +25,3 @@ __all__ = [
     "compute_search_string",
     "should_show_dropdown",
 ]
-

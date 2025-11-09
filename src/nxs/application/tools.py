@@ -52,7 +52,9 @@ class ToolManager:
         }
 
     @classmethod
-    async def execute_tool_requests(cls, clients: Mapping[str, MCPClient], message: Message) -> List[ToolResultBlockParam]:
+    async def execute_tool_requests(
+        cls, clients: Mapping[str, MCPClient], message: Message
+    ) -> List[ToolResultBlockParam]:
         """Executes a list of tool requests against the provided clients."""
         tool_requests = [block for block in message.content if block.type == "tool_use"]
         tool_result_blocks: list[ToolResultBlockParam] = []

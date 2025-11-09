@@ -48,4 +48,3 @@ class PromptsOperations(OperationBase):
 
         messages = getattr(result, "messages", None)
         return list(messages or [])
-

@@ -272,4 +272,3 @@ def compute_search_string(text: str, cursor_position: int) -> str:
         return value_part
 
     return last_part
-

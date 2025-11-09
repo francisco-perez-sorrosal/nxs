@@ -102,4 +102,3 @@ class AutocompleteService:
     def is_mounted(self) -> bool:
         """Check if autocomplete is mounted."""
         return self._autocomplete_mounted
-

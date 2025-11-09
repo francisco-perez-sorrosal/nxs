@@ -49,7 +49,4 @@ class ArtifactItem(StaticNoMargin):
         self.update(Text.from_markup(display_text))
 
     def on_click(self) -> None:
-        self.post_message(
-            self.Clicked(self.artifact_name, self.artifact_type, self.description)
-        )
-
+        self.post_message(self.Clicked(self.artifact_name, self.artifact_type, self.description))

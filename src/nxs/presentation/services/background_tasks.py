@@ -55,9 +55,7 @@ class BackgroundTaskService:
         """
         if self._task is None or self._task.done():
             self._running = True
-            self._task = asyncio.create_task(
-                self._periodic_artifact_refresh(mcp_initialized_getter)
-            )
+            self._task = asyncio.create_task(self._periodic_artifact_refresh(mcp_initialized_getter))
             logger.info("Background task started")
 
     async def stop(self) -> None:
@@ -122,9 +120,9 @@ class BackgroundTaskService:
                             cached_total = 0
                             if cached_artifacts:
                                 cached_total = (
-                                    len(cached_artifacts.get("tools", [])) +
-                                    len(cached_artifacts.get("prompts", [])) +
-                                    len(cached_artifacts.get("resources", []))
+                                    len(cached_artifacts.get("tools", []))
+                                    + len(cached_artifacts.get("prompts", []))
+                                    + len(cached_artifacts.get("resources", []))
                                 )
 
                             # Only fetch if we don't have artifacts cached (to avoid unnecessary work)
@@ -132,21 +130,25 @@ class BackgroundTaskService:
                                 # Fetch artifacts to see if they're available
                                 artifacts = await self.artifact_manager.get_server_artifacts(server_name)
                                 total = (
-                                    len(artifacts.get("tools", [])) +
-                                    len(artifacts.get("prompts", [])) +
-                                    len(artifacts.get("resources", []))
+                                    len(artifacts.get("tools", []))
+                                    + len(artifacts.get("prompts", []))
+                                    + len(artifacts.get("resources", []))
                                 )
 
                                 if total > 0:
                                     # Server has artifacts but we didn't have them cached, refresh the panel
-                                    logger.info(f"Found {total} artifact(s) for {server_name} during periodic check (was 0) - refreshing panel")
+                                    logger.info(
+                                        f"Found {total} artifact(s) for {server_name} during periodic check (was 0) - refreshing panel"
+                                    )
                                     # Cache the artifacts
                                     self.artifact_manager.cache_artifacts(server_name, artifacts)
                                     # Refresh asynchronously without blocking
                                     self.mcp_refresher.schedule_refresh(server_name=server_name)
                             else:
                                 # Already have artifacts cached, skip fetching to avoid unnecessary refresh
-                                logger.debug(f"Server {server_name} already has {cached_total} artifact(s) cached, skipping periodic fetch")
+                                logger.debug(
+                                    f"Server {server_name} already has {cached_total} artifact(s) cached, skipping periodic fetch"
+                                )
                     except Exception as e:
                         logger.debug(f"Error during periodic refresh check for {server_name}: {e}")
 

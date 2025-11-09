@@ -97,9 +97,7 @@ class MCPPanel(Vertical):
                 self._empty_message.remove()
             self._empty_message = None
         if self._server_widgets:
-            container.mount(
-                StaticNoMargin("[dim]" + "─" * 30 + "[/]", id=f"mcp-divider-{safe_name}")
-            )
+            container.mount(StaticNoMargin("[dim]" + "─" * 30 + "[/]", id=f"mcp-divider-{safe_name}"))
         container.mount(widget)
         self._server_widgets[server_name] = widget
         return widget
@@ -107,9 +105,7 @@ class MCPPanel(Vertical):
     def _ensure_scroll_container(self) -> ScrollableContainer:
         if self._scroll_container is None:
             try:
-                self._scroll_container = self.query_one(
-                    "#mcp-servers-container", ScrollableContainer
-                )
+                self._scroll_container = self.query_one("#mcp-servers-container", ScrollableContainer)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.error("Unable to locate servers container: %s", exc)
                 raise
@@ -138,9 +134,7 @@ class MCPPanel(Vertical):
 
         if not self._server_widgets and self._empty_message is None:
             container = self._ensure_scroll_container()
-            empty_message = StaticNoMargin(
-                "[dim]No MCP servers connected[/]", id="mcp-empty-message"
-            )
+            empty_message = StaticNoMargin("[dim]No MCP servers connected[/]", id="mcp-empty-message")
             if container.children:
                 container.mount(empty_message, before=container.children[0])
             else:
@@ -164,7 +158,9 @@ class MCPPanel(Vertical):
             operational_status_override: str | None = None
             existing_widget = self._server_widgets.get(server_name)
             if existing_widget and "Fetching artifacts" in existing_widget.operational_status:
-                if not any(token in existing_widget.operational_status for token in ("✓", "✗", "Error", "No artifacts")):
+                if not any(
+                    token in existing_widget.operational_status for token in ("✓", "✗", "Error", "No artifacts")
+                ):
                     operational_status_override = ""
 
             self.update_server(
@@ -223,4 +219,3 @@ class MCPPanel(Vertical):
                 logger.error("Failed to show artifact overlay: %s", exc, exc_info=True)
 
         self.app.call_after_refresh(_show_overlay)
-

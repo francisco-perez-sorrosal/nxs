@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Iterator
 
+from nxs.application.parsers import clean_default_value
 from nxs.presentation.services.prompt_service import PromptService
 
 
@@ -18,18 +19,6 @@ class ArgumentDescriptor:
     default: Any | None
     required: bool
     description: str
-
-
-def _validate_default(default: Any | None) -> Any | None:
-    if default is None:
-        return None
-
-    default_str = str(default)
-    if "Undefined" in default_str or "PydanticUndefined" in default_str:
-        return None
-    if "class" in default_str.lower() and "<" in default_str:
-        return None
-    return default
 
 
 def _iter_dict_schema(schema: dict) -> Iterator[ArgumentDescriptor]:
@@ -49,7 +38,7 @@ def _iter_dict_schema(schema: dict) -> Iterator[ArgumentDescriptor]:
 
         yield ArgumentDescriptor(
             name=arg_name,
-            default=_validate_default(default),
+            default=clean_default_value(default),
             required=arg_name in required_args,
             description=description,
         )
@@ -83,7 +72,7 @@ def _iter_list_schema(schema: list) -> Iterator[ArgumentDescriptor]:
 
         yield ArgumentDescriptor(
             name=name,
-            default=_validate_default(default),
+            default=clean_default_value(default),
             required=name in required_set,
             description=description,
         )
@@ -125,9 +114,7 @@ def iterate_arguments(schema: Any) -> Iterable[ArgumentDescriptor]:
     return ()
 
 
-def get_command_arguments_with_defaults(
-    prompt_service: PromptService, command_name: str
-) -> str | None:
+def get_command_arguments_with_defaults(prompt_service: PromptService, command_name: str) -> str | None:
     schema_tuple = prompt_service.get_cached_schema(command_name)
     if schema_tuple is None:
         return None
@@ -151,9 +138,7 @@ def get_command_arguments_with_defaults(
     return None
 
 
-def expand_command_with_arguments(
-    prompt_service: PromptService, command_name: str
-) -> str:
+def expand_command_with_arguments(prompt_service: PromptService, command_name: str) -> str:
     schema_tuple = prompt_service.get_cached_schema(command_name)
     if schema_tuple is None:
         return command_name
@@ -174,4 +159,3 @@ def expand_command_with_arguments(
         return f"{command_name} {' '.join(parts)}"
 
     return command_name
-

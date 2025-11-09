@@ -24,7 +24,7 @@ logger = get_logger("mcp_coordinator")
 class MCPCoordinator:
     """
     Handles MCP initialization and lifecycle coordination.
-    
+
     This service orchestrates the initialization of MCP connections,
     loading of resources and commands, and coordinates with other
     services like PromptService and AutocompleteService.
@@ -90,9 +90,7 @@ class MCPCoordinator:
 
             server_count = len(self.artifact_manager.clients)
             if server_count > 0:
-                await self.status_queue.add_success_message(
-                    f"Connected to {server_count} MCP server(s)"
-                )
+                await self.status_queue.add_success_message(f"Connected to {server_count} MCP server(s)")
             else:
                 await self.status_queue.add_info_message("No MCP servers configured")
 
@@ -102,9 +100,7 @@ class MCPCoordinator:
             try:
                 resources = await self.artifact_manager.get_resource_list()
                 commands = await self.artifact_manager.get_command_names()
-                logger.info(
-                    f"Loaded {len(resources)} resources and {len(commands)} commands"
-                )
+                logger.info(f"Loaded {len(resources)} resources and {len(commands)} commands")
 
                 # Notify callbacks
                 if self.on_resources_loaded:
@@ -117,9 +113,7 @@ class MCPCoordinator:
                         f"Loaded {len(resources)} resource(s) and {len(commands)} command(s)"
                     )
                 else:
-                    await self.status_queue.add_info_message(
-                        "No resources or commands found"
-                    )
+                    await self.status_queue.add_info_message("No resources or commands found")
 
                 # Mark as initialized
                 self._initialized = True
@@ -129,17 +123,13 @@ class MCPCoordinator:
 
             except Exception as e:
                 logger.error(f"Failed to load resources and commands: {e}")
-                await self.status_queue.add_error_message(
-                    f"Failed to load resources/commands: {str(e)}"
-                )
+                await self.status_queue.add_error_message(f"Failed to load resources/commands: {str(e)}")
                 # Return empty lists on error
                 return [], []
 
         except Exception as e:
             logger.error(f"Error during MCP connection initialization: {e}", exc_info=True)
-            await self.status_queue.add_error_message(
-                f"MCP initialization error: {str(e)}"
-            )
+            await self.status_queue.add_error_message(f"MCP initialization error: {str(e)}")
             # Try to load resources/commands even if initialization had errors
             try:
                 resources = await self.artifact_manager.get_resource_list()
@@ -150,14 +140,10 @@ class MCPCoordinator:
                     self.on_commands_loaded(commands)
                 return resources, commands
             except Exception as load_error:
-                logger.error(
-                    f"Failed to load resources after initialization error: {load_error}"
-                )
+                logger.error(f"Failed to load resources after initialization error: {load_error}")
                 return [], []
 
-    async def initialize_and_load(
-        self, use_auth: bool = False
-    ) -> tuple[list[str], list[str]]:
+    async def initialize_and_load(self, use_auth: bool = False) -> tuple[list[str], list[str]]:
         """
         Full initialization including prompt preloading and panel refresh.
 
@@ -200,4 +186,3 @@ class MCPCoordinator:
                 logger.error(f"Error starting background tasks: {e}")
 
         return resources, commands
-

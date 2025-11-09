@@ -50,9 +50,7 @@ class EventBus:
         self._handlers: dict[Type[Event], list[Callable[[Event], None]]] = {}
         """Registry of event handlers by event type."""
 
-    def subscribe(
-        self, event_type: Type[T], handler: Callable[[T], None]
-    ) -> None:
+    def subscribe(self, event_type: Type[T], handler: Callable[[T], None]) -> None:
         """
         Subscribe to events of a specific type.
 
@@ -81,13 +79,9 @@ class EventBus:
             self._handlers[event_type].append(handler)
             logger.debug(f"Subscribed handler for {event_type.__name__}")
         else:
-            logger.debug(
-                f"Handler already subscribed for {event_type.__name__}, skipping"
-            )
+            logger.debug(f"Handler already subscribed for {event_type.__name__}, skipping")
 
-    def unsubscribe(
-        self, event_type: Type[T], handler: Callable[[T], None]
-    ) -> None:
+    def unsubscribe(self, event_type: Type[T], handler: Callable[[T], None]) -> None:
         """
         Unsubscribe a handler from events of a specific type.
 
@@ -103,9 +97,7 @@ class EventBus:
                 self._handlers[event_type].remove(handler)
                 logger.debug(f"Unsubscribed handler for {event_type.__name__}")
             except ValueError:
-                logger.debug(
-                    f"Handler not found in subscriptions for {event_type.__name__}"
-                )
+                logger.debug(f"Handler not found in subscriptions for {event_type.__name__}")
 
     def publish(self, event: Event) -> None:
         """
@@ -133,9 +125,7 @@ class EventBus:
             logger.debug(f"No handlers subscribed for {event_type.__name__}")
             return
 
-        logger.debug(
-            f"Publishing {event_type.__name__} to {len(handlers)} handler(s)"
-        )
+        logger.debug(f"Publishing {event_type.__name__} to {len(handlers)} handler(s)")
 
         for handler in handlers:
             try:
@@ -166,4 +156,3 @@ class EventBus:
             True if there are any subscribers, False otherwise
         """
         return event_type in self._handlers and len(self._handlers[event_type]) > 0
-

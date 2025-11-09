@@ -7,7 +7,7 @@ from typing import Callable, Dict, Optional
 from nxs.application.mcp_config import MCPServerConfig
 from nxs.logger import get_logger
 from nxs.infrastructure.mcp.client import MCPAuthClient
-from nxs.infrastructure.mcp.connection import ConnectionManager
+from nxs.infrastructure.mcp.connection import ClientConnectionManager
 from nxs.domain.types import ConnectionStatus
 
 logger = get_logger("mcp_client.factory")
@@ -22,9 +22,7 @@ class ClientFactory:
         config: MCPServerConfig,
         *,
         status_callback: Optional[Callable[[str, ConnectionStatus], None]] = None,
-        progress_callback: Optional[
-            Callable[[str, int, int, float], None]
-        ] = None,
+        progress_callback: Optional[Callable[[str, int, int, float], None]] = None,
     ) -> MCPAuthClient | None:
         """
         Create a client for the provided server configuration.
@@ -49,6 +47,7 @@ class ClientFactory:
 
         status_cb = None
         if status_callback is not None:
+
             def _status_cb(status: ConnectionStatus) -> None:
                 status_callback(server_name, status)
 
@@ -62,7 +61,7 @@ class ClientFactory:
 
             progress_cb = _progress_cb
 
-        connection_manager = ConnectionManager(
+        connection_manager = ClientConnectionManager(
             on_status_change=status_cb,
             on_reconnect_progress=progress_cb,
         )
@@ -80,9 +79,7 @@ class ClientFactory:
         configs: Dict[str, MCPServerConfig],
         *,
         status_callback: Optional[Callable[[str, ConnectionStatus], None]] = None,
-        progress_callback: Optional[
-            Callable[[str, int, int, float], None]
-        ] = None,
+        progress_callback: Optional[Callable[[str, int, int, float], None]] = None,
     ) -> Dict[str, MCPAuthClient]:
         """Create MCP clients for all configured servers."""
         clients: Dict[str, MCPAuthClient] = {}
@@ -96,4 +93,3 @@ class ClientFactory:
             if client is not None:
                 clients[server_name] = client
         return clients
-

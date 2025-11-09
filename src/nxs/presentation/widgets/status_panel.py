@@ -25,13 +25,7 @@ class StatusPanel(RichLog):
 
     def __init__(self, **kwargs):
         """Initialize the status panel with Rich markup enabled."""
-        super().__init__(
-            markup=True,
-            highlight=True,
-            auto_scroll=True,
-            wrap=True,
-            **kwargs
-        )
+        super().__init__(markup=True, highlight=True, auto_scroll=True, wrap=True, **kwargs)
         self.write("[bold yellow]Tool Execution Status[/]\n")
         self.add_divider()
 
@@ -47,22 +41,17 @@ class StatusPanel(RichLog):
         formatted_params = self._format_json_data(params)
         params_display = self._create_json_display(formatted_params)
 
-        panel = Panel(
-            params_display,
-            title=f"[bold cyan]🔧 Tool Call: {name}[/]",
-            border_style="cyan",
-            expand=False
-        )
+        panel = Panel(params_display, title=f"[bold cyan]🔧 Tool Call: {name}[/]", border_style="cyan", expand=False)
         self.write(panel)
         self.write("\n")
 
     def _truncate_content_fields(self, obj: Any) -> Any:
         """
         Recursively truncate 'content' fields in JSON objects/arrays to 100 characters.
-        
+
         Args:
             obj: Data structure (dict, list, or primitive)
-            
+
         Returns:
             Data structure with truncated content fields
         """
@@ -85,17 +74,17 @@ class StatusPanel(RichLog):
         else:
             # Return primitive values as-is
             return obj
-    
+
     def _format_json_data(self, data: str | list | dict) -> Any:
         """
         Format JSON data with parsing and content truncation.
-        
+
         Handles different input types (JSON strings, Python repr strings, dicts, lists),
         parses them, and truncates content fields for display.
-        
+
         Args:
             data: Data that may be a string (JSON or Python repr), list, or dict
-            
+
         Returns:
             Formatted data structure (dict/list) with truncated content fields, or original string if not parseable
         """
@@ -112,6 +101,7 @@ class StatusPanel(RichLog):
                 # Not JSON, try to parse as Python repr (e.g., "[{...}, {...}]")
                 try:
                     import ast
+
                     parsed_data = ast.literal_eval(data)
                     return self._truncate_content_fields(parsed_data)
                 except (ValueError, SyntaxError):
@@ -120,14 +110,14 @@ class StatusPanel(RichLog):
         else:
             # Unknown type, return as-is
             return data
-    
+
     def _create_json_display(self, formatted_data: Any) -> Any:
         """
         Create Rich JSON display object from formatted data.
-        
+
         Args:
             formatted_data: Formatted data structure (dict/list) or string
-            
+
         Returns:
             Rich JSON object for display, or plain string if not a data structure
         """
@@ -160,7 +150,7 @@ class StatusPanel(RichLog):
             result_display,
             title=f"[{status_color}]{status_icon} Result: {tool_name}[/]",
             border_style=border_color,
-            expand=False
+            expand=False,
         )
         self.write(panel)
         self.write("\n")

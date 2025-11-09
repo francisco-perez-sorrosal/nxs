@@ -32,12 +32,12 @@ Handlers don't maintain business state. They coordinate between:
 
 ```python
 from typing import TYPE_CHECKING, Callable
-from nxs.core.events import SomeEvent
+from nxs.domain.events import SomeEvent
 from nxs.logger import get_logger
 
 if TYPE_CHECKING:
-    from nxs.tui.services.some_service import SomeService
-    from nxs.tui.widgets.some_widget import SomeWidget
+    from nxs.presentation.services.some_service import SomeService
+    from nxs.presentation.widgets.some_widget import SomeWidget
 
 logger = get_logger("some_handler")
 
@@ -148,4 +148,4 @@ def test_handler():
 ## See Also
 
 - [Services README](../services/README.md) - Stateful operations and lifecycle management
-- [Core Events](../../core/events/) - Event definitions and EventBus
+- [Domain Events](../../domain/events/) - Event definitions and EventBus

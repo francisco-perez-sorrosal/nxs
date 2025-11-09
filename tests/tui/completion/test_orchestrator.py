@@ -34,4 +34,3 @@ def test_orchestrator_selects_first_matching_strategy() -> None:
     assert strategies[0].calls == 1
     assert strategies[1].calls == 1
     assert strategies[2].calls == 0
-

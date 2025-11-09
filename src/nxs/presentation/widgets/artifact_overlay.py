@@ -15,25 +15,19 @@ logger = get_logger("artifact_overlay")
 class ArtifactDescriptionOverlay(Container):
     """
     Non-disruptive overlay widget that displays artifact descriptions.
-    
+
     Features:
     - Positions near the artifact that was clicked
     - Scrollable content for long descriptions
     - Dismissible by clicking outside, ESC key, or close button
     - Doesn't block the entire screen
     """
-    
+
     BINDINGS = [
         Binding("escape", "dismiss", "Close", priority=True),
     ]
 
-    def __init__(
-        self,
-        artifact_name: str,
-        artifact_type: str,
-        description: str | None,
-        **kwargs
-    ):
+    def __init__(self, artifact_name: str, artifact_type: str, description: str | None, **kwargs):
         """
         Initialize the overlay.
 
@@ -52,30 +46,22 @@ class ArtifactDescriptionOverlay(Container):
     def compose(self) -> ComposeResult:
         """Compose the overlay layout."""
         # Determine artifact type label
-        type_labels = {
-            "T": "Tool",
-            "P": "Prompt",
-            "R": "Resource"
-        }
+        type_labels = {"T": "Tool", "P": "Prompt", "R": "Resource"}
         type_label = type_labels.get(self.artifact_type, "Artifact")
-        
+
         with Container(id="artifact-overlay-container"):
             # Header with artifact name and type
             with Horizontal(id="artifact-overlay-header"):
                 header_text = f"[bold cyan]{type_label}:[/] [bold]{self.artifact_name}[/]"
                 yield Static(header_text, id="artifact-overlay-title")
                 yield Button("×", variant="default", id="artifact-overlay-close")
-            
+
             # Scrollable content area
             with Vertical(id="artifact-overlay-content"):
                 yield RichLog(
-                    markup=True,
-                    highlight=False,
-                    auto_scroll=False,
-                    wrap=True,
-                    id="artifact-description-content"
+                    markup=True, highlight=False, auto_scroll=False, wrap=True, id="artifact-description-content"
                 )
-            
+
             # Footer with dismiss hint
             yield Static("[dim]Press ESC or click outside to close[/]", id="artifact-overlay-footer")
 
@@ -114,11 +100,7 @@ class ArtifactDescriptionOverlay(Container):
         self.description = description or "No description available."
 
         # Update title
-        type_labels = {
-            "T": "Tool",
-            "P": "Prompt",
-            "R": "Resource"
-        }
+        type_labels = {"T": "Tool", "P": "Prompt", "R": "Resource"}
         type_label = type_labels.get(artifact_type, "Artifact")
         title_widget = self.query_one("#artifact-overlay-title", Static)
         title_widget.update(f"[bold cyan]{type_label}:[/] [bold]{artifact_name}[/]")
@@ -196,11 +178,13 @@ class ArtifactDescriptionOverlay(Container):
         # In Textual, the clicked widget is accessible via event.control
         # Only dismiss if clicking directly on the overlay container itself
         # (not on children like the content area, header, or buttons)
-        clicked_widget = getattr(event, 'control', None)
+        clicked_widget = getattr(event, "control", None)
 
         # Check if the click is on the overlay container itself
         if clicked_widget is not None:
-            if clicked_widget == self or (hasattr(clicked_widget, 'id') and clicked_widget.id == "artifact-description-overlay"):
+            if clicked_widget == self or (
+                hasattr(clicked_widget, "id") and clicked_widget.id == "artifact-description-overlay"
+            ):
                 # Don't dismiss if clicking on interactive elements (header, close button, content)
                 # Only dismiss if clicking on the container background
                 if clicked_widget == self:
@@ -216,4 +200,3 @@ class ArtifactDescriptionOverlay(Container):
         """Handle mouse leaving the overlay."""
         self._mouse_over = False
         logger.debug(f"Mouse left overlay for {self.artifact_name}")
-

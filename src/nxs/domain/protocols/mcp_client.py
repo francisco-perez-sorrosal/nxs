@@ -28,11 +28,7 @@ class MCPClient(Protocol):
         """
         ...
 
-    async def call_tool(
-        self,
-        tool_name: str,
-        arguments: dict[str, Any] | None = None
-    ) -> CallToolResult | None:
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> CallToolResult | None:
         """Call a specific tool.
 
         Args:
@@ -52,11 +48,7 @@ class MCPClient(Protocol):
         """
         ...
 
-    async def get_prompt(
-        self,
-        prompt_name: str,
-        args: dict[str, str]
-    ) -> list[PromptMessage]:
+    async def get_prompt(self, prompt_name: str, args: dict[str, str]) -> list[PromptMessage]:
         """Get a prompt with the given arguments.
 
         Args:

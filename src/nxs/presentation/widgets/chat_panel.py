@@ -29,11 +29,11 @@ class ChatPanel(RichLog):
     def __init__(self, **kwargs):
         """Initialize the chat panel with Rich markup enabled."""
         super().__init__(
-            markup=True,        # Enable Rich console markup ([bold], [cyan], etc.)
-            highlight=True,     # Auto syntax highlighting for code-like text
-            auto_scroll=True,   # Automatically scroll to bottom on new content
-            wrap=True,          # Let Rich handle wrapping naturally
-            **kwargs
+            markup=True,  # Enable Rich console markup ([bold], [cyan], etc.)
+            highlight=True,  # Auto syntax highlighting for code-like text
+            auto_scroll=True,  # Automatically scroll to bottom on new content
+            wrap=True,  # Let Rich handle wrapping naturally
+            **kwargs,
         )
         # State for assistant message streaming
         self._assistant_buffer = ""
@@ -180,18 +180,18 @@ class ChatPanel(RichLog):
         # BUGFIX: Ensure markdown headers start on new lines
         # Sometimes Claude streams text like "...text:# Header" without line breaks
         # This regex adds a newline before any # that follows non-whitespace
-        markdown_text = re.sub(r'(\S)(#+\s+)', r'\1\n\n\2', markdown_text)
+        markdown_text = re.sub(r"(\S)(#+\s+)", r"\1\n\n\2", markdown_text)
 
         # Extract code blocks with their positions and language
         # Pattern matches: ```language\ncode\n``` or ```\ncode\n```
         # Handles cases with/without language specifier and optional whitespace
-        code_block_pattern = r'```(\w+)?\s*\n(.*?)```'
+        code_block_pattern = r"```(\w+)?\s*\n(.*?)```"
         code_blocks = []
         for match in re.finditer(code_block_pattern, markdown_text, re.DOTALL):
             language = match.group(1) or "python"  # Default to python if no language specified
             code = match.group(2)
             # Remove leading/trailing newlines from code content
-            code = code.strip('\n')
+            code = code.strip("\n")
             start_pos = match.start()
             end_pos = match.end()
             code_blocks.append((start_pos, end_pos, code, language))
@@ -246,15 +246,15 @@ class ChatPanel(RichLog):
             List of renderables (Text headers, Markdown content, etc.)
         """
         renderables = []
-        lines = markdown_text.split('\n')
+        lines = markdown_text.split("\n")
         current_chunk = []
 
         for line in lines:
             # Check if line is a markdown header
-            if re.match(r'^#+\s+', line):
+            if re.match(r"^#+\s+", line):
                 # First, flush any accumulated non-header lines as markdown
                 if current_chunk:
-                    chunk_text = '\n'.join(current_chunk)
+                    chunk_text = "\n".join(current_chunk)
                     if chunk_text.strip():
                         md = Markdown(chunk_text, justify="left")
                         renderables.append(md)
@@ -262,8 +262,8 @@ class ChatPanel(RichLog):
 
                 # Render header as styled Text with left alignment
                 # Remove the # symbols and style appropriately
-                level = len(line) - len(line.lstrip('#'))
-                header_text = line.lstrip('#').strip()
+                level = len(line) - len(line.lstrip("#"))
+                header_text = line.lstrip("#").strip()
 
                 if level == 1:
                     styled_header = Text(header_text, style="bold magenta", justify="left")
@@ -281,7 +281,7 @@ class ChatPanel(RichLog):
 
         # Flush any remaining non-header content
         if current_chunk:
-            chunk_text = '\n'.join(current_chunk)
+            chunk_text = "\n".join(current_chunk)
             if chunk_text.strip():
                 md = Markdown(chunk_text, justify="left")
                 renderables.append(md)

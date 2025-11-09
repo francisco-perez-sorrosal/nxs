@@ -57,7 +57,7 @@ def test_apply_argument_suggestion_inserts_assignment() -> None:
     applier = CompletionApplier(StubPromptService())
     state = make_state("/run ")
 
-    result = applier.apply('audience=<required>', state)
+    result = applier.apply("audience=<required>", state)
 
     assert result.text.startswith('/run audience="')
 
@@ -71,4 +71,3 @@ def test_compute_search_string_handles_resource_trigger() -> None:
 def test_should_show_dropdown_with_command_arguments() -> None:
     visible = should_show_dropdown("/run ")
     assert visible is True
-

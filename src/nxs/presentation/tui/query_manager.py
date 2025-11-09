@@ -19,7 +19,7 @@ QueryItem = namedtuple("QueryItem", ["query", "query_id"])
 class QueryManager:
     """
     Manages query queue and sequential processing.
-    
+
     Ensures queries are processed in FIFO order and results are displayed
     in submission order, even if processing times vary.
     """
@@ -41,7 +41,7 @@ class QueryManager:
     async def start(self) -> None:
         """
         Start the query worker task.
-        
+
         This begins processing queries from the queue sequentially.
         """
         if self._running:
@@ -55,7 +55,7 @@ class QueryManager:
     async def stop(self) -> None:
         """
         Stop the query worker task and wait for it to finish.
-        
+
         This will cancel any pending work and clean up resources.
         """
         if not self._running:
@@ -113,7 +113,7 @@ class QueryManager:
     async def _worker(self) -> None:
         """
         Worker task that processes queries from the queue sequentially.
-        
+
         This runs in a loop, processing queries one at a time to ensure
         FIFO ordering of results.
         """

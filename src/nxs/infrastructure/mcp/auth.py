@@ -19,19 +19,23 @@ client_metadata_dict = {
     "token_endpoint_auth_method": "none",  # Public client with PKCE
 }
 
+
 def _create_redirect_handler():
     """Create a redirect handler that opens the URL in a browser."""
+
     async def redirect_handler(authorization_url: str) -> None:
         """Default redirect handler that opens the URL in a browser."""
         print(f"Opening browser for authorization: {authorization_url}")
         logger.info(f"🌐 redirect_handler: OAuth flow triggered, opening browser")
         logger.info(f"🌐 redirect_handler: Authorization URL: {authorization_url[:100]}...")
         webbrowser.open(authorization_url)
+
     return redirect_handler
 
 
 def _create_callback_handler(callback_server: CallbackServer):
     """Create a callback handler that uses the provided callback server."""
+
     async def callback_handler() -> tuple[str, str | None]:
         """Wait for OAuth callback and return auth code and state."""
         # CRITICAL: Reset callback server state before each OAuth flow
@@ -47,6 +51,7 @@ def _create_callback_handler(callback_server: CallbackServer):
         logger.info(f"🔑 callback_handler: Received auth code (prefix: {auth_code[:15]}...), state: {state}")
         logger.info(f"🔄 callback_handler: Returning auth code to SDK for token exchange")
         return auth_code, state
+
     return callback_handler
 
 

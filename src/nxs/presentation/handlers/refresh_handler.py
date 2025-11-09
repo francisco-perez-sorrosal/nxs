@@ -44,12 +44,7 @@ class RefreshHandler:
             event: ArtifactsFetched event
         """
         if event.changed:
-            logger.debug(
-                f"Artifacts changed for {event.server_name}, scheduling refresh"
-            )
+            logger.debug(f"Artifacts changed for {event.server_name}, scheduling refresh")
             self.mcp_refresher.schedule_refresh(server_name=event.server_name)
         else:
-            logger.debug(
-                f"Artifacts fetched for {event.server_name} (no changes)"
-            )
-
+            logger.debug(f"Artifacts fetched for {event.server_name} (no changes)")

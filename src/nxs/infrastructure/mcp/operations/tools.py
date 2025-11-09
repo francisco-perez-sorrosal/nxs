@@ -50,4 +50,3 @@ class ToolsOperations(OperationBase):
         except Exception as exc:  # pragma: no cover - logged for observability
             self.logger.error("Failed to call tool '%s': %s", tool_name, exc)
             return None
-

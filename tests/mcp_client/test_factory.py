@@ -75,4 +75,3 @@ async def test_artifact_manager_uses_client_factory() -> None:
 
     await manager.cleanup()
     mock_client.disconnect.assert_awaited()
-

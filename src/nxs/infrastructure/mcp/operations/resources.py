@@ -59,4 +59,3 @@ class ResourcesOperations(OperationBase):
             return resource.text
 
         return None
-

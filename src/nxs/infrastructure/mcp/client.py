@@ -13,7 +13,7 @@ from mcp.types import CallToolResult
 
 from nxs.logger import get_logger
 from nxs.infrastructure.mcp.auth import oauth_context
-from nxs.infrastructure.mcp.connection import ConnectionManager
+from nxs.infrastructure.mcp.connection import ClientConnectionManager
 from nxs.domain.types import ConnectionStatus
 from nxs.infrastructure.mcp.operations import (
     PromptsOperations,
@@ -32,7 +32,7 @@ class MCPAuthClient:
         server_url: str,
         transport_type: str = "streamable_http",
         *,
-        connection_manager: Optional[ConnectionManager] = None,
+        connection_manager: Optional[ClientConnectionManager] = None,
         on_status_change: Optional[Callable[[ConnectionStatus], None]] = None,
         on_reconnect_progress: Optional[Callable[[int, int, float], None]] = None,
     ):
@@ -46,7 +46,7 @@ class MCPAuthClient:
                 "callbacks will be ignored because the manager should already be configured.",
             )
 
-        self._connection_manager = connection_manager or ConnectionManager(
+        self._connection_manager = connection_manager or ClientConnectionManager(
             on_status_change=on_status_change,
             on_reconnect_progress=on_reconnect_progress,
         )
@@ -85,7 +85,7 @@ class MCPAuthClient:
         return self._connection_manager.reconnect_info
 
     @property
-    def connection_manager(self) -> ConnectionManager:
+    def connection_manager(self) -> ClientConnectionManager:
         """Expose the underlying connection manager."""
         return self._connection_manager
 

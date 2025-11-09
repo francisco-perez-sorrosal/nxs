@@ -19,7 +19,7 @@ StatusUpdate = namedtuple("StatusUpdate", ["update_type", "args", "kwargs"])
 class StatusQueue:
     """
     Manages asynchronous status updates for the status panel.
-    
+
     Status updates are queued and processed in the background, ensuring
     the UI remains responsive and scrollable during updates.
     """
@@ -39,7 +39,7 @@ class StatusQueue:
     async def start(self) -> None:
         """
         Start the status update worker task.
-        
+
         This begins processing status updates from the queue asynchronously.
         """
         if self._running:
@@ -110,7 +110,7 @@ class StatusQueue:
     async def _worker(self) -> None:
         """
         Worker task that processes status updates from the queue asynchronously.
-        
+
         Updates are applied using call_after_refresh to ensure they don't block
         UI interactions like scrolling.
         """

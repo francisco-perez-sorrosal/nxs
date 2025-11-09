@@ -11,11 +11,11 @@ def setup_logger(
     rotation: str = "10 MB",
     retention: str = "7 days",
     compression: str = "zip",
-    console_output: bool = False
+    console_output: bool = False,
 ) -> None:
     """
     Configure loguru logger with file and console output.
-    
+
     Args:
         log_file: Path to the log file
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
@@ -26,16 +26,16 @@ def setup_logger(
     """
     # Remove default handler
     logger.remove()
-    
+
     # Console output with colors
     if console_output:
         logger.add(
             sys.stderr,
             level=log_level,
             format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-            colorize=True
+            colorize=True,
         )
-    
+
     # File output
     logger.add(
         log_file,
@@ -44,17 +44,17 @@ def setup_logger(
         rotation=rotation,
         retention=retention,
         compression=compression,
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
 
 def get_logger(name: Optional[str] = None):
     """
     Get a configured logger instance.
-    
+
     Args:
         name: Optional name for the logger
-        
+
     Returns:
         Logger instance
     """
@@ -65,6 +65,7 @@ def get_logger(name: Optional[str] = None):
 
 # Default logger configuration - ensure it creates nexus.log in project root
 import os
+
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 log_file_path = os.path.join(project_root, "nexus.log")
 setup_logger(log_file_path)

@@ -55,9 +55,7 @@ class HealthChecker:
             return
 
         self._stop_event = stop_event
-        self._task = asyncio.create_task(
-            self._health_check_loop(get_session, on_unhealthy, stop_event)
-        )
+        self._task = asyncio.create_task(self._health_check_loop(get_session, on_unhealthy, stop_event))
         logger.info(f"Health checker started (interval={self._check_interval}s)")
 
     async def stop(self) -> None:

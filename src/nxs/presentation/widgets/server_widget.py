@@ -73,9 +73,7 @@ class ServerWidget(Vertical):
             "",
             id=f"server-count-{safe_server_name}",
         )
-        self._artifacts_container = Vertical(
-            id=f"server-artifacts-{safe_server_name}"
-        )
+        self._artifacts_container = Vertical(id=f"server-artifacts-{safe_server_name}")
         self._artifacts_container.styles.gap = 0
         self._artifacts_container.styles.margin = 0
         self._artifacts_container.styles.padding = 0
@@ -162,9 +160,7 @@ class ServerWidget(Vertical):
 
     def _render_operational_status(self) -> None:
         if self._operational_status:
-            self._operational.update(
-                Text.from_markup(f"  Status: {self._operational_status}")
-            )
+            self._operational.update(Text.from_markup(f"  Status: {self._operational_status}"))
             self._operational.display = True
         else:
             self._operational.display = False
@@ -176,9 +172,7 @@ class ServerWidget(Vertical):
         tools_count = len(self._artifacts.get("tools", []))
         prompts_count = len(self._artifacts.get("prompts", []))
         resources_count = len(self._artifacts.get("resources", []))
-        self._artifact_counts.update(
-            format_artifact_counts_text(tools_count, prompts_count, resources_count)
-        )
+        self._artifact_counts.update(format_artifact_counts_text(tools_count, prompts_count, resources_count))
 
     def _render_artifacts(self) -> None:
         for child in list(self._artifacts_container.children):
@@ -193,10 +187,7 @@ class ServerWidget(Vertical):
                 name, description = self._extract_artifact_info(artifact, key)
                 if not name:
                     continue
-                artifact_id = (
-                    f"artifact-{sanitize_widget_id(self.server_name)}-{code}-"
-                    f"{sanitize_widget_id(name)}"
-                )
+                artifact_id = f"artifact-{sanitize_widget_id(self.server_name)}-{code}-" f"{sanitize_widget_id(name)}"
                 yield ArtifactItem(
                     artifact_name=name,
                     artifact_type=code,
@@ -226,4 +217,3 @@ class ServerWidget(Vertical):
             display = raw_name
 
         return display, description
-

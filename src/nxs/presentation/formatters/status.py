@@ -69,9 +69,7 @@ def format_status_line_markup(
         max_attempts = reconnect_info.get("max_attempts", 10)
         next_retry = reconnect_info.get("next_retry_delay")
         if next_retry is not None:
-            status_details.append(
-                f"[dim]attempt {attempts}/{max_attempts}, retry in {next_retry:.0f}s[/]"
-            )
+            status_details.append(f"[dim]attempt {attempts}/{max_attempts}, retry in {next_retry:.0f}s[/]")
         else:
             status_details.append(f"[dim]attempt {attempts}/{max_attempts}[/]")
 
@@ -113,7 +111,4 @@ def format_artifact_counts_text(
     """Return the Rich Text describing artifact counts."""
     if tools + prompts + resources == 0:
         return Text.from_markup("  [dim]No artifacts[/]")
-    return Text.from_markup(
-        f"  [dim]({tools} tools, {prompts} prompts, {resources} resources)[/]"
-    )
-
+    return Text.from_markup(f"  [dim]({tools} tools, {prompts} prompts, {resources} resources)[/]")

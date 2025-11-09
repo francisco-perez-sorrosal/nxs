@@ -8,4 +8,3 @@ and provides type definitions for cache implementations.
 from nxs.domain.protocols import Cache
 
 __all__ = ["Cache"]
-

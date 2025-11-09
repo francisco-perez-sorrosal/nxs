@@ -27,4 +27,3 @@ def test_resource_strategy_returns_all_when_no_query() -> None:
     candidates = strategy.get_candidates(request)
     assert len(candidates) == 2
     assert all(isinstance(item, DropdownItem) for item in candidates)
-

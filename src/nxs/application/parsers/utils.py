@@ -12,6 +12,7 @@ from typing import NamedTuple
 
 class ParsedArgument(NamedTuple):
     """Represents a parsed command argument."""
+
     name: str
     value: str | None
     is_complete: bool
@@ -43,7 +44,7 @@ def parse_command_arguments(text: str) -> list[str]:
         char = text[i]
 
         # Check for escaped quote (not currently used but good to handle)
-        if char == '\\' and i + 1 < len(text) and text[i + 1] == '"':
+        if char == "\\" and i + 1 < len(text) and text[i + 1] == '"':
             current_part += char + text[i + 1]
             i += 2
             continue
@@ -52,7 +53,7 @@ def parse_command_arguments(text: str) -> list[str]:
         if char == '"':
             inside_quotes = not inside_quotes
             current_part += char
-        elif char == ' ' and not inside_quotes:
+        elif char == " " and not inside_quotes:
             # Space outside quotes - end of current argument
             if current_part.strip():
                 arg_parts.append(current_part.strip())
@@ -120,12 +121,12 @@ def extract_value_part(argument: str) -> tuple[str, str] | None:
     Returns:
         Tuple of (arg_name, value_part) or None if no = present
     """
-    if '=' not in argument:
+    if "=" not in argument:
         return None
 
-    eq_pos = argument.rfind('=')
+    eq_pos = argument.rfind("=")
     arg_name = argument[:eq_pos].strip()
-    value_part = argument[eq_pos + 1:]
+    value_part = argument[eq_pos + 1 :]
 
     return (arg_name, value_part)
 

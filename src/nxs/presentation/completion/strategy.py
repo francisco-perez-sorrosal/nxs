@@ -42,4 +42,3 @@ class CompletionStrategy(Protocol):
         """Return dropdown items for the current state."""
 
         ...
-

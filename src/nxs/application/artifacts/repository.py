@@ -29,11 +29,7 @@ class ArtifactRepository:
     # Convenience helpers
     # ------------------------------------------------------------------
     def _connected_clients(self) -> Mapping[str, MCPClient]:
-        return {
-            name: client
-            for name, client in self._clients_provider().items()
-            if client.is_connected
-        }
+        return {name: client for name, client in self._clients_provider().items() if client.is_connected}
 
     # ------------------------------------------------------------------
     # Artifact fetch methods
@@ -86,14 +82,6 @@ class ArtifactRepository:
                 logger.error("Failed to list tools from %s: %s", server_name, err)
 
         return tools
-
-    async def get_resource_list(self) -> list[str]:
-        """Return flattened list of resource URIs."""
-        resources = await self.get_resources()
-        flattened: list[str] = []
-        for uris in resources.values():
-            flattened.extend(uris)
-        return flattened
 
     async def get_command_names(self) -> list[str]:
         """Return list of prompt command names."""
@@ -157,10 +145,7 @@ class ArtifactRepository:
                 "tools",
                 retry_on_empty=retry_on_empty,
             )
-            artifacts["tools"] = [
-                {"name": tool.name, "description": tool.description}
-                for tool in tools
-            ]
+            artifacts["tools"] = [{"name": tool.name, "description": tool.description} for tool in tools]
 
             # Prompts
             prompts = await self._fetch_with_retry(
@@ -169,10 +154,7 @@ class ArtifactRepository:
                 "prompts",
                 retry_on_empty=retry_on_empty,
             )
-            artifacts["prompts"] = [
-                {"name": prompt.name, "description": prompt.description}
-                for prompt in prompts
-            ]
+            artifacts["prompts"] = [{"name": prompt.name, "description": prompt.description} for prompt in prompts]
 
             # Resources
             resources = await self._fetch_with_retry(
@@ -187,9 +169,7 @@ class ArtifactRepository:
                     "description": (
                         resource.description
                         if hasattr(resource, "description") and resource.description
-                        else resource.name
-                        if hasattr(resource, "name") and resource.name
-                        else None
+                        else resource.name if hasattr(resource, "name") and resource.name else None
                     ),
                 }
                 for resource in resources
@@ -230,6 +210,7 @@ class ArtifactRepository:
         Returns:
             Dictionary mapping server names to their artifacts
         """
+
         async def _fetch_all_servers():
             results: dict[str, ArtifactCollection] = {}
             for server_name in self._clients_provider().keys():

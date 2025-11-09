@@ -67,7 +67,7 @@ def format_document(
 ) -> list[base.Message]:
     # Read the prompt template from file
     prompt_template = read_prompt("format_document.txt")
-    
+
     # Format the prompt with the document ID
     prompt = prompt_template.format(doc_id=doc_id)
 

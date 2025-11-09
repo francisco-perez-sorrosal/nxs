@@ -132,6 +132,8 @@ Thumbs.db
 # Logs
 *.log
 logs/
+nexus.log
+src/nexus.log
 
 # Temporary files
 *.tmp
@@ -142,3 +144,4 @@ models/
 data/
 *.db
 *.sqlite
+requirements.txt  # Auto-generated; use pixi.lock for dependency management

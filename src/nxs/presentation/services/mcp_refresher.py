@@ -33,11 +33,7 @@ class RefreshService:
     # Default timeout for artifact fetching (in seconds)
     DEFAULT_TIMEOUT = 30.0
 
-    def __init__(
-        self,
-        artifact_manager: ArtifactManager,
-        mcp_panel_getter: Callable[[], "MCPPanel"]
-    ):
+    def __init__(self, artifact_manager: ArtifactManager, mcp_panel_getter: Callable[[], "MCPPanel"]):
         """
         Initialize the RefreshService.
 
@@ -52,6 +48,7 @@ class RefreshService:
         self._refresh_tasks: set[asyncio.Task] = set()
         self._refresh_lock = asyncio.Lock()
         self._server_last_check: dict[str, float] = {}
+
     def get_server_last_check(self, server_name: str) -> float:
         """Return the last artifact check timestamp for a server."""
         return self._server_last_check.get(server_name, 0.0)
@@ -67,10 +64,7 @@ class RefreshService:
         return dict(self._server_last_check)
 
     def schedule_refresh(
-        self,
-        server_name: str | None = None,
-        retry_on_empty: bool = False,
-        delay: float = 0.0
+        self, server_name: str | None = None, retry_on_empty: bool = False, delay: float = 0.0
     ) -> None:
         """
         Schedule a refresh operation, cancelling any previous refresh tasks.
@@ -86,13 +80,7 @@ class RefreshService:
         self.cancel_pending_refreshes()
 
         # Create new refresh task
-        task = asyncio.create_task(
-            self.refresh(
-                server_name=server_name,
-                retry_on_empty=retry_on_empty,
-                delay=delay
-            )
-        )
+        task = asyncio.create_task(self.refresh(server_name=server_name, retry_on_empty=retry_on_empty, delay=delay))
 
         # Track the task
         self._refresh_tasks.add(task)
@@ -110,12 +98,7 @@ class RefreshService:
                     logger.debug(f"Error cancelling refresh task: {e}")
         self._refresh_tasks.clear()
 
-    async def refresh(
-        self,
-        server_name: str | None = None,
-        retry_on_empty: bool = False,
-        delay: float = 0.0
-    ) -> None:
+    async def refresh(self, server_name: str | None = None, retry_on_empty: bool = False, delay: float = 0.0) -> None:
         """
         Refresh the MCP panel with current server data and statuses.
 
@@ -209,9 +192,7 @@ class RefreshService:
         logger.debug(f"Refreshed MCP panel with {len(servers_data)} server(s)")
 
     async def _update_panel_display(
-        self,
-        mcp_panel: "MCPPanel",
-        servers_data: dict[str, dict[str, list[dict[str, str | None]]]]
+        self, mcp_panel: "MCPPanel", servers_data: dict[str, dict[str, list[dict[str, str | None]]]]
     ) -> None:
         """
         Update the MCP panel display with server data and statuses.
@@ -224,15 +205,9 @@ class RefreshService:
         server_statuses = self.artifact_manager.get_server_statuses()
 
         server_names = set(servers_data.keys()) if servers_data else set(server_statuses.keys())
-        server_last_check = {
-            server_name: self.get_server_last_check(server_name)
-            for server_name in server_names
-        }
+        server_last_check = {server_name: self.get_server_last_check(server_name) for server_name in server_names}
 
-        logger.debug(
-            f"Updating panel: {len(servers_data)} servers in data, "
-            f"{len(server_statuses)} in statuses"
-        )
+        logger.debug(f"Updating panel: {len(servers_data)} servers in data, " f"{len(server_statuses)} in statuses")
         mcp_panel.update_servers(servers_data, server_statuses, server_last_check)
 
     async def _clear_fetch_status_after_delay(self, server_name: str, delay: float) -> None:
@@ -294,8 +269,4 @@ class RefreshService:
         Returns:
             Total number of artifacts
         """
-        return (
-            len(artifacts.get("tools", [])) +
-            len(artifacts.get("prompts", [])) +
-            len(artifacts.get("resources", []))
-        )
+        return len(artifacts.get("tools", [])) + len(artifacts.get("prompts", [])) + len(artifacts.get("resources", []))

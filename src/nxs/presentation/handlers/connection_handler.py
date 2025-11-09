@@ -76,9 +76,7 @@ class ConnectionHandler:
                 cached = self.artifact_manager.get_cached_artifacts(server_name)
                 if cached and client.is_connected:
                     total_cached = (
-                        len(cached.get("tools", []))
-                        + len(cached.get("prompts", []))
-                        + len(cached.get("resources", []))
+                        len(cached.get("tools", [])) + len(cached.get("prompts", [])) + len(cached.get("resources", []))
                     )
                     if total_cached > 0:
                         # Already connected with artifacts, don't refresh unnecessarily
@@ -176,4 +174,3 @@ class ConnectionHandler:
                 self.mcp_refresher.schedule_refresh()
         except Exception as e:
             logger.debug(f"Error updating reconnect progress for {server_name}: {e}")
-

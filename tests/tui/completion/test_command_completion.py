@@ -43,4 +43,3 @@ def test_command_strategy_ignores_known_command_with_args() -> None:
 
     request = CompletionRequest(make_state("/run arg"))
     assert not strategy.can_handle(request)
-

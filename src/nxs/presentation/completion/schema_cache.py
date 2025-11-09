@@ -53,4 +53,3 @@ class SchemaCacheMapping(Mapping[str, tuple[Any, str]]):
         if not isinstance(key, str):
             return False
         return self._prompt_service.get_cached_schema(key) is not None
-

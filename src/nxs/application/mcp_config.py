@@ -113,9 +113,7 @@ def load_mcp_config(config_path: Optional[str | Path] = None) -> MCPServersConfi
         raise
 
 
-def get_server_config(
-    server_name: str, config: Optional[MCPServersConfig] = None
-) -> Optional[MCPServerConfig]:
+def get_server_config(server_name: str, config: Optional[MCPServersConfig] = None) -> Optional[MCPServerConfig]:
     """
     Get configuration for a specific MCP server.
 
@@ -146,4 +144,3 @@ def get_all_server_names(config: Optional[MCPServersConfig] = None) -> list[str]
         config = load_mcp_config()
 
     return list(config.mcpServers.keys())
-

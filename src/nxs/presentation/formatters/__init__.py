@@ -21,4 +21,3 @@ __all__ = [
     "get_status_text",
     "sanitize_widget_id",
 ]
-

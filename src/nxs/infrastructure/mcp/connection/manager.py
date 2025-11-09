@@ -19,14 +19,15 @@ class SessionProtocol(Protocol):
         ...
 
 
-class ConnectionManager:
+class ClientConnectionManager:
     """
-    Orchestrates connection management with lifecycle, health checking, and reconnection.
+    Orchestrates connection management for a SINGLE MCP client connection.
 
-    This manager coordinates a SINGLE connection's lifecycle (not all servers).
-    For aggregate status across all MCP servers, see ArtifactManager._server_statuses.
+    This manager handles per-client connection lifecycle (not aggregate/global management).
+    For aggregate status across all MCP servers, see MCPConnectionManager in
+    application/connection_manager.py
 
-    This manager coordinates:
+    Responsibilities:
     - Connection lifecycle state (connecting, connected, disconnected, etc.)
     - Health monitoring to detect connection failures
     - Automatic reconnection with configurable strategy
@@ -152,9 +153,7 @@ class ConnectionManager:
         stop_event, _ = self._lifecycle.initialize()
 
         # Start connection maintenance in background
-        self._connection_task = asyncio.create_task(
-            self._maintain_connection(connect_fn, stop_event)
-        )
+        self._connection_task = asyncio.create_task(self._maintain_connection(connect_fn, stop_event))
 
         # Start health monitoring
         await self._health_checker.start(
@@ -190,9 +189,7 @@ class ConnectionManager:
             connect_fn: Async function that establishes connection
         """
         if not self._lifecycle.is_error:
-            logger.warning(
-                f"Cannot retry: status is {self._lifecycle.status.value}, not ERROR"
-            )
+            logger.warning(f"Cannot retry: status is {self._lifecycle.status.value}, not ERROR")
             return
 
         logger.info("Manual retry requested")
@@ -264,9 +261,7 @@ class ConnectionManager:
 
                 # Check if we should retry
                 if not self._reconnect_strategy.should_retry(self._reconnect_attempts):
-                    error_msg = (
-                        f"Connection failed after {self._reconnect_strategy.max_attempts} attempts"
-                    )
+                    error_msg = f"Connection failed after {self._reconnect_strategy.max_attempts} attempts"
                     logger.error(error_msg)
                     self._lifecycle.set_status(ConnectionStatus.ERROR, error_msg)
                     break

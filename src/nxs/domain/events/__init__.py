@@ -6,7 +6,8 @@ subscribes to them.
 
 Example:
     ```python
-    from nxs.core.events import EventBus, ConnectionStatusChanged
+    from nxs.domain.events import EventBus, ConnectionStatusChanged
+    from nxs.domain.types import ConnectionStatus
 
     # Create event bus
     event_bus = EventBus()
@@ -40,4 +41,3 @@ __all__ = [
     "ReconnectProgress",
     "ArtifactsFetched",
 ]
-

@@ -8,7 +8,11 @@ formatting them appropriately for display in the autocomplete dropdown.
 from collections.abc import Mapping
 from typing import Any
 from textual_autocomplete import DropdownItem
-from nxs.application.parsers.utils import parse_command_arguments, extract_value_part
+from nxs.application.parsers import (
+    parse_command_arguments,
+    extract_value_part,
+    is_valid_default_value,
+)
 
 
 class ArgumentSuggestionGenerator:
@@ -63,37 +67,8 @@ class ArgumentSuggestionGenerator:
 
         return provided_args
 
-    def validate_default_value(self, default: Any) -> bool:
-        """
-        Validate that a default value is acceptable (not PydanticUndefined or class reference).
-
-        Args:
-            default: The default value to validate
-
-        Returns:
-            True if value is valid, False otherwise
-        """
-        if default is None:
-            return False
-
-        default_str = str(default)
-
-        # Filter out PydanticUndefined
-        if 'Undefined' in default_str or 'PydanticUndefined' in default_str:
-            return False
-
-        # Filter out class references (e.g., "<class 'str'>")
-        if 'class' in default_str.lower() and '<' in default_str:
-            return False
-
-        return True
-
     def format_argument_suggestion(
-        self,
-        arg_name: str,
-        default: Any,
-        description: str,
-        is_required: bool
+        self, arg_name: str, default: Any, description: str, is_required: bool
     ) -> DropdownItem:
         """
         Format a single argument suggestion for the dropdown.
@@ -112,15 +87,12 @@ class ArgumentSuggestionGenerator:
             suggestion_text = f"{arg_name}=<required>"
             if description:
                 suggestion_text = f"{suggestion_text}  ({description})"
-            return DropdownItem(
-                main=suggestion_text,
-                prefix="  [R]"
-            )
+            return DropdownItem(main=suggestion_text, prefix="  [R]")
         else:
             # Optional argument (with or without default)
-            if default is not None and self.validate_default_value(default):
+            if default is not None and is_valid_default_value(default):
                 # Auto-quote default values that contain spaces for better UX
-                if ' ' in str(default):
+                if " " in str(default):
                     suggestion_text = f'{arg_name}="{default}"'
                 else:
                     suggestion_text = f"{arg_name}={default}"
@@ -130,16 +102,9 @@ class ArgumentSuggestionGenerator:
             if description:
                 suggestion_text = f"{suggestion_text}  ({description})"
 
-            return DropdownItem(
-                main=suggestion_text,
-                prefix="  [O]"
-            )
+            return DropdownItem(main=suggestion_text, prefix="  [O]")
 
-    def generate_from_dict_schema(
-        self,
-        schema: dict,
-        provided_args: set[str]
-    ) -> list[DropdownItem]:
+    def generate_from_dict_schema(self, schema: dict, provided_args: set[str]) -> list[DropdownItem]:
         """
         Generate suggestions from a dict-based schema.
 
@@ -151,8 +116,8 @@ class ArgumentSuggestionGenerator:
             List of DropdownItem suggestions
         """
         suggestions = []
-        properties = schema.get('properties', {})
-        required_args = schema.get('required', [])
+        properties = schema.get("properties", {})
+        required_args = schema.get("required", [])
 
         for arg_name, arg_spec in properties.items():
             if arg_name in provided_args:
@@ -163,25 +128,19 @@ class ArgumentSuggestionGenerator:
             is_required = arg_name in required_args
 
             if isinstance(arg_spec, dict):
-                default = arg_spec.get('default')
-                description = arg_spec.get('description', '')
+                default = arg_spec.get("default")
+                description = arg_spec.get("description", "")
 
             # Validate and clean default value
-            if default is not None and not self.validate_default_value(default):
+            if default is not None and not is_valid_default_value(default):
                 default = None
 
-            suggestion = self.format_argument_suggestion(
-                arg_name, default, description, is_required
-            )
+            suggestion = self.format_argument_suggestion(arg_name, default, description, is_required)
             suggestions.append(suggestion)
 
         return suggestions
 
-    def generate_from_list_schema(
-        self,
-        schema: list,
-        provided_args: set[str]
-    ) -> list[DropdownItem]:
+    def generate_from_list_schema(self, schema: list, provided_args: set[str]) -> list[DropdownItem]:
         """
         Generate suggestions from a list-based schema (list of PromptArgument objects).
 
@@ -198,9 +157,9 @@ class ArgumentSuggestionGenerator:
         required_set = set()
         for arg in schema:
             if isinstance(arg, dict):
-                if arg.get('name') and arg.get('required', False):
-                    required_set.add(arg['name'])
-            elif hasattr(arg, 'name') and hasattr(arg, 'required') and arg.required:
+                if arg.get("name") and arg.get("required", False):
+                    required_set.add(arg["name"])
+            elif hasattr(arg, "name") and hasattr(arg, "required") and arg.required:
                 required_set.add(arg.name)
 
         # Second pass: generate suggestions
@@ -210,25 +169,25 @@ class ArgumentSuggestionGenerator:
             description = ""
 
             if isinstance(arg, dict):
-                arg_name = arg.get('name', '')
-                default = arg.get('default')
-                description = arg.get('description', '')
-            elif hasattr(arg, 'name'):
+                arg_name = arg.get("name", "")
+                default = arg.get("default")
+                description = arg.get("description", "")
+            elif hasattr(arg, "name"):
                 arg_name = arg.name
-                description = getattr(arg, 'description', '') if hasattr(arg, 'description') else ''
+                description = getattr(arg, "description", "") if hasattr(arg, "description") else ""
 
                 # Try to extract default from PromptArgument (Pydantic model)
                 try:
-                    if hasattr(arg, 'model_dump'):
+                    if hasattr(arg, "model_dump"):
                         arg_dict = arg.model_dump(exclude_unset=False, exclude_none=False)
-                        default = arg_dict.get('default')
-                    elif hasattr(arg, 'dict'):
+                        default = arg_dict.get("default")
+                    elif hasattr(arg, "dict"):
                         arg_dict = arg.dict(exclude_unset=False, exclude_none=False)
-                        default = arg_dict.get('default')
-                    elif hasattr(arg, '__dict__'):
-                        default = arg.__dict__.get('default')
+                        default = arg_dict.get("default")
+                    elif hasattr(arg, "__dict__"):
+                        default = arg.__dict__.get("default")
                     else:
-                        default = getattr(arg, 'default', None)
+                        default = getattr(arg, "default", None)
                 except Exception:
                     default = None
 
@@ -236,21 +195,15 @@ class ArgumentSuggestionGenerator:
                 is_required = arg_name in required_set
 
                 # Validate and clean default value
-                if default is not None and not self.validate_default_value(default):
+                if default is not None and not is_valid_default_value(default):
                     default = None
 
-                suggestion = self.format_argument_suggestion(
-                    arg_name, default, description, is_required
-                )
+                suggestion = self.format_argument_suggestion(arg_name, default, description, is_required)
                 suggestions.append(suggestion)
 
         return suggestions
 
-    def generate_suggestions(
-        self,
-        command_name: str,
-        current_text: str
-    ) -> list[DropdownItem]:
+    def generate_suggestions(self, command_name: str, current_text: str) -> list[DropdownItem]:
         """
         Generate argument suggestions for a command.
 
@@ -265,7 +218,7 @@ class ArgumentSuggestionGenerator:
             return []
 
         prompt, _ = self.schema_cache[command_name]
-        if not hasattr(prompt, 'arguments') or not prompt.arguments:
+        if not hasattr(prompt, "arguments") or not prompt.arguments:
             return []
 
         schema = prompt.arguments

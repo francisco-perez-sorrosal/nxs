@@ -57,9 +57,7 @@ class ArgumentCompletionStrategy(CompletionStrategy):
         if command_part is None:
             return []
 
-        suggestions = self._suggestion_generator.generate_suggestions(
-            command_part, remaining
-        )
+        suggestions = self._suggestion_generator.generate_suggestions(command_part, remaining)
         logger.debug(
             "ArgumentCompletionStrategy returning %d suggestions for command %r",
             len(suggestions),
@@ -86,4 +84,3 @@ class ArgumentCompletionStrategy(CompletionStrategy):
             command, remainder = stripped, ""
 
         return command, remainder
-
