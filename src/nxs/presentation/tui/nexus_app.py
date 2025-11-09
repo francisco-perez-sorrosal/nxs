@@ -3,7 +3,6 @@ NexusApp - Main Textual application for the Nexus TUI.
 """
 
 import asyncio
-import time
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer
 from textual.containers import Container, Vertical, Horizontal
@@ -13,29 +12,10 @@ from nxs.presentation.widgets.chat_panel import ChatPanel
 from nxs.presentation.widgets.status_panel import StatusPanel
 from nxs.presentation.widgets.input_field import NexusInput
 from nxs.presentation.widgets.mcp_panel import MCPPanel
-from nxs.presentation.tui.query_manager import QueryManager
-from nxs.presentation.services.status_queue import StatusQueue
-from nxs.presentation.services import (
-    MCPCoordinator,
-    PromptService,
-    AutocompleteService,
-    RefreshService,
-)
-from nxs.presentation.handlers import (
-    ConnectionHandler,
-    QueryHandler,
-    RefreshHandler,
-)
+from nxs.presentation.services import ServiceContainer
 from nxs.application.artifact_manager import ArtifactManager
-from nxs.domain.events import (
-    ArtifactsFetched,
-    ConnectionStatusChanged,
-    EventBus,
-    ReconnectProgress,
-)
+from nxs.domain.events import EventBus
 from nxs.domain.protocols import Cache
-from nxs.infrastructure.cache import MemoryCache
-from nxs.domain.types import ConnectionStatus
 from nxs.logger import get_logger
 
 logger = get_logger("nexus_tui")
@@ -109,70 +89,35 @@ class NexusApp(App):
         self.event_bus = event_bus or artifact_manager.event_bus or EventBus()
         self.artifact_manager.event_bus = self.event_bus
 
-        # Initialize prompt caches
-        prompt_info_cache = prompt_info_cache or MemoryCache[str, str | None]()
-        prompt_schema_cache = prompt_schema_cache or MemoryCache[str, tuple]()
-
-        # Initialize StatusQueue for asynchronous status updates
-        self.status_queue = StatusQueue(status_panel_getter=self._get_status_panel)
-
-        # Initialize RefreshService for managing panel refresh operations
-        self.mcp_refresher = RefreshService(
+        # Create ServiceContainer to manage all services, handlers, and dependencies
+        self.services = ServiceContainer(
+            app=self,
+            agent_loop=agent_loop,
             artifact_manager=artifact_manager,
-            mcp_panel_getter=self._get_mcp_panel
-        )
-
-        # Initialize services
-        self.prompt_service = PromptService(
-            artifact_manager=artifact_manager,
+            event_bus=self.event_bus,
             prompt_info_cache=prompt_info_cache,
             prompt_schema_cache=prompt_schema_cache,
         )
 
-        self.autocomplete_service = AutocompleteService(
-            app=self,
-            input_getter=self._get_input,
-            prompt_service=self.prompt_service,
-            autocomplete_getter=self._get_autocomplete,
-        )
-
-        self.mcp_coordinator = MCPCoordinator(
-            artifact_manager=artifact_manager,
-            status_queue=self.status_queue,
+        # Set widget getters for services that need them
+        self.services.set_widget_getters(
+            get_status_panel=self._get_status_panel,
+            get_mcp_panel=self._get_mcp_panel,
+            get_chat_panel=self._get_chat_panel,
+            get_input=self._get_input,
+            get_autocomplete=self._get_autocomplete,
             on_resources_loaded=self._on_resources_loaded,
             on_commands_loaded=self._on_commands_loaded,
-        )
-
-        # Initialize handlers
-        self.connection_handler = ConnectionHandler(
-            artifact_manager=artifact_manager,
-            mcp_panel_getter=self._get_mcp_panel,
-            mcp_refresher=self.mcp_refresher,
-        )
-
-        self.refresh_handler = RefreshHandler(mcp_refresher=self.mcp_refresher)
-
-        self.query_handler = QueryHandler(
-            agent_loop=agent_loop,
-            chat_panel_getter=self._get_chat_panel,
-            status_queue=self.status_queue,
-            mcp_initialized_getter=lambda: self._mcp_initialized,
             focus_input=self._focus_input,
+            mcp_initialized_getter=lambda: self._mcp_initialized,
         )
 
-        # Initialize QueryManager with the processor function
-        self.query_manager = QueryManager(processor=self.query_handler.process_query)
+        # Create handlers and query manager
+        self.services.create_handlers()
+        self.services.create_query_manager()
 
-        # Subscribe to events via handlers
-        self.event_bus.subscribe(
-            ConnectionStatusChanged, self.connection_handler.handle_connection_status_changed
-        )
-        self.event_bus.subscribe(
-            ReconnectProgress, self.connection_handler.handle_reconnect_progress
-        )
-        self.event_bus.subscribe(
-            ArtifactsFetched, self.refresh_handler.handle_artifacts_fetched
-        )
+        # Subscribe to all events
+        self.services.subscribe_events()
 
     def compose(self) -> ComposeResult:
         """Create the UI layout."""
@@ -202,10 +147,12 @@ class NexusApp(App):
         """Called when the app is mounted."""
         logger.info("Nexus TUI mounted and ready")
 
-        # Start the QueryManager to begin processing queries
-        await self.query_manager.start()
-        # Start the StatusQueue for asynchronous status updates
-        await self.status_queue.start()
+        # Verify services are initialized
+        assert self.services.status_queue is not None, "Services should be initialized"
+        assert self.services.autocomplete_service is not None, "Services should be initialized"
+
+        # Start all services (QueryManager, StatusQueue, etc.)
+        await self.services.start()
 
         # Show welcome message immediately (TUI is ready)
         chat = self.query_one("#chat", ChatPanel)
@@ -220,14 +167,14 @@ class NexusApp(App):
         )
 
         # Show loading message in status panel
-        await self.status_queue.add_info_message("Initializing MCP connections...")
+        await self.services.status_queue.add_info_message("Initializing MCP connections...")
 
         # Initialize MCP connections asynchronously in the background
         # This allows the TUI to appear immediately without blocking
         asyncio.create_task(self._initialize_mcp_connections_async())
 
         # Mount AutoComplete overlay after the app is fully mounted
-        self.call_after_refresh(self.autocomplete_service.mount_autocomplete)
+        self.call_after_refresh(self.services.autocomplete_service.mount_autocomplete)
 
         # Focus the input field after the first render
         self.call_after_refresh(self._focus_input)
@@ -241,48 +188,21 @@ class NexusApp(App):
         """
         logger.info("Starting asynchronous MCP connection initialization")
 
-        try:
-            # Use MCPCoordinator to initialize connections and load resources/commands
-            resources, commands = await self.mcp_coordinator.initialize()
+        # Verify services are initialized
+        assert self.services.mcp_coordinator is not None, "Services should be initialized"
 
-            # Store resources and commands
-            self.resources = resources
-            self.commands = commands
+        # Use MCPCoordinator to perform full initialization
+        # This includes: connections, resources/commands, prompt preloading,
+        # panel refresh, and starting background tasks
+        resources, commands = await self.services.mcp_coordinator.initialize_and_load()
 
-            # Preload prompt information for all commands
-            # This ensures arguments are available when dropdown is shown
-            # AutoComplete widget now accesses PromptService caches directly via reference
-            await self.prompt_service.preload_all(commands)
+        # Store resources and commands
+        self.resources = resources
+        self.commands = commands
 
-            # Mark MCP as initialized
-            self._mcp_initialized = True
-            logger.info("MCP connection initialization completed")
-
-            # Update MCP panel with server information
-            await self.mcp_refresher.refresh()
-
-            # Start periodic refresh task to check for missing artifacts
-            asyncio.create_task(self._periodic_artifact_refresh())
-
-        except Exception as e:
-            logger.error(f"Error during MCP connection initialization: {e}", exc_info=True)
-            await self.status_queue.add_error_message(f"MCP initialization error: {str(e)}")
-
-            # Still try to update UI even if initialization failed
-            # (some servers might have connected successfully)
-            try:
-                self.resources = await self.artifact_manager.get_resource_list()
-                self.commands = await self.artifact_manager.get_command_names()
-                self._on_resources_loaded(self.resources)
-                self._on_commands_loaded(self.commands)
-            except Exception as load_error:
-                logger.error(f"Failed to load resources after initialization error: {load_error}")
-
-            # Try to update MCP panel even if initialization had errors
-            try:
-                await self.mcp_refresher.refresh()
-            except Exception as panel_error:
-                logger.error(f"Failed to update MCP panel: {panel_error}")
+        # Mark MCP as initialized
+        self._mcp_initialized = True
+        logger.info("MCP connection initialization completed")
 
     def _on_resources_loaded(self, resources: list[str]) -> None:
         """
@@ -291,8 +211,9 @@ class NexusApp(App):
         Args:
             resources: List of resource URIs
         """
+        assert self.services.autocomplete_service is not None, "Services should be initialized"
         self.resources = resources
-        self.autocomplete_service.update_resources(resources)
+        self.services.autocomplete_service.update_resources(resources)
 
     def _on_commands_loaded(self, commands: list[str]) -> None:
         """
@@ -301,8 +222,9 @@ class NexusApp(App):
         Args:
             commands: List of command names
         """
+        assert self.services.autocomplete_service is not None, "Services should be initialized"
         self.commands = commands
-        self.autocomplete_service.update_commands(commands)
+        self.services.autocomplete_service.update_commands(commands)
 
     def _focus_input(self) -> None:
         """Helper to focus the input field."""
@@ -385,7 +307,8 @@ class NexusApp(App):
             )
 
         try:
-            query_id = await self.query_manager.enqueue(query)
+            assert self.services.query_manager is not None, "QueryManager should be initialized"
+            query_id = await self.services.query_manager.enqueue(query)
             logger.debug(f"Added user message to chat panel (query_id={query_id})")
         except RuntimeError as e:
             logger.error(f"QueryManager not running: {e}")
@@ -399,9 +322,8 @@ class NexusApp(App):
         """Handle app quit - cleanup background tasks."""
         logger.info("Quitting application, cleaning up...")
 
-        # Stop the QueryManager and StatusQueue
-        await self.query_manager.stop()
-        await self.status_queue.stop()
+        # Stop all services (QueryManager, StatusQueue, etc.)
+        await self.services.stop()
 
         # Exit the app
         self.exit()
@@ -422,8 +344,9 @@ class NexusApp(App):
         Args:
             resources: New list of resource IDs
         """
+        assert self.services.autocomplete_service is not None, "Services should be initialized"
         self.resources = resources
-        self.autocomplete_service.update_resources(resources)
+        self.services.autocomplete_service.update_resources(resources)
 
     def update_commands(self, commands: list[str]):
         """
@@ -432,94 +355,7 @@ class NexusApp(App):
         Args:
             commands: New list of command names
         """
+        assert self.services.autocomplete_service is not None, "Services should be initialized"
         self.commands = commands
-        self.autocomplete_service.update_commands(commands)
+        self.services.autocomplete_service.update_commands(commands)
 
-    async def _periodic_artifact_refresh(self) -> None:
-        """
-        Periodically check for connected servers with no artifacts and refresh them.
-
-        This helps catch cases where artifacts weren't loaded initially but are
-        now available, or when reconnection happens but artifacts weren't refreshed.
-        Also retries ERROR status servers periodically to allow recovery.
-
-        Runs asynchronously every 30 seconds without blocking the UI.
-        Only refreshes if artifacts have changed or if server had no artifacts before.
-        """
-        await asyncio.sleep(5.0)  # Initial delay before first check
-
-        while self._mcp_initialized:
-            try:
-                # Check all servers asynchronously
-                for server_name, client in self.artifact_manager.clients.items():
-                    try:
-                        # connection_status is implementation-specific, not in protocol
-                        status = client.connection_status  # type: ignore[attr-defined]
-
-                        # Handle ERROR status servers - retry connection periodically (every 60 seconds)
-                        if status == ConnectionStatus.ERROR:
-                            # Check if we should retry (every 60 seconds)
-                            last_check = self.mcp_refresher.get_server_last_check(server_name)
-                            time_since_check = time.time() - last_check
-                            if time_since_check >= 60.0:
-                                logger.info(f"Retrying connection for ERROR status server: {server_name}")
-                                try:
-                                    # retry_connection is implementation-specific, not in protocol
-                                    await client.retry_connection(use_auth=False)  # type: ignore[attr-defined]
-                                    # Update last check time
-                                    self.mcp_refresher.update_server_last_check(server_name)
-                                except Exception as e:
-                                    logger.debug(f"Error retrying connection for {server_name}: {e}")
-                                    # Update last check time even on failure to avoid retrying too frequently
-                                    self.mcp_refresher.update_server_last_check(server_name)
-                            continue
-
-                        # Handle connected servers - check for artifacts
-                        if client.is_connected:
-                            logger.debug(f"Periodic refresh check for {server_name}")
-
-                            # Update last check time
-                            self.mcp_refresher.update_server_last_check(server_name)
-
-                            # Get cached artifacts
-                            cached_artifacts = self.artifact_manager.get_cached_artifacts(server_name)
-                            cached_total = 0
-                            if cached_artifacts:
-                                cached_total = (
-                                    len(cached_artifacts.get("tools", [])) +
-                                    len(cached_artifacts.get("prompts", [])) +
-                                    len(cached_artifacts.get("resources", []))
-                                )
-
-                            # Only fetch if we don't have artifacts cached (to avoid unnecessary work)
-                            if cached_total == 0:
-                                # Fetch artifacts to see if they're available
-                                artifacts = await self.artifact_manager.get_server_artifacts(server_name)
-                                total = (
-                                    len(artifacts.get("tools", [])) +
-                                    len(artifacts.get("prompts", [])) +
-                                    len(artifacts.get("resources", []))
-                                )
-
-                                if total > 0:
-                                    # Server has artifacts but we didn't have them cached, refresh the panel
-                                    logger.info(f"Found {total} artifact(s) for {server_name} during periodic check (was 0) - refreshing panel")
-                                    # Cache the artifacts
-                                    self.artifact_manager.cache_artifacts(server_name, artifacts)
-                                    # Refresh asynchronously without blocking
-                                    self.mcp_refresher.schedule_refresh(server_name=server_name)
-                            else:
-                                # Already have artifacts cached, skip fetching to avoid unnecessary refresh
-                                logger.debug(f"Server {server_name} already has {cached_total} artifact(s) cached, skipping periodic fetch")
-                    except Exception as e:
-                        logger.debug(f"Error during periodic refresh check for {server_name}: {e}")
-
-                # Wait 30 seconds before next check (asynchronous sleep)
-                await asyncio.sleep(30.0)
-            except asyncio.CancelledError:
-                logger.info("Periodic artifact refresh task cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Error in periodic artifact refresh: {e}")
-                # Wait 30 seconds before retrying (asynchronous sleep)
-                await asyncio.sleep(30.0)

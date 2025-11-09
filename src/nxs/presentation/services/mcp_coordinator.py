@@ -7,13 +7,16 @@ This service handles:
 - Coordinating with other services (PromptService, AutocompleteService)
 """
 
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Optional
+import asyncio
 
 from nxs.application.artifact_manager import ArtifactManager
 from nxs.logger import get_logger
 
 if TYPE_CHECKING:
-    from nxs.presentation.status_queue import StatusQueue
+    from nxs.presentation.services.status_queue import StatusQueue
+    from nxs.presentation.services.prompt_service import PromptService
+    from nxs.presentation.services.mcp_refresher import RefreshService
 
 logger = get_logger("mcp_coordinator")
 
@@ -33,6 +36,9 @@ class MCPCoordinator:
         status_queue: "StatusQueue",
         on_resources_loaded: Callable[[list[str]], None] | None = None,
         on_commands_loaded: Callable[[list[str]], None] | None = None,
+        prompt_service: Optional["PromptService"] = None,
+        mcp_refresher: Optional["RefreshService"] = None,
+        on_background_task_start: Optional[Callable[[], None]] = None,
     ):
         """
         Initialize the MCPCoordinator.
@@ -42,11 +48,17 @@ class MCPCoordinator:
             status_queue: StatusQueue for status updates
             on_resources_loaded: Optional callback when resources are loaded
             on_commands_loaded: Optional callback when commands are loaded
+            prompt_service: Optional PromptService for preloading prompts
+            mcp_refresher: Optional RefreshService for refreshing MCP panel
+            on_background_task_start: Optional callback to start background tasks
         """
         self.artifact_manager = artifact_manager
         self.status_queue = status_queue
         self.on_resources_loaded = on_resources_loaded
         self.on_commands_loaded = on_commands_loaded
+        self.prompt_service = prompt_service
+        self.mcp_refresher = mcp_refresher
+        self.on_background_task_start = on_background_task_start
         self._initialized = False
 
     @property
@@ -142,4 +154,50 @@ class MCPCoordinator:
                     f"Failed to load resources after initialization error: {load_error}"
                 )
                 return [], []
+
+    async def initialize_and_load(
+        self, use_auth: bool = False
+    ) -> tuple[list[str], list[str]]:
+        """
+        Full initialization including prompt preloading and panel refresh.
+
+        This method extends initialize() by also:
+        1. Preloading prompt information for all commands
+        2. Refreshing the MCP panel
+        3. Starting background tasks
+
+        Args:
+            use_auth: Whether to use OAuth authentication for remote servers
+
+        Returns:
+            Tuple of (resources, commands) lists
+        """
+        # Perform base initialization
+        resources, commands = await self.initialize(use_auth=use_auth)
+
+        # Preload prompt information for all commands
+        if self.prompt_service and commands:
+            try:
+                await self.prompt_service.preload_all(commands)
+                logger.info(f"Preloaded prompt information for {len(commands)} command(s)")
+            except Exception as e:
+                logger.error(f"Error preloading prompt information: {e}")
+
+        # Update MCP panel with server information
+        if self.mcp_refresher:
+            try:
+                await self.mcp_refresher.refresh()
+                logger.info("MCP panel refreshed successfully")
+            except Exception as e:
+                logger.error(f"Error refreshing MCP panel: {e}")
+
+        # Start background tasks if callback provided
+        if self.on_background_task_start:
+            try:
+                self.on_background_task_start()
+                logger.info("Background tasks started")
+            except Exception as e:
+                logger.error(f"Error starting background tasks: {e}")
+
+        return resources, commands
 

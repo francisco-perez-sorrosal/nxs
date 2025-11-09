@@ -39,7 +39,8 @@
       "Bash(tput reset:*)",
       "Bash(for f in /Users/fperez/dev/nxs/src/nxs/presentation/services/*.py)",
       "Bash(done)",
-      "Bash(for f in /Users/fperez/dev/nxs/src/nxs/presentation/handlers/*.py)"
+      "Bash(for f in /Users/fperez/dev/nxs/src/nxs/presentation/handlers/*.py)",
+      "Bash(timeout 10 pixi run:*)"
     ],
     "deny": [],
     "ask": []
