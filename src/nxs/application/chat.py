@@ -9,10 +9,32 @@ logger = get_logger("agent_loop")
 
 
 class AgentLoop:
+    """
+    Agent loop managing conversation with Claude AI.
+
+    Design Note: self.messages maintains conversation state across multiple run() calls.
+    This is INTENTIONAL - the LLM is stateless and requires full message history on each call.
+
+    Future Enhancement: Multi-Session Support
+    -----------------------------------------
+    Planned feature: Multiple concurrent conversation sessions (like browser tabs).
+    Each session will have its own AgentLoop instance maintaining separate state.
+
+    Implementation pattern (not yet implemented):
+        SessionManager {
+            sessions: Dict[session_id, AgentLoop]
+            create_session(session_id) -> AgentLoop
+            switch_session(session_id) -> AgentLoop
+            delete_session(session_id)
+        }
+
+    See: application/session_manager.py (placeholder for future implementation)
+    """
+
     def __init__(self, llm: Claude, clients: Mapping[str, MCPClient], callbacks=None):
         self.llm: Claude = llm
         self.tool_clients: Mapping[str, MCPClient] = clients
-        self.messages: list[MessageParam] = []
+        self.messages: list[MessageParam] = []  # Conversation state - persists across run() calls
         self.callbacks = callbacks or {}
 
     async def _process_query(self, query: str):

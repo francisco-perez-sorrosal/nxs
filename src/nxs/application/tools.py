@@ -4,6 +4,9 @@ from typing import Optional, Literal, List
 from mcp.types import CallToolResult, Tool, TextContent
 from nxs.domain.protocols import MCPClient
 from anthropic.types import Message, ToolResultBlockParam
+from nxs.logger import get_logger
+
+logger = get_logger("tools")
 
 
 class ToolManager:
@@ -65,8 +68,9 @@ class ToolManager:
                 tool_result_blocks.append(tool_result_part)
                 continue
 
+            tool_output = None  # Initialize before try block
             try:
-                tool_output: CallToolResult | None = await client.call_tool(tool_name, tool_input)
+                tool_output = await client.call_tool(tool_name, tool_input)
                 items = []
                 if tool_output:
                     items = tool_output.content
@@ -79,11 +83,11 @@ class ToolManager:
                 )
             except Exception as e:
                 error_message = f"Error executing tool '{tool_name}': {e}"
-                print(error_message)
+                logger.error(error_message)
                 tool_result_part = cls._build_tool_result_part(
                     tool_use_id,
                     json.dumps({"error": error_message}),
-                    "error" if tool_output and tool_output.isError else "success",
+                    "error",  # Always error in exception handler
                 )
 
             tool_result_blocks.append(tool_result_part)

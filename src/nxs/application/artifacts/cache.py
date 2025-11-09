@@ -5,7 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Dict, List
 
-from nxs.infrastructure.cache import Cache, MemoryCache
+from nxs.domain.protocols import Cache
+from nxs.infrastructure.cache import MemoryCache
 
 ArtifactRecord = Dict[str, str | None]
 ArtifactCollection = Dict[str, List[ArtifactRecord]]

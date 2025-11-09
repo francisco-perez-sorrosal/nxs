@@ -33,7 +33,8 @@ from nxs.domain.events import (
     EventBus,
     ReconnectProgress,
 )
-from nxs.infrastructure.cache import Cache, MemoryCache
+from nxs.domain.protocols import Cache
+from nxs.infrastructure.cache import MemoryCache
 from nxs.domain.types import ConnectionStatus
 from nxs.logger import get_logger
 

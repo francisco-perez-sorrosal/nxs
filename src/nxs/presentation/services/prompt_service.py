@@ -11,7 +11,8 @@ This service handles:
 from typing import TYPE_CHECKING
 
 from nxs.application.artifact_manager import ArtifactManager
-from nxs.infrastructure.cache import Cache, MemoryCache
+from nxs.domain.protocols import Cache
+from nxs.infrastructure.cache import MemoryCache
 from nxs.logger import get_logger
 
 if TYPE_CHECKING:

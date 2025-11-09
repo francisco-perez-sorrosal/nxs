@@ -15,7 +15,7 @@ from nxs.application.artifacts import (
     ArtifactCollection,
     ArtifactRepository,
 )
-from nxs.infrastructure.cache import Cache
+from nxs.domain.protocols import Cache
 from nxs.domain.events import (
     ArtifactsFetched,
     ConnectionStatusChanged,
@@ -23,10 +23,9 @@ from nxs.domain.events import (
     ReconnectProgress,
 )
 from nxs.application.mcp_config import MCPServersConfig, load_mcp_config
-from nxs.domain.protocols import MCPClient
+from nxs.domain.protocols import MCPClient, ClientProvider
 from nxs.logger import get_logger
 from nxs.domain.types import ConnectionStatus
-from nxs.infrastructure.mcp.factory import ClientFactory
 
 logger = get_logger("artifact_manager")
 
@@ -43,13 +42,17 @@ class ArtifactManager:
         artifact_repository: Optional[ArtifactRepository] = None,
         artifact_cache_service: Optional[ArtifactCache] = None,
         change_detector: Optional[ArtifactChangeDetector] = None,
-        client_factory: Optional[ClientFactory] = None,
+        client_provider: Optional[ClientProvider] = None,
     ):
         self._config = config or load_mcp_config()
         self.event_bus = event_bus or EventBus()
 
         self._clients: Dict[str, MCPClient] = {}
-        self._client_factory = client_factory or ClientFactory()
+        # Pragmatic fallback: import concrete implementation only when needed
+        if client_provider is None:
+            from nxs.infrastructure.mcp.factory import ClientFactory
+            client_provider = ClientFactory()  # type: ignore[assignment]
+        self._client_factory: ClientProvider = client_provider
 
         clients_provider = lambda: self._clients
         self._artifact_repository = artifact_repository or ArtifactRepository(

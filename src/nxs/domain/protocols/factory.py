@@ -1,6 +1,6 @@
 """Client factory protocol."""
 
-from typing import Protocol, Callable
+from typing import Protocol, Callable, Optional, Any
 from nxs.domain.protocols.mcp_client import MCPClient
 from nxs.domain.types import ConnectionStatus
 
@@ -16,16 +16,17 @@ class ClientProvider(Protocol):
 
     def create_clients(
         self,
-        servers_config: dict,
-        status_callback: Callable[[str, ConnectionStatus], None],
-        progress_callback: Callable,
+        configs: dict[str, Any],
+        *,
+        status_callback: Optional[Callable[[str, ConnectionStatus], None]] = None,
+        progress_callback: Optional[Callable[[str, int, int, float], None]] = None,
     ) -> dict[str, MCPClient]:
         """Create clients for configured servers.
 
         Args:
-            servers_config: Dictionary of server configurations
-            status_callback: Callback for connection status changes
-            progress_callback: Callback for reconnection progress
+            configs: Dictionary of server configurations
+            status_callback: Optional callback for connection status changes
+            progress_callback: Optional callback for reconnection progress
 
         Returns:
             Dictionary mapping server names to MCPClient instances

@@ -65,7 +65,7 @@ async def test_artifact_manager_uses_client_factory() -> None:
 
     manager = ArtifactManager(
         config=config,
-        client_factory=mock_factory,
+        client_provider=mock_factory,
         event_bus=EventBus(),
     )
 
