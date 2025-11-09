@@ -1,238 +1,94 @@
-# NXS - Development Guide
+# NXS – Development Reference
 
-This document covers development setup, testing, code quality tools, and contribution guidelines for the NXS project.
+This guide targets contributors who build and maintain NXS. It covers environment setup, quality tooling, useful commands, and contribution conventions. For architectural background, read [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-## Development Setup
-
-### Pixi Environments
-
-This project uses Pixi to manage multiple environments for different development workflows:
-
-#### Environment Structure
-
-```
-dev (dev + test + default)
-├── test (test + default)
-│   └── default (base)
-└── default (base)
-```
-
-#### Available Environments
-
-##### `default` Environment
-- **Purpose**: Main application runtime
-- **Tasks**: `start`, `chat`, `server`, `client`, `clean`, `dev-install`
-
-##### `test` Environment
-- **Purpose**: Testing and quality assurance
-- **Tasks**: `test`, `test-cov`
-
-##### `dev` Environment
-- **Purpose**: Full development workflow
-- **Tasks**: `lint`, `lint-fix`, `format`, `type-check`, `ci`
-
-#### Environment Usage
+## Environment Setup
 
 ```bash
-# Install specific environments
-pixi install --environment default    # Main application
-pixi install --environment test       # Testing tools
-pixi install --environment dev        # Development tools
+# Install everything (recommended)
+pixi install
 
-# Run tasks in specific environments
-pixi run --environment test test      # Run tests
-pixi run --environment dev lint       # Run linting
-pixi run --environment dev ci         # Run full CI pipeline
-
-# Check environment information
-pixi info                             # Show all environments
-pixi list                             # List installed packages
+# Or install individual environments
+pixi install --environment default   # runtime only
+pixi install --environment test      # pytest + coverage
+pixi install --environment dev       # linting, typing, CI bundle
 ```
 
-## Development Workflow
+### Environment Layout
+- `default`: ships the runnable application plus helper tasks (`start`, `server`, `client`, `chat`, `clean`, `dev-install`).
+- `test`: adds pytest tooling and exposes `test`, `test-cov`.
+- `dev`: layers format, lint, type-check, and CI helpers on top of the test stack.
 
-1. **Setup development environment**:
-   ```bash
-   pixi install --environment dev
-   ```
+Use `pixi info` to inspect environments and `pixi task list` to discover available commands.
 
-2. **Run code quality checks**:
-   ```bash
-   pixi run --environment dev ci      # Full pipeline
-   pixi run --environment dev format  # Format code
-   pixi run --environment dev lint    # Check linting issues
-   pixi run --environment dev lint-fix # Fix linting issues automatically
-   pixi run --environment dev type-check  # Type checking
-   ```
-
-3. **Run tests**:
-   ```bash
-   pixi run --environment test test       # Run tests
-   pixi run --environment test test-cov   # Run with coverage
-   ```
-
-4. **Development tasks**:
-   ```bash
-   pixi run --environment dev dev-install  # Install in editable mode
-   pixi run clean                         # Clean build artifacts
-   ```
-
-## Available Pixi Tasks
-
-| Task | Environment | Description |
-|------|-------------|-------------|
-| `start` | default | Start the main application |
-| `chat` | default | Start chat interface |
-| `server` | default | Start MCP server |
-| `client` | default | Start MCP client |
-| `test` | test | Run pytest tests |
-| `test-cov` | test | Run tests with coverage |
-| `lint` | dev | Run ruff linting |
-| `lint-fix` | dev | Fix linting issues automatically |
-| `format` | dev | Format code with black |
-| `type-check` | dev | Run mypy type checking |
-| `ci` | dev | Run full CI pipeline |
-| `dev-install` | default | Install package in editable mode |
-| `clean` | default | Clean build artifacts |
-
-## Code Quality
-
-This project includes comprehensive code quality tools:
-
-- **Formatting**: Black for consistent code formatting
-- **Linting**: Ruff for fast Python linting with automatic fixing
-- **Type Checking**: MyPy for static type analysis
-- **Testing**: Pytest with coverage reporting
-- **Git Hooks**: Pre-commit for automated quality checks
-
-### Quick Development Workflow
+## Daily Workflow
 
 ```bash
-# Fix common linting issues automatically
-pixi run --environment dev lint-fix
+# Activate full toolchain
+pixi install --environment dev
 
-# Format code
-pixi run --environment dev format
-
-# Run full quality pipeline
+# Format, lint, type-check, and run tests in one go
 pixi run --environment dev ci
 
-# Run mcp client without Oauth
-pixi run mcp_client --server-url https://syn-executor.wasmer.app 
-
-# Run mcp client test with Oauth
-pixi run mcp_client --server-url https://synx-francisco-perez-sorrosal.wasmer.app 
-
+# Run only what you need
+pixi run --environment dev format
+pixi run --environment dev lint
+pixi run --environment dev lint-fix
+pixi run --environment dev type-check
+pixi run --environment test test
+pixi run --environment test test-cov
 ```
 
-### Configuration Files
+When you launch the TUI from a development shell, always run `reset` (or `tput reset`) after quitting or forcibly terminating the app. This restores a sane terminal state before continuing work.
 
-- **Ruff**: Configuration in `ruff.toml` for linting rules and settings
-- **Black**: Configuration in `pyproject.toml` for code formatting
-- **MyPy**: Configuration in `pyproject.toml` for type checking
-- **Pytest**: Configuration in `pyproject.toml` for testing
+## Code Quality Tooling
+- **Ruff** (`pixi run --environment dev lint`) is the primary linter/formatter; `lint-fix` applies quick fixes.
+- **Black** formatting is provided through the `format` task; settings live in `pyproject.toml`.
+- **Mypy** runs via `pixi run --environment dev type-check` using relaxed-but-useful defaults configured in `pyproject.toml`.
+- **Pytest** drives tests in `tests/` with verbose, short tracebacks; coverage reports land under `htmlcov/`.
+- **Pre-commit** hooks can be installed manually if desired (`pixi run --environment dev dev-install`).
 
-## Project Structure
+Configuration files:
+- `pyproject.toml` — project metadata, Pixi tasks, Black, Mypy, pytest, coverage.
+- `ruff.toml` — linting and formatting rules.
+- `CLAUDE.md` — repository guidelines for AI coding agents.
 
-```
-nxs/
-├── pyproject.toml              # Project configuration and dependencies
-├── ruff.toml                   # Ruff linting configuration
-├── src/nxs/                    # Source code (src-layout)
-│   ├── __main__.py            # Module entry point
-│   ├── main.py                # Application entry point
-│   ├── logger.py              # Logging configuration
-│   ├── utils.py               # Utility functions
-│   ├── mcp_server.py          # Example MCP server
-│   ├── config/                # Configuration files
-│   │   └── mcp_servers.json   # MCP server configurations
-│   ├── core/                  # Core application modules (UI-independent)
-│   │   ├── artifact_manager.py    # MCP artifact manager
-│   │   ├── mcp_config.py          # MCP config parser
-│   │   ├── chat.py                # Base agent loop
-│   │   ├── command_control.py     # Command/resource processing agent
-│   │   ├── claude.py              # Anthropic SDK wrapper
-│   │   └── tools.py               # Tool management
-│   ├── mcp_client/            # MCP client package
-│   │   ├── client.py          # Main MCP client with reconnection
-│   │   ├── auth.py            # Authentication handler
-│   │   ├── storage.py         # Storage handler
-│   │   ├── callback.py        # UI callback helpers
-│   │   └── cli/               # Typer-based CLI helpers
-│   ├── tui/                   # TUI layer (Textual + Rich)
-│   │   ├── app.py             # Main NexusApp
-│   │   ├── styles.tcss        # Textual CSS styling
-│   │   ├── query_manager.py   # Async query processing
-│   │   ├── status_queue.py    # Async status updates
-│   │   └── widgets/           # TUI widgets
-│   │       ├── chat_panel.py          # Chat display
-│   │       ├── status_panel.py        # Status display
-│   │       ├── mcp_panel.py           # MCP server/artifact panel
-│   │       ├── artifact_overlay.py    # Artifact detail overlay
-│   │       ├── input_field.py         # Input field
-│   │       ├── autocomplete.py        # Autocomplete dropdown
-│   │       ├── command_parser.py      # Command parsing
-│   │       └── argument_suggestions.py # Argument suggestions
-│   └── prompts/               # Prompt templates
-└── tests/                     # Test suite
-    ├── __init__.py
-    └── test_main.py
+## Project Map
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full layered breakdown. Quick pointers:
+- `src/nxs/application/` — orchestration services (agent loop, connections, artifacts).
+- `src/nxs/domain/` — protocols, events, shared types.
+- `src/nxs/infrastructure/` — concrete MCP client + cache implementations.
+- `src/nxs/presentation/` — Textual/Rich TUI, handlers, services, widgets.
+- `src/nxs/config/nxs_mcp_config.json` — MCP server definitions.
+- `tests/` — unit coverage for connection management, parsers, TUI widgets, MCP coordination.
+
+## MCP Utilities
+
+Use Pixi tasks to exercise the bundled MCP tooling:
+```bash
+# Run example MCP client (no OAuth)
+pixi run mcp_client --server-url https://syn-executor.wasmer.app
+
+# Run MCP client with OAuth-friendly endpoint
+pixi run mcp_client --server-url https://synx-francisco-perez-sorrosal.wasmer.app
 ```
 
-## Adding Resources, Prompts, or Tools
+Edit `src/nxs/config/nxs_mcp_config.json` to point the TUI at your own MCP servers. Remote HTTP transports are currently supported through `MCPAuthClient`.
 
-### Option 1: Modify the example MCP server
-Edit `src/nxs/mcp_server.py` to add new documents to the `docs` dictionary, or add new tools/prompts.
+## Contribution Checklist
+1. Branch from `main` and keep changes focused.
+2. Run `pixi run --environment dev ci` before committing.
+3. Use conventional commits with version hints:  
+   - `feat:` → minor bump  
+   - `fix:` → patch bump  
+   - `BREAKING CHANGE:` → major bump  
+   - `docs:`, `style:`, `refactor:`, `test:`, `chore:` → no version change
+4. Provide context in PR descriptions (what changed, why, testing evidence).
 
-### Option 2: Create a new MCP server
-1. Create a new Python file implementing the MCP server protocol (use `mcp_server.py` as a template)
-2. Add it to `src/nxs/config/mcp_servers.json`:
-   ```json
-   {
-     "mcpServers": {
-       "my-server": {
-         "command": "python",
-         "args": ["-m", "path.to.my_server"]
-       }
-     }
-   }
-   ```
-3. Restart the application
+When authoring commits that touch runtime behaviour, mention any manual testing you performed (e.g., specific Pixi tasks or sample MCP endpoints).
 
-### Option 3: Use existing MCP servers
-Add community MCP servers to your configuration:
-```json
-{
-  "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/directory"]
-    }
-  }
-}
-```
-
-## Contributing
-
-1. **Fork the repository**
-2. **Create a feature branch**: `git checkout -b feature/your-feature-name`
-3. **Setup development environment**: `pixi install --environment dev`
-4. **Make your changes**
-5. **Run quality checks**: `pixi run --environment dev ci`
-6. **Commit your changes**: `git commit -m "Add your feature"`
-7. **Push to your fork**: `git push origin feature/your-feature-name`
-8. **Create a Pull Request**
-
-### Commit Message Guidelines
-
-Use conventional commit messages with version bump prefixes:
-
-- `feat:` - New features (Minor version bump)
-- `fix:` - Bug fixes (Patch version bump)
-- `BREAKING CHANGE:` - Breaking changes (Major version bump)
-- `docs:`, `style:`, `refactor:`, `test:`, `chore:` - No version bump
-
-Examples:
-- `feat: add new logging feature`
-- `fix: resolve debug mode issue`
-- `docs: update README with new setup instructions`
+## Further Reading
+- [`README.md`](README.md) — user-facing quick start.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — layered design, event flow, extensibility notes.
+- Source-level READMEs (e.g., `src/nxs/presentation/services/README.md`) for subsystem specifics.
