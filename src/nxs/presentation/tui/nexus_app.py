@@ -3,6 +3,7 @@ NexusApp - Main Textual application for the Nexus TUI.
 """
 
 import asyncio
+from typing import Callable, Optional
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer
 from textual.containers import Container, Vertical, Horizontal
@@ -63,6 +64,7 @@ class NexusApp(App):
         event_bus: EventBus | None = None,
         prompt_info_cache: Cache[str, str | None] | None = None,
         prompt_schema_cache: Cache[str, tuple] | None = None,
+        on_query_complete: Optional[Callable[[], None]] = None,
     ):
         """
         Initialize the Nexus TUI application.
@@ -77,6 +79,8 @@ class NexusApp(App):
                               If None, a MemoryCache will be created.
             prompt_schema_cache: Optional Cache instance for caching prompt schema tuples.
                                 If None, a MemoryCache will be created.
+            on_query_complete: Optional callback invoked after each query completes successfully.
+                             Used for session auto-save or other post-query actions.
         """
         super().__init__()
         self.agent_loop = agent_loop
@@ -84,6 +88,7 @@ class NexusApp(App):
         self.resources: list[str] = []
         self.commands: list[str] = []
         self._mcp_initialized = False  # Track MCP initialization status
+        self.on_query_complete = on_query_complete
 
         # Create or use provided event bus
         self.event_bus = event_bus or artifact_manager.event_bus or EventBus()
@@ -107,6 +112,7 @@ class NexusApp(App):
             on_commands_loaded=self._on_commands_loaded,
             focus_input=self._focus_input,
             mcp_initialized_getter=lambda: self._mcp_initialized,
+            on_query_complete_callback=on_query_complete,
             # Optional caches
             prompt_info_cache=prompt_info_cache,
             prompt_schema_cache=prompt_schema_cache,

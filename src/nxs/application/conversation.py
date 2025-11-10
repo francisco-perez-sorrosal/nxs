@@ -344,12 +344,86 @@ class Conversation:
         # Rough estimate: 4 chars per token
         return total_chars // 4
 
+    def _serialize_content_block(self, block: Any) -> dict[str, Any]:
+        """Convert Anthropic SDK content block to JSON-serializable dict.
+        
+        Args:
+            block: Content block (can be dict, TextBlock, ToolUseBlock, etc.)
+            
+        Returns:
+            Plain dict representation
+        """
+        if isinstance(block, dict):
+            # Already a dict, but recursively clean nested objects
+            return {k: self._serialize_value(v) for k, v in block.items()}
+        elif hasattr(block, "model_dump"):
+            # Pydantic model (Anthropic SDK objects)
+            return block.model_dump()
+        elif hasattr(block, "__dict__"):
+            # Generic object with __dict__
+            return {k: self._serialize_value(v) for k, v in block.__dict__.items() if not k.startswith("_")}
+        else:
+            # Primitive type
+            return block
+
+    def _serialize_value(self, value: Any) -> Any:
+        """Recursively serialize a value to JSON-safe format.
+        
+        Args:
+            value: Any value to serialize
+            
+        Returns:
+            JSON-safe representation
+        """
+        if isinstance(value, (str, int, float, bool, type(None))):
+            return value
+        elif isinstance(value, list):
+            return [self._serialize_value(item) for item in value]
+        elif isinstance(value, dict):
+            return {k: self._serialize_value(v) for k, v in value.items()}
+        elif hasattr(value, "model_dump"):
+            # Pydantic model
+            return value.model_dump()
+        elif hasattr(value, "__dict__"):
+            # Generic object
+            return {k: self._serialize_value(v) for k, v in value.__dict__.items() if not k.startswith("_")}
+        else:
+            # Fallback: convert to string
+            return str(value)
+
+    def _serialize_messages(self) -> list[dict[str, Any]]:
+        """Convert messages to JSON-serializable format.
+        
+        Handles Anthropic SDK objects (TextBlock, ToolUseBlock, etc.)
+        and converts them to plain dicts.
+        
+        Returns:
+            List of serialized message dicts
+        """
+        serialized = []
+        for msg in self._messages:
+            msg_dict = dict(msg)  # Copy the message dict
+            
+            # Serialize content if present
+            if "content" in msg_dict:
+                content = msg_dict["content"]
+                if isinstance(content, str):
+                    msg_dict["content"] = content
+                elif isinstance(content, list):
+                    msg_dict["content"] = [self._serialize_content_block(block) for block in content]
+                else:
+                    msg_dict["content"] = self._serialize_value(content)
+            
+            serialized.append(msg_dict)
+        
+        return serialized
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize conversation to dictionary for persistence.
 
         Returns:
             Dictionary containing all conversation state:
-            - messages: Message history
+            - messages: Message history (with SDK objects converted to dicts)
             - system_message: System prompt
             - max_history_messages: History limit
             - enable_caching: Caching configuration
@@ -361,7 +435,7 @@ class Conversation:
             >>> json.dump(data, file)
         """
         return {
-            "messages": self._messages,
+            "messages": self._serialize_messages(),
             "system_message": self._system_message,
             "max_history_messages": self._max_history_messages,
             "enable_caching": self._enable_caching,

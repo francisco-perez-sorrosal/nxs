@@ -67,28 +67,49 @@ class SessionManager:
     def __init__(
         self,
         llm: Claude,
-        tool_registry: ToolRegistry,
-        storage_dir: Path,
+        tool_registry: Optional[ToolRegistry] = None,
+        storage_dir: Optional[Path] = None,
         system_message: Optional[str] = None,
         enable_caching: bool = True,
         callbacks: Optional[dict[str, Callable]] = None,
+        agent_factory: Optional[Callable[[Conversation], AgentLoop]] = None,
     ):
         """Initialize session manager.
 
         Args:
             llm: Claude API wrapper.
-            tool_registry: ToolRegistry for tools.
-            storage_dir: Directory for session persistence.
+            tool_registry: ToolRegistry for tools (optional if using agent_factory).
+            storage_dir: Directory for session persistence (defaults to ~/.nxs/sessions).
             system_message: Default system message for new conversations.
             enable_caching: Enable prompt caching (default True).
             callbacks: Default callbacks for agent loop.
+            agent_factory: Optional factory function to create custom agent loops.
+                          Signature: (conversation: Conversation) -> AgentLoop
+                          If provided, tool_registry is optional.
+
+        Example (with custom agent factory):
+            >>> def create_command_agent(conversation):
+            ...     # Create CommandControlAgent instead of plain AgentLoop
+            ...     return CommandControlAgent(...)
+            >>>
+            >>> manager = SessionManager(
+            ...     llm=claude,
+            ...     agent_factory=create_command_agent
+            ... )
         """
         self.llm = llm
         self.tool_registry = tool_registry
-        self.storage_dir = Path(storage_dir).expanduser()
+        self.storage_dir = Path(storage_dir or Path.home() / ".nxs" / "sessions").expanduser()
         self.system_message = system_message
         self.enable_caching = enable_caching
         self.callbacks = callbacks or {}
+        self._agent_factory = agent_factory
+
+        # Validate: need either tool_registry or agent_factory
+        if tool_registry is None and agent_factory is None:
+            raise ValueError(
+                "SessionManager requires either tool_registry or agent_factory"
+            )
 
         # Current implementation: Single active session
         self._active_session: Optional[Session] = None
@@ -166,13 +187,18 @@ class SessionManager:
             enable_caching=self.enable_caching,
         )
 
-        # Create agent loop
-        agent_loop = AgentLoop(
-            llm=self.llm,
-            conversation=conversation,
-            tool_registry=self.tool_registry,
-            callbacks=self.callbacks,
-        )
+        # Create agent loop (use factory if provided, otherwise default)
+        if self._agent_factory:
+            agent_loop = self._agent_factory(conversation)
+            logger.debug(f"Created session with custom agent factory: {session_id}")
+        else:
+            agent_loop = AgentLoop(
+                llm=self.llm,
+                conversation=conversation,
+                tool_registry=self.tool_registry,
+                callbacks=self.callbacks,
+            )
+            logger.debug(f"Created session with default AgentLoop: {session_id}")
 
         # Create session
         session = Session(
@@ -180,8 +206,6 @@ class SessionManager:
             conversation=conversation,
             agent_loop=agent_loop,
         )
-
-        logger.debug(f"Created session: {session_id}")
 
         return session
 
@@ -203,13 +227,18 @@ class SessionManager:
         # Restore conversation from saved data
         conversation = Conversation.from_dict(data["conversation"])
 
-        # Create fresh agent loop with restored conversation
-        agent_loop = AgentLoop(
-            llm=self.llm,
-            conversation=conversation,
-            tool_registry=self.tool_registry,
-            callbacks=self.callbacks,
-        )
+        # Create fresh agent loop with restored conversation (use factory if provided)
+        if self._agent_factory:
+            agent_loop = self._agent_factory(conversation)
+            logger.debug("Restored session with custom agent factory")
+        else:
+            agent_loop = AgentLoop(
+                llm=self.llm,
+                conversation=conversation,
+                tool_registry=self.tool_registry,
+                callbacks=self.callbacks,
+            )
+            logger.debug("Restored session with default AgentLoop")
 
         # Restore session
         session = Session.from_dict(data, agent_loop)

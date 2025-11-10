@@ -6,7 +6,7 @@ while ensuring MCP connections are initialized eagerly so resources/prompts
 are available immediately for autocomplete.
 """
 
-from typing import Callable, TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING
 
 from nxs.presentation.services.status_queue import StatusQueue
 from nxs.presentation.services import (
@@ -66,6 +66,7 @@ class ServiceContainer:
         on_commands_loaded: Callable[[list[str]], None],
         focus_input: Callable[[], None],
         mcp_initialized_getter: Callable[[], bool],
+        on_query_complete_callback: Optional[Callable[[], None]] = None,
         # Optional caches
         prompt_info_cache: Cache[str, str | None] | None = None,
         prompt_schema_cache: Cache[str, tuple] | None = None,
@@ -90,6 +91,7 @@ class ServiceContainer:
             on_commands_loaded: Callback when commands are loaded
             focus_input: Callback to focus input field
             mcp_initialized_getter: Lambda to check if MCP is initialized
+            on_query_complete_callback: Optional callback invoked after each query completes
             prompt_info_cache: Optional cache for prompt info
             prompt_schema_cache: Optional cache for prompt schemas
         """
@@ -111,6 +113,7 @@ class ServiceContainer:
         self._on_commands_loaded = on_commands_loaded
         self._focus_input = focus_input
         self._mcp_initialized_getter = mcp_initialized_getter
+        self._on_query_complete_callback = on_query_complete_callback
         
         # Caches
         self._prompt_info_cache = prompt_info_cache or MemoryCache[str, str | None]()
@@ -184,6 +187,7 @@ class ServiceContainer:
                 status_queue=self.status_queue,  # Triggers lazy creation
                 mcp_initialized_getter=self._mcp_initialized_getter,
                 focus_input=self._focus_input,
+                on_query_complete=self._on_query_complete_callback,
             )
         return self._query_handler
 
