@@ -2,8 +2,19 @@
 Utility functions for the Nexus application.
 """
 
+import os
 from datetime import datetime
 from pathlib import Path
+
+
+def get_project_root() -> str:
+    """
+    Get the project root directory (parent of src/nxs).
+    
+    Returns:
+        Absolute path to the project root directory
+    """
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def read_prompt(prompt_file: str, prompts_dir: str = "prompts") -> str:
