@@ -1,5 +1,6 @@
 import asyncio
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 import typer
@@ -9,6 +10,7 @@ from nxs.logger import get_logger, setup_logger
 from nxs.application.claude import Claude
 from nxs.application.command_control import CommandControlAgent
 from nxs.application.artifact_manager import ArtifactManager
+from nxs.application.session_manager_new import SessionManager
 from nxs.presentation.tui import NexusApp
 
 load_dotenv()
@@ -47,10 +49,20 @@ async def main(
     artifact_manager = ArtifactManager()
 
     # Create CommandControlAgent with ArtifactManager
+    # Note: CommandControlAgent uses legacy backward compatibility mode
+    # (creates Conversation and ToolRegistry internally via clients parameter)
     command_control = CommandControlAgent(
         artifact_manager=artifact_manager,
         claude_service=claude_service,
     )
+
+    # Note: SessionManager integration deferred for TUI
+    # The architecture is ready, but full TUI integration requires:
+    # - Session restoration UI
+    # - Session switching UI
+    # - Session persistence hooks
+    # For now, CommandControlAgent uses backward compatibility mode
+    # which creates internal Conversation + ToolRegistry with prompt caching enabled
 
     # Launch Textual TUI with ArtifactManager
     # MCP connections will be initialized asynchronously after the TUI appears
