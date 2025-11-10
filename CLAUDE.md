@@ -138,8 +138,9 @@ tui/
 - **Automatic scrolling**: Chat and status panels auto-scroll to bottom
 
 **Supporting Services:**
-- **QueryManager** (`query_manager.py`): Manages async query processing to prevent race conditions
-- **StatusQueue** (`status_queue.py`): Async queue for status updates from agent callbacks to TUI
+- **QueryQueue** (`query_queue.py`): FIFO queue for sequential query processing
+- **StatusQueue** (`status_queue.py`): FIFO queue for status updates from agent callbacks to TUI
+- Both use **AsyncQueueProcessor<T>** pattern to eliminate code duplication
 
 **Rich Integration Benefits:**
 - Textual is built on top of Rich by the same author (Will McGugan)
@@ -269,8 +270,10 @@ All source code is located in `src/nxs/` following the Python src-layout pattern
 |------|---------|
 | `tui/app.py` | `NexusApp` (Textual App): main layout, event handling, MCP status callbacks |
 | `tui/styles.tcss` | Textual CSS for styling widgets and layout |
-| `tui/query_manager.py` | Async query processing manager to prevent race conditions |
-| `tui/status_queue.py` | Async status update queue from agent to TUI |
+| `tui/query_queue.py` | `QueryQueue`: FIFO queue for sequential query processing |
+| `services/status_queue.py` | `StatusQueue`: FIFO queue for status updates from agent to TUI |
+| `services/queue_processor.py` | `AsyncQueueProcessor<T>`: Generic async FIFO queue processor pattern |
+| `services/container.py` | `ServiceContainer`: Lazy service initialization and lifecycle management |
 | `tui/widgets/chat_panel.py` | `ChatPanel` (RichLog): scrollable chat with Rich markup/markdown |
 | `tui/widgets/status_panel.py` | `StatusPanel` (RichLog): tool execution status with structured display |
 | `tui/widgets/mcp_panel.py` | `MCPPanel`: displays MCP servers, connection status, and artifacts |

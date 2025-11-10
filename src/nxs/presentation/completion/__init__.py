@@ -11,7 +11,6 @@ from .orchestrator import CompletionOrchestrator
 from .resource_completion import ResourceCompletionStrategy
 from .command_completion import CommandCompletionStrategy
 from .argument_completion import ArgumentCompletionStrategy
-from .schema_cache import SchemaCacheMapping
 from .applier import CompletionApplier, compute_search_string, should_show_dropdown
 
 __all__ = [
@@ -20,7 +19,6 @@ __all__ = [
     "ResourceCompletionStrategy",
     "CommandCompletionStrategy",
     "ArgumentCompletionStrategy",
-    "SchemaCacheMapping",
     "CompletionApplier",
     "compute_search_string",
     "should_show_dropdown",

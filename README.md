@@ -56,6 +56,23 @@ NXS is a full-screen Textual/Rich terminal interface that pairs Claude with Mode
 - **Missing completions**: Wait for MCP initialization to finish; the status panel and MCP panel will indicate readiness.
 - **Stuck terminal**: If you manually kill the process, always run `reset` (or `tput reset`) before continuing.
 
+## Development
+
+### Code Quality
+- Run tests: `pixi run --environment test test`
+- Type checking: `pixi run --environment dev type-check`
+- Linting: `pixi run --environment dev lint`
+- Full CI pipeline: `pixi run --environment dev ci`
+
+### Architecture Highlights
+- **Layered design**: Presentation → Application → Domain → Infrastructure
+- **Event-driven coordination**: Synchronous EventBus with async work scheduled via `create_task()`
+- **Services vs Handlers**: Complementary patterns for state management and event processing
+- **Service consolidation**: `AsyncQueueProcessor<T>` pattern eliminates code duplication
+- **Lazy initialization**: Services created on-demand via `ServiceContainer`
+
+For detailed patterns, naming conventions, and design decisions, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
 ## Learn More
 - Developer workflows and quality checks: see [`README_dev.md`](README_dev.md).
 - Detailed component and event flow: see [`ARCHITECTURE.md`](ARCHITECTURE.md).

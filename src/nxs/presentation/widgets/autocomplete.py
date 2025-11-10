@@ -4,7 +4,7 @@ Strategy-based autocomplete overlay for the Nexus input widget.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 
@@ -18,12 +18,13 @@ from nxs.presentation.completion import (
     CompletionApplier,
     CompletionOrchestrator,
     ResourceCompletionStrategy,
-    SchemaCacheMapping,
     compute_search_string,
     should_show_dropdown as helper_should_show_dropdown,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from nxs.presentation.services.prompt_service import PromptService
 
 logger = get_logger("nexus_input")
@@ -42,8 +43,27 @@ class NexusAutoComplete(AutoComplete):
         self.input_widget = input_widget
         self.prompt_service = prompt_service
 
-        schema_mapping = SchemaCacheMapping(prompt_service)
-        self._argument_generator = ArgumentSuggestionGenerator(schema_mapping)
+        # Create inline schema cache for ArgumentSuggestionGenerator
+        # This provides a Mapping[str, tuple[Prompt, str]] interface over PromptService
+        class PromptSchemaCache:
+            """Lightweight mapping wrapper over PromptService for schema access."""
+
+            def __init__(self, service: "PromptService"):
+                self._service = service
+
+            def __getitem__(self, key: str) -> tuple[Any, str]:
+                cached = self._service.get_cached_schema(key)
+                if cached is None:
+                    raise KeyError(key)
+                return cached
+
+            def __contains__(self, key: object) -> bool:
+                if not isinstance(key, str):
+                    return False
+                return self._service.get_cached_schema(key) is not None
+
+        schema_cache: Mapping[str, tuple[Any, str]] = PromptSchemaCache(prompt_service)  # type: ignore[assignment]
+        self._argument_generator = ArgumentSuggestionGenerator(schema_cache)
 
         command_provider: Callable[[], Sequence[str]] = lambda: self.input_widget.commands
         resource_provider: Callable[[], Sequence[str]] = lambda: self.input_widget.resources

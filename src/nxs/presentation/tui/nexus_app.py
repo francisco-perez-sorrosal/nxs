@@ -143,7 +143,7 @@ class NexusApp(App):
         """Called when the app is mounted."""
         logger.info("Nexus TUI mounted and ready")
 
-        # Start all services (QueryManager, StatusQueue)
+        # Start all services (QueryQueue, StatusQueue)
         # Services are created lazily on first access via properties
         await self.services.start()
 
@@ -295,18 +295,18 @@ class NexusApp(App):
             )
 
         try:
-            assert self.services.query_manager is not None, "QueryManager should be initialized"
-            query_id = await self.services.query_manager.enqueue(query)
+            assert self.services.query_queue is not None, "QueryQueue should be initialized"
+            query_id = await self.services.query_queue.enqueue(query)
             logger.debug(f"Added user message to chat panel (query_id={query_id})")
         except RuntimeError as e:
-            logger.error(f"QueryManager not running: {e}")
-            chat.add_panel("[bold red]Error:[/] Query manager not initialized", title="Error", style="red")
+            logger.error(f"QueryQueue not running: {e}")
+            chat.add_panel("[bold red]Error:[/] Query queue not initialized", title="Error", style="red")
 
     async def action_quit(self) -> None:
         """Handle app quit - cleanup background tasks."""
         logger.info("Quitting application, cleaning up...")
 
-        # Stop all services (QueryManager, StatusQueue, etc.)
+        # Stop all services (QueryQueue, StatusQueue, etc.)
         await self.services.stop()
 
         # Exit the app

@@ -15,7 +15,7 @@ from nxs.presentation.services import (
     RefreshService,
 )
 from nxs.presentation.handlers import QueryHandler
-from nxs.presentation.tui.query_manager import QueryManager
+from nxs.presentation.tui.query_queue import QueryQueue
 from nxs.application.artifact_manager import ArtifactManager
 from nxs.domain.events import (
     EventBus,
@@ -122,7 +122,7 @@ class ServiceContainer:
         self._prompt_service: PromptService | None = None
         self._autocomplete_service: AutocompleteService | None = None
         self._query_handler: QueryHandler | None = None
-        self._query_manager: QueryManager | None = None
+        self._query_queue: QueryQueue | None = None
         
         # MCP initialization state
         self._mcp_initialized = False
@@ -188,13 +188,13 @@ class ServiceContainer:
         return self._query_handler
 
     @property
-    def query_manager(self) -> QueryManager:
-        """Get QueryManager, creating it on first access."""
-        if self._query_manager is None:
-            self._query_manager = QueryManager(
+    def query_queue(self) -> QueryQueue:
+        """Get QueryQueue, creating it on first access."""
+        if self._query_queue is None:
+            self._query_queue = QueryQueue(
                 processor=self.query_handler.process_query  # Triggers lazy creation
             )
-        return self._query_manager
+        return self._query_queue
 
     # -------------------------------------------------------------------------
     # Lifecycle Management
@@ -233,12 +233,12 @@ class ServiceContainer:
     async def start(self) -> None:
         """
         Start all services that need background tasks.
-        
+
         This starts:
-        - QueryManager (query processing worker)
+        - QueryQueue (query processing worker)
         - StatusQueue (status update worker)
         """
-        await self.query_manager.start()
+        await self.query_queue.start()
         await self.status_queue.start()
         logger.info("Services started")
 
@@ -246,8 +246,8 @@ class ServiceContainer:
         """Stop all services gracefully."""
         if self._mcp_refresher:
             await self._mcp_refresher.stop_periodic_refresh()
-        if self._query_manager:
-            await self._query_manager.stop()
+        if self._query_queue:
+            await self._query_queue.stop()
         if self._status_queue:
             await self._status_queue.stop()
         logger.info("Services stopped")
