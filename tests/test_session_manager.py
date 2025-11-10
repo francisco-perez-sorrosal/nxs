@@ -8,7 +8,7 @@ import pytest
 
 from nxs.application.claude import Claude
 from nxs.application.session import Session
-from nxs.application.session_manager_new import SessionManager
+from nxs.application.session_manager import SessionManager
 from nxs.application.tool_registry import ToolRegistry
 
 

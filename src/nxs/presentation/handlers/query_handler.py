@@ -34,7 +34,6 @@ class QueryHandler:
         status_queue: "StatusQueue",
         mcp_initialized_getter: Callable[[], bool],
         focus_input: Callable[[], None],
-        on_query_complete: Optional[Callable[[], None]] = None,
     ):
         """
         Initialize the QueryHandler.
@@ -45,14 +44,12 @@ class QueryHandler:
             status_queue: StatusQueue for status updates
             mcp_initialized_getter: Function to check if MCP is initialized
             focus_input: Function to focus the input field
-            on_query_complete: Optional callback invoked after successful query processing
         """
         self.agent_loop = agent_loop
         self.chat_panel_getter = chat_panel_getter
         self.status_queue = status_queue
         self.mcp_initialized_getter = mcp_initialized_getter
         self.focus_input = focus_input
-        self.on_query_complete = on_query_complete
 
     async def process_query(self, query: str, query_id: int) -> None:
         """
@@ -98,14 +95,6 @@ class QueryHandler:
             )
 
             logger.info(f"Query processing completed successfully (query_id={query_id})")
-            
-            # Invoke post-query callback (e.g., session auto-save)
-            if self.on_query_complete:
-                try:
-                    self.on_query_complete()
-                    logger.debug("on_query_complete callback invoked successfully")
-                except Exception as callback_error:
-                    logger.error(f"Error in on_query_complete callback: {callback_error}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Error processing query (query_id={query_id}): {e}", exc_info=True)

@@ -1,13 +1,14 @@
 # SessionManager Integration - Complete Implementation
 
 **Date**: 2025-11-10  
-**Status**: ✅ Fully Integrated and Operational
+**Status**: ✅ Multi-Session Support Fully Implemented  
+**Current Usage**: Single Session Mode (TUI unchanged)
 
 ---
 
 ## Overview
 
-The SessionManager is now fully integrated into Nexus, providing **session persistence**, **conversation history management**, and **auto-save functionality** without any TUI changes. This creates a robust foundation for managing conversation sessions while preserving all existing features (command parsing, resource extraction, tool execution).
+The SessionManager now has **complete multi-session support** with session creation, switching, deletion, and management. The implementation is production-ready with full persistence and backward compatibility. While the TUI continues to use single-session mode (via `get_or_create_default_session()`), the foundation is in place for future multi-session UI features.
 
 ## Architecture
 
@@ -45,7 +46,7 @@ Conversation (managed by Session, persisted by SessionManager)
 
 ## Implementation Details
 
-### 1. SessionManager Enhancement (`session_manager_new.py`)
+### 1. SessionManager Enhancement (`session_manager.py`)
 
 **New Features**:
 - Optional `agent_factory` parameter for custom agent loop creation
@@ -121,33 +122,48 @@ query processing completes successfully
 
 ## Features
 
+### ✅ Multi-Session Support (Fully Implemented)
+- **Session creation**: `create_session(session_id, title)`
+- **Session switching**: `switch_session(session_id)` - auto-saves before switch
+- **Session deletion**: `delete_session(session_id)` (memory + disk)
+- **Session listing**: `list_sessions()` returns all SessionMetadata
+- **Active session tracking**: `get_active_session()`
+- **Bulk operations**: `save_all_sessions()`, `restore_all_sessions()`
+
 ### ✅ Session Persistence
-- Sessions saved to `~/.nxs/sessions/session.json`
+- Per-session JSON files: `~/.nxs/sessions/{session_id}.json`
 - Human-readable JSON format (git-friendly)
 - Includes conversation history, metadata, timestamps
 - Auto-restore on startup
+- Legacy migration: `session.json` → `default.json`
 
-### ✅ Auto-Save
-- **After every query**: Session saved automatically when query completes
+### ✅ Auto-Save (Pragmatic Strategy)
+- **When switching sessions**: Auto-saves current session before switching
 - **On application exit**: Final save before cleanup
 - **Error resilient**: Failures logged but don't crash application
+- **Manual save available**: `save_active_session()` or `save_all_sessions()`
+- **Not after every query**: Removed to avoid excessive disk I/O
 
 ### ✅ Conversation History
 - Full message history preserved across restarts
 - Includes user messages, assistant responses, tool calls, and tool results
 - Prompt caching markers preserved
 - System messages maintained
+- Per-session isolation
 
 ### ✅ Backward Compatibility
 - No breaking changes to existing code
+- `get_or_create_default_session()` works as before
 - CommandControlAgent works seamlessly with SessionManager
 - All features preserved: `/commands`, `@resources`, tool execution
 - Existing callbacks still function
+- TUI continues in single-session mode (unchanged)
 
 ### ✅ Metadata Tracking
 - Session ID, title, creation time, last active time
-- Model name, description, tags (foundation for future features)
+- Model name, description, tags
 - Message count tracking
+- Comprehensive session info via `get_session_info()`
 
 ## Usage
 
@@ -191,11 +207,15 @@ Ctrl+Q or Ctrl+C
 - **Format**: JSON (human-readable)
 
 ### Modified Files
-- `src/nxs/application/session_manager_new.py` - Enhanced with agent_factory
-- `src/nxs/main.py` - Full SessionManager integration
+- `src/nxs/application/session_manager.py` - **Complete multi-session implementation**
+- `src/nxs/application/conversation.py` - Fixed JSON serialization for Anthropic SDK objects
+- `src/nxs/main.py` - SessionManager integration with agent factory
 - `src/nxs/presentation/tui/nexus_app.py` - Added on_query_complete callback
 - `src/nxs/presentation/services/container.py` - Callback plumbing
 - `src/nxs/presentation/handlers/query_handler.py` - Callback invocation
+
+### Deleted Files
+- `src/nxs/application/session_manager.py` - Old placeholder removed
 
 ### New Files
 - `SESSION_MANAGER_INTEGRATION.md` - This document
@@ -288,15 +308,43 @@ cat ~/.nxs/sessions/session.json | python -m json.tool
 tail -f nexus.log | grep -i session
 ```
 
+## Multi-Session API (Ready for Use)
+
+The SessionManager now provides a complete multi-session API:
+
+```python
+# Create sessions
+session1 = session_manager.create_session("work", "Work Chat")
+session2 = session_manager.create_session("personal", "Personal Chat")
+
+# Switch between sessions
+session_manager.switch_session("work")
+active = session_manager.get_active_session()
+
+# List all sessions
+sessions = session_manager.list_sessions()
+for meta in sessions:
+    print(f"{meta.session_id}: {meta.title}")
+
+# Delete a session
+session_manager.delete_session("personal")
+
+# Save all sessions
+session_manager.save_all_sessions()
+
+# Restore all sessions (async)
+await session_manager.restore_all_sessions()
+```
+
 ## Future Enhancements
 
-### Phase 2: Multi-Session UI (Planned)
+### Phase 2: Multi-Session TUI (Next Step)
 - Session tabs widget (like browser tabs)
 - Session switcher overlay (Ctrl+Tab)
 - Keyboard shortcuts: Ctrl+T (new), Ctrl+W (close)
 - Visual active session indicator
 - Session rename UI
-- Session deletion UI
+- Session creation/deletion UI
 
 ### Phase 3: Advanced Features (Future)
 - Session search across history
@@ -365,5 +413,7 @@ SessionManager is now fully integrated and operational! The system provides:
 - ✅ Full backward compatibility
 - ✅ Foundation for multi-session support
 
-**Status**: Production-ready, single-session mode with full persistence 🎉
+**Status**: Production-ready with complete multi-session support! 🎉
+
+The SessionManager is fully equipped for multi-session workflows. Current usage remains single-session via `main.py`, but the API is ready for TUI integration when needed.
 

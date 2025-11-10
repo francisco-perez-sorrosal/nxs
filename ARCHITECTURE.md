@@ -29,7 +29,7 @@ Coordinates the core runtime use cases without UI or infrastructure details.
 **Conversation Management**:
 - `Conversation` (`conversation.py`) manages message history with prompt caching support, enabling 90% cost reduction through strategic cache control markers on system messages, tools, and the last user message.
 - `Session` (`session.py`) encapsulates a conversation with metadata (title, timestamps, tags) for persistence and lifecycle management.
-- `SessionManager` (`session_manager_new.py`) handles session persistence, auto-save/restore, and provides the foundation for future multi-session support.
+- `SessionManager` (`session_manager.py`) handles session persistence, auto-save/restore, and multi-session management with pragmatic auto-save on switch and exit.
 
 **Agent Orchestration**:
 - `AgentLoop` (`chat.py`) orchestrates the conversation loop with Claude, handling tool execution and real-time streaming via callbacks. Supports both new (conversation + tool_registry) and legacy (clients) initialization patterns for backward compatibility.
@@ -489,7 +489,7 @@ Encapsulates conversation with metadata for persistence:
 - Clean abstraction for session management
 - Ready for multi-session support
 
-#### 7. **SessionManager** (`application/session_manager_new.py`)
+#### 7. **SessionManager** (`application/session_manager.py`)
 
 Manages session lifecycle with persistence:
 - **Current**: Single session only (battle-test architecture)
@@ -637,7 +637,7 @@ The system currently operates in **single-session mode** with full persistence. 
 - `src/nxs/application/tool_registry.py` - ToolRegistry + ToolProvider
 - `src/nxs/application/mcp_tool_provider.py` - MCP bridge
 - `src/nxs/application/session.py` - Session + SessionMetadata
-- `src/nxs/application/session_manager_new.py` - SessionManager
+- `src/nxs/application/session_manager.py` - SessionManager
 - `tests/test_conversation.py` - Conversation tests
 - `tests/test_session.py` - Session tests
 - `tests/test_session_manager.py` - SessionManager tests

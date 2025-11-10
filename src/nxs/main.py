@@ -10,7 +10,7 @@ from nxs.logger import get_logger, setup_logger
 from nxs.application.claude import Claude
 from nxs.application.command_control import CommandControlAgent
 from nxs.application.artifact_manager import ArtifactManager
-from nxs.application.session_manager_new import SessionManager
+from nxs.application.session_manager import SessionManager
 from nxs.presentation.tui import NexusApp
 
 load_dotenv()
@@ -96,21 +96,12 @@ async def main(
         f"({session.get_message_count()} messages in history)"
     )
 
-    # Create auto-save callback for session persistence
-    def auto_save_session():
-        """Auto-save session after each query completes."""
-        try:
-            session_manager.save_active_session()
-            logger.debug("Session auto-saved after query completion")
-        except Exception as e:
-            logger.error(f"Failed to auto-save session: {e}", exc_info=True)
-
-    # Launch Textual TUI with session's agent_loop and auto-save callback
+    # Launch Textual TUI with session's agent_loop
     # The agent_loop is CommandControlAgent with session-managed conversation
+    # Session saves on exit (not after every query - too frequent)
     app = NexusApp(
         agent_loop=session.agent_loop,
         artifact_manager=artifact_manager,
-        on_query_complete=auto_save_session,
     )
     
     try:

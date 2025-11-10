@@ -134,7 +134,7 @@ for msg in prompt_messages:
 
 ```python
 from pathlib import Path
-from nxs.application.session_manager_new import SessionManager
+from nxs.application.session_manager import SessionManager
 
 # In your initialization code:
 session_manager = SessionManager(
