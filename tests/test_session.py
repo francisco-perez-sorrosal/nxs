@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from nxs.application.chat import AgentLoop
+from nxs.application.agentic_loop import AgentLoop
 from nxs.application.conversation import Conversation
 from nxs.application.session import Session, SessionMetadata
 

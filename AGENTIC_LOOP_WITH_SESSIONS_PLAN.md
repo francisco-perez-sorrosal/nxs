@@ -980,7 +980,7 @@ class SessionPicker(ModalScreen):
 5. ✅ Update tests
 
 **Deliverables**:
-- Refactored `application/chat.py`
+- Refactored `application/agentic_loop.py`
 - Updated tests
 - Deprecation warnings
 

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 from nxs.logger import get_logger
 
 if TYPE_CHECKING:
-    from nxs.application.chat import AgentLoop
+    from nxs.application.agentic_loop import AgentLoop
     from nxs.presentation.widgets.chat_panel import ChatPanel
     from nxs.presentation.status_queue import StatusQueue
 

@@ -6,7 +6,7 @@ After implementing the new agentic loop with sessions (Phases 1-3), the TUI was 
 
 ## Root Cause
 
-The issue was in the `_run_with_streaming()` method in `/Users/fperez/dev/nxs/src/nxs/application/chat.py`.
+The issue was in the `_run_with_streaming()` method in `/Users/fperez/dev/nxs/src/nxs/application/agentic_loop.py`.
 
 ### Error Details
 
@@ -164,7 +164,7 @@ pixi run --environment test test tests/test_conversation.py -v
 
 ## Related Files Modified
 
-- `/Users/fperez/dev/nxs/src/nxs/application/chat.py`
+- `/Users/fperez/dev/nxs/src/nxs/application/agentic_loop.py`
   - Lines 260-311: `_run_with_streaming()` method
   - Lines 313-347: `_run_without_streaming()` method
 

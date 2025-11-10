@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Optional
 
-from nxs.application.chat import AgentLoop
+from nxs.application.agentic_loop import AgentLoop
 from nxs.application.conversation import Conversation
 from nxs.logger import get_logger
 

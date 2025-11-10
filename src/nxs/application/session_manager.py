@@ -19,7 +19,7 @@ import json
 from pathlib import Path
 from typing import Callable, Optional, Dict
 
-from nxs.application.chat import AgentLoop
+from nxs.application.agentic_loop import AgentLoop
 from nxs.application.claude import Claude
 from nxs.application.conversation import Conversation
 from nxs.application.session import Session, SessionMetadata

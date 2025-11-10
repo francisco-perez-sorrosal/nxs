@@ -16,7 +16,7 @@ Before integration:
 
 ### Step 1: Add Backward Compatibility to AgentLoop
 
-**File**: `src/nxs/application/chat.py`
+**File**: `src/nxs/application/agentic_loop.py`
 
 **Goal**: Support both old (clients) and new (conversation + tool_registry) initialization
 
@@ -288,7 +288,7 @@ If integration causes issues:
 
 ```bash
 # Restore legacy AgentLoop
-cp src/nxs/application/chat_legacy.py src/nxs/application/chat.py
+cp src/nxs/application/chat_legacy.py src/nxs/application/agentic_loop.py
 
 # Revert any other changes
 git checkout src/nxs/application/command_control.py

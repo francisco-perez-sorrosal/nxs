@@ -68,7 +68,7 @@ A full MCP client implementation with authentication and storage support:
 
 The agent loop implements the core Claude integration with **no UI dependencies**:
 
-- **AgentLoop** (`core/chat.py`): Base class handling the chat/tool-use loop:
+- **AgentLoop** (`core/agentic_loop.py`): Base class handling the chat/tool-use loop:
   1. Sends user query + tools to Claude
   2. If Claude calls tools, executes them via `ToolManager`
   3. Returns results to Claude
@@ -249,7 +249,7 @@ All source code is located in `src/nxs/` following the Python src-layout pattern
 |------|---------|
 | `core/artifact_manager.py` | Central manager for MCP artifacts: loads configs, manages connections, aggregates resources/prompts/tools |
 | `core/mcp_config.py` | MCP configuration parser: loads and validates `mcp_servers.json` |
-| `core/chat.py` | Base `AgentLoop` class: Claude integration, tool execution loop, streaming callbacks |
+| `core/agentic_loop.py` | Base `AgentLoop` class: Claude integration, tool execution loop, streaming callbacks |
 | `core/command_control.py` | `CommandControlAgent`: extends AgentLoop with resource/prompt extraction and processing |
 | `core/claude.py` | Anthropic SDK wrapper with message construction helpers |
 | `core/tools.py` | `ToolManager`: aggregates and routes tool execution across MCP clients |

@@ -32,7 +32,7 @@ Coordinates the core runtime use cases without UI or infrastructure details.
 - `SessionManager` (`session_manager.py`) handles session persistence, auto-save/restore, and multi-session management with pragmatic auto-save on switch and exit.
 
 **Agent Orchestration**:
-- `AgentLoop` (`chat.py`) orchestrates the conversation loop with Claude, handling tool execution and real-time streaming via callbacks. Supports both new (conversation + tool_registry) and legacy (clients) initialization patterns for backward compatibility.
+- `AgentLoop` (`agentic_loop.py`) orchestrates the conversation loop with Claude, handling tool execution and real-time streaming via callbacks. Supports both new (conversation + tool_registry) and legacy (clients) initialization patterns for backward compatibility.
 - `CommandControlAgent` (`command_control.py`) extends AgentLoop with command parsing (`/command`) and resource extraction (`@resource`) capabilities.
 
 **Tool Management**:
@@ -443,7 +443,7 @@ Comprehensive API wrapper with streaming and caching:
 - Better user experience
 - Proper error recovery
 
-#### 5. **Refactored AgentLoop** (`application/chat.py`)
+#### 5. **Refactored AgentLoop** (`application/agentic_loop.py`)
 
 Clean orchestration with separated concerns:
 - **State**: Delegates to `Conversation` (not `self.messages`)
@@ -644,7 +644,7 @@ The system currently operates in **single-session mode** with full persistence. 
 
 **Modified Files**:
 - `src/nxs/application/claude.py` - Enhanced with real streaming and caching
-- `src/nxs/application/chat.py` - Refactored with new abstractions and proper API parameter handling
+- `src/nxs/application/agentic_loop.py` - Refactored with new abstractions and proper API parameter handling
 - `src/nxs/main.py` - Integrated with SessionManager
 
 **Legacy Files** (for reference):

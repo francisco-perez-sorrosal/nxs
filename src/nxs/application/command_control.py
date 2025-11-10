@@ -2,7 +2,7 @@ from typing import List, Tuple
 from mcp.types import Prompt, PromptMessage
 from anthropic.types import MessageParam
 
-from nxs.application.chat import AgentLoop
+from nxs.application.agentic_loop import AgentLoop
 from nxs.application.claude import Claude
 from nxs.application.artifact_manager import ArtifactManager
 from nxs.application.parsers import CompositeArgumentParser
