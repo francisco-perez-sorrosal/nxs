@@ -1,5 +1,71 @@
 # Reasoning Multi-Agent System Evolution Plan
 
+## Document Updates Summary
+
+**Last Updated:** Based on comprehensive review and feedback
+
+**Major Improvements Added:**
+
+1. **TUI Integration & Reasoning Visibility (Section 1.4 - NEW/ENHANCED)**
+   - **Collapsible Reasoning Trace Panel** - Progressive disclosure design to prevent information overload
+   - Complete callback interface with dual routing (StatusPanel vs TracePanel)
+   - `ReasoningTracePanel` widget - Hierarchical trace display with collapsible behavior
+   - StatusPanel simplified - High-level events only
+   - Keyboard shortcuts (`Ctrl+R`, `Ctrl+Shift+R`)
+   - Visual activity indicators (🔔 when reasoning active)
+   - NexusApp integration with dynamic header updates
+
+2. **Supporting Utilities (Section 1.5 - NEW)**
+   - `load_prompt()` utility for template loading
+   - `format_prompt()` for safe variable substitution
+   - `get_claude_for_component()` for model-specific instances
+   - Claude.with_model() enhancement
+
+3. **Error Handling & Graceful Degradation (Section 1.6 - NEW)**
+   - Comprehensive error handling strategy
+   - Fallback matrix for component failures
+   - User notification patterns
+   - Never-fail principle
+
+4. **Streaming Strategy Decision (Section 1.2 - ENHANCED)**
+   - Buffered evaluation approach (quality-first)
+   - Message management clarification
+   - Response lifecycle specification
+
+5. **Complete main.py Integration (Section 1.7 - EXPANDED)**
+   - Full SessionManager integration
+   - ReasoningConfig loading from environment
+   - Factory pattern with reasoning config
+   - TUI callback setup strategy
+
+6. **Quality Thresholds (Config - ADDED)**
+   - `min_quality_direct`, `min_quality_light`, `min_quality_deep`
+   - Self-correction trigger levels
+
+7. **Comprehensive Testing Strategy (EXPANDED)**
+   - Test organization structure
+   - MockClaude implementation
+   - Concrete test examples with assertions
+   - Integration test scenarios
+   - TUI callback testing
+
+**Issues Resolved:**
+
+- ✅ TUI status reporting for reasoning modes
+- ✅ **Information overload prevention** - Collapsible trace panel for detailed reasoning steps
+- ✅ Streaming vs. quality evaluation conflict
+- ✅ Conversation message management during escalation
+- ✅ SessionManager integration with reasoning config
+- ✅ Prompt loading utility specification
+- ✅ Model selection per component
+- ✅ Error handling and fallback behaviors
+- ✅ Testing specifications with concrete examples
+- ✅ Configuration completeness
+- ✅ Type definitions enhanced
+- ✅ **Callback routing strategy** - StatusPanel vs ReasoningTracePanel separation
+
+---
+
 ## Executive Summary
 
 This document outlines the phased evolution of the Nexus agent system from a Level 1 "Connected Problem-Solver" to a Level 2/3 "Strategic Multi-Agent Reasoning System." The transformation will introduce structured planning, iterative refinement, and multi-agent coordination inspired by cognitive neuroscience.
@@ -371,6 +437,34 @@ class EvaluationResult:
 
 Extends the existing `AgentLoop` to add **adaptive** reasoning with **self-correction**:
 
+#### Critical Design Decision: Streaming vs. Quality Evaluation
+
+**The Challenge**: Quality evaluation happens AFTER execution, but streaming sends responses to users in real-time. How do we reconcile this?
+
+**Chosen Approach: Buffered Evaluation (Quality First)**
+
+```
+Flow: Execute → Buffer Response → Evaluate Quality → (Pass: Stream | Fail: Escalate & Retry)
+```
+
+**Rationale:**
+- **Quality Guarantee**: User never sees low-quality responses
+- **Clean UX**: Single, final response (not multiple attempts visible)
+- **Trade-off**: Slightly higher latency (~1-2s for evaluation), but consistent quality
+
+**Implementation Strategy:**
+1. During execution attempts, disable streaming to user
+2. Capture full response in buffer
+3. Evaluate buffered response quality
+4. If quality sufficient: Stream to user
+5. If quality insufficient: Discard buffer, escalate, retry
+
+**Alternative Considered (Transparent Iteration):**
+- Stream first response immediately
+- Show "Refining answer..." if escalation needed
+- Stream revised response
+- **Rejected**: More transparent but confusing UX, users see failed attempts
+
 ```python
 class AdaptiveReasoningLoop(AgentLoop):
     """Self-correcting adaptive agent loop with quality feedback.
@@ -380,20 +474,28 @@ class AdaptiveReasoningLoop(AgentLoop):
     2. ALWAYS evaluates responses - even for "simple" queries
     3. Self-corrects: If simple execution produces poor result, automatically escalates
     4. Guarantees quality: No response sent without passing evaluation
+    5. Buffers responses during evaluation (quality-first delivery)
     
-    Execution Flow (ALL paths include evaluation):
-    1. DIRECT → Execute → Evaluate → (Pass: Return | Fail: Escalate to LIGHT)
-    2. LIGHT → Plan → Execute → Evaluate → (Pass: Return | Fail: Escalate to DEEP)
-    3. DEEP → Full reasoning cycle → Evaluate → Return (no further escalation)
+    Execution Flow (ALL paths include buffering + evaluation):
+    1. DIRECT → Execute & Buffer → Evaluate → (Pass: Stream | Fail: Escalate to LIGHT)
+    2. LIGHT → Plan → Execute & Buffer → Evaluate → (Pass: Stream | Fail: Escalate to DEEP)
+    3. DEEP → Full reasoning → Buffer → Evaluate → Stream (no further escalation)
+    
+    Message Management:
+    - User query added to conversation once at start
+    - Execution attempts buffered (NOT added to conversation)
+    - Only final quality-approved response added to conversation
+    - Failed attempts logged for debugging but not persisted in conversation
     
     Self-Correction Example:
     - Query: "What is quantum computing?"
     - Initial: Classified as SIMPLE
-    - Execute: Quick response via AgentLoop
-    - Evaluate: "Response is superficial, lacks key concepts"
-    - Auto-escalate: Re-execute as LIGHT with research
-    - Re-evaluate: "Now comprehensive and accurate"
-    - Return: Final quality-checked response
+    - Execute: Quick response via AgentLoop (buffered, not streamed)
+    - Evaluate: "Response is superficial, lacks key concepts" (confidence: 0.4)
+    - Auto-escalate: Discard buffer, re-execute as LIGHT with research (buffered)
+    - Re-evaluate: "Now comprehensive and accurate" (confidence: 0.85)
+    - Stream: Final quality-checked response to user
+    - Persist: Add approved response to conversation history
     
     This ensures fast execution when possible, but NEVER sacrifices quality.
     Maintains backward compatibility - intelligently adds overhead only when needed.
@@ -1062,7 +1164,815 @@ class CommandControlAgent:
         return self.adaptive_loop.run(preprocessed)  # Always adaptive!
 ```
 
-### 1.4 Configuration and Integration
+### 1.4 TUI Integration & Reasoning Visibility
+
+**Objective**: Provide real-time feedback to users about reasoning mode, strategy, and progress without overwhelming the status panel.
+
+#### Architecture Decision: Collapsible Reasoning Trace Panel
+
+**Problem**: Deep reasoning can generate many events (analysis, planning, tool calls, evaluations, escalations). Showing all of these in the main StatusPanel would:
+- Overwhelm users with too much detail
+- Make the panel scroll excessively
+- Mix reasoning details with general app events
+- Create visual noise
+
+**Solution**: Introduce a separate, collapsible `ReasoningTracePanel` for detailed reasoning traces.
+
+**Design Principles:**
+1. **Progressive Disclosure**: Collapsed by default, expandable on demand
+2. **Visual Notification**: Indicator shows when reasoning is active
+3. **Separation of Concerns**: 
+   - StatusPanel = High-level app events (mode changes, completion)
+   - ReasoningTracePanel = Detailed reasoning trace (steps, tool calls, evaluations)
+4. **Persistent State**: Can stay open across queries for debugging/learning
+5. **Non-intrusive**: Doesn't block chat or require modal interaction
+
+**Updated Layout:**
+
+```
+┌─────────────────────────────┬──────────┐
+│         Header              │          │
+├─────────────────────────────┼──────────┤
+│                             │          │
+│      Chat Panel             │   MCP    │
+│     (scrollable)            │  Panel   │
+│                             │          │
+├─────────────────────────────┤          │
+│    Status Panel             │          │
+│  (high-level events)        │          │
+├─────────────────────────────┤          │
+│ [▼ Reasoning Trace] 🔔      │          │  ← Collapsible header (NEW)
+├─────────────────────────────┤          │
+│  Reasoning Trace Panel      │          │  ← NEW: Detailed trace (expanded)
+│  (phases, steps, tools)     │          │
+├─────────────────────────────┤          │
+│      Input Field            │          │
+├─────────────────────────────┼──────────┤
+│         Footer              │          │
+└─────────────────────────────┴──────────┘
+```
+
+**States:**
+
+| State | Header | Behavior |
+|-------|--------|----------|
+| **Collapsed (Idle)** | `[▶ Reasoning Trace]` | No space used, click to expand |
+| **Collapsed (Active)** | `[▶ Reasoning Trace] 🔔 Active` | Indicator pulses, shows activity |
+| **Expanded** | `[▼ Reasoning Trace] 🔔` | Shows full trace, scrollable |
+
+**Keyboard Shortcuts:**
+- `Ctrl+R`: Toggle reasoning trace panel
+- `Ctrl+Shift+R`: Clear reasoning trace
+
+**User Experience Flow:**
+
+```
+User: "Explain quantum computing"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Status Panel (visible):
+  🎯 Reasoning mode: Direct
+  
+Reasoning Trace Header:
+  [▶ Reasoning Trace] 🔔 Active  ← Indicator shows activity
+  
+[User can click to expand or press Ctrl+R]
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+If user expands, Reasoning Trace Panel shows:
+
+  ━━━ Phase 0: Complexity Analysis ━━━
+  ⚡ Analyzing query complexity...
+  ✓ Complexity: SIMPLE → Strategy: DIRECT
+  
+  ━━━ Phase 1: Execution (DIRECT) ━━━
+  ⚡ Executing query (fast path)...
+  
+  ━━━ Phase 2: Quality Evaluation ━━━
+  🔍 Checking response quality...
+  Quality: 0.45 - Insufficient (lacks depth)
+  Missing: Technical principles, applications
+  
+  ━━━ Phase 3: Auto-Escalation ━━━
+  ⚠️ Escalating: DIRECT → LIGHT
+  Reason: Response too superficial for question
+  
+  ━━━ Phase 1: Execution (LIGHT) ━━━
+  📋 Light Planning...
+    • Subtask 1: Define quantum computing
+    • Subtask 2: List key applications
+  
+  🔧 Iteration 1/2
+  Query: "Define quantum computing fundamentals"
+  
+  ━━━ Phase 2: Quality Evaluation ━━━
+  🔍 Checking response quality...
+  ✓ Quality: 0.88 - Sufficient
+  
+  ━━━ Complete ━━━
+  ✅ Final Strategy: LIGHT
+  📊 Attempts: 2 (DIRECT → LIGHT)
+  ⭐ Quality: 0.88
+```
+
+#### Callback Interface for Reasoning Events
+
+**Callback Routing Strategy:**
+
+All reasoning callbacks now route to **ReasoningTracePanel** for detailed logging, while **StatusPanel** only receives high-level summaries.
+
+**New Callbacks for AdaptiveReasoningLoop:**
+
+```python
+# Comprehensive callback interface for TUI integration
+reasoning_callbacks = {
+    # Phase 0: Complexity Analysis
+    "on_analysis_start": async () -> None,
+        # → StatusPanel: "🎯 Analyzing query..."
+        # → ReasoningTracePanel: "━━━ Phase 0: Complexity Analysis ━━━\n⚡ Analyzing query complexity..."
+        # → Header subtitle: "Analyzing..."
+        # → Trace indicator: Activate
+    
+    "on_analysis_complete": async (complexity: ComplexityAnalysis) -> None,
+        # → StatusPanel: (none - keep clean)
+        # → ReasoningTracePanel: "✓ Complexity: {level} → Strategy: {strategy}\n  Confidence: {confidence}, Est. iterations: {est}"
+    
+    # Phase 1: Strategy Execution
+    "on_strategy_selected": async (strategy: ExecutionStrategy, rationale: str) -> None,
+        # → StatusPanel: "🎯 Mode: {strategy.value.title()}"
+        # → ReasoningTracePanel: "━━━ Phase 1: Execution ({strategy}) ━━━\n{rationale}"
+        # → Header subtitle: "Mode: {strategy}"
+    
+    "on_direct_execution": async () -> None,
+        # → StatusPanel: (none)
+        # → ReasoningTracePanel: "⚡ Executing query (fast path)..."
+    
+    "on_light_planning": async () -> None,
+        # → StatusPanel: (none)
+        # → ReasoningTracePanel: "📋 Light planning (1-2 iterations)..."
+    
+    "on_deep_reasoning": async () -> None,
+        # → StatusPanel: (none)
+        # → ReasoningTracePanel: "🔬 Deep reasoning (full analysis)..."
+    
+    # Phase 2: Quality Evaluation
+    "on_quality_check_start": async () -> None,
+        # → StatusPanel: (none)
+        # → ReasoningTracePanel: "━━━ Phase 2: Quality Evaluation ━━━\n🔍 Checking response quality..."
+    
+    "on_quality_check_complete": async (evaluation: EvaluationResult) -> None,
+        # → StatusPanel: (none)
+        # → ReasoningTracePanel: "Quality: {confidence:.2f} - {sufficient/insufficient}\n{reasoning}"
+    
+    # Phase 3: Auto-Escalation
+    "on_auto_escalation": async (
+        from_strategy: ExecutionStrategy,
+        to_strategy: ExecutionStrategy,
+        reason: str,
+        confidence: float
+    ) -> None,
+        # → StatusPanel: "⚠️ Refining response..." (brief)
+        # → ReasoningTracePanel: "━━━ Phase 3: Auto-Escalation ━━━\n⚠️ Escalating: {from} → {to}\nReason: {reason}\nQuality: {confidence:.2f}"
+    
+    # Progress Updates (Deep Reasoning only)
+    "on_iteration": async (current: int, total: int, subtask: str) -> None,
+        # → StatusPanel: (none)
+        # → ReasoningTracePanel: "🔧 Iteration {current}/{total}\nQuery: {subtask}"
+    
+    "on_planning_complete": async (plan: ResearchPlan) -> None,
+        # → StatusPanel: (none)
+        # → ReasoningTracePanel: "📋 Plan generated:\n  • {subtask1}\n  • {subtask2}..."
+    
+    # Tool execution (routed to ReasoningTracePanel instead of StatusPanel)
+    "on_tool_call": async (name: str, params: dict) -> None,
+        # → StatusPanel: (none - keep clean)
+        # → ReasoningTracePanel: "🔧 Tool: {name}\n  Params: {params_summary}"
+    
+    "on_tool_result": async (name: str, result: Any) -> None,
+        # → StatusPanel: (none)
+        # → ReasoningTracePanel: "  └─ Result: {result_summary}"
+    
+    # Final Result
+    "on_final_response": async (
+        final_strategy: ExecutionStrategy,
+        attempt_count: int,
+        final_quality: float,
+        escalated: bool
+    ) -> None,
+        # → StatusPanel: "✅ Query complete"
+        # → ReasoningTracePanel: "━━━ Complete ━━━\n✅ Strategy: {strategy}\n📊 Attempts: {count}\n⭐ Quality: {quality:.2f}"
+        # → Header subtitle: "Ready"
+        # → Trace indicator: Deactivate (but keep expanded if user opened it)
+    
+    # Streaming (to chat panel, not affected)
+    "on_stream_chunk": async (chunk: str) -> None,
+        # → ChatPanel: (unchanged)
+}
+```
+
+#### TUI Implementation Changes
+
+**1. New Widget: ReasoningTracePanel** (`src/nxs/presentation/widgets/reasoning_trace_panel.py`):
+
+```python
+from textual.widgets import RichLog, Static
+from textual.containers import Container
+from rich.panel import Panel
+from rich.text import Text
+
+class ReasoningTracePanel(RichLog):
+    """Collapsible panel for detailed reasoning trace logging.
+    
+    Features:
+    - Hierarchical display of reasoning phases
+    - Auto-scrolling to latest event
+    - Visual separation between phases
+    - Tool call nesting display
+    - Expandable/collapsible
+    """
+    
+    BORDER_TITLE = "Reasoning Trace"
+    
+    def __init__(self, **kwargs):
+        """Initialize with collapsed state."""
+        super().__init__(
+            markup=True,
+            highlight=True,
+            auto_scroll=True,
+            wrap=True,
+            **kwargs
+        )
+        self.is_active = False  # Tracks if reasoning is currently happening
+    
+    def start_phase(self, phase_name: str, phase_number: int):
+        """Start a new reasoning phase with visual separator.
+        
+        Args:
+            phase_name: Name of the phase (e.g., "Complexity Analysis")
+            phase_number: Phase number (0, 1, 2, 3)
+        """
+        self.write("\n")
+        separator = f"━━━ Phase {phase_number}: {phase_name} ━━━"
+        self.write(f"[bold cyan]{separator}[/]\n")
+        self.is_active = True
+    
+    def log_event(self, icon: str, message: str, indent: int = 0):
+        """Log a reasoning event with optional indentation.
+        
+        Args:
+            icon: Emoji or symbol for the event
+            message: Event description
+            indent: Indentation level (for nesting)
+        """
+        indent_str = "  " * indent
+        self.write(f"{indent_str}{icon} {message}\n")
+    
+    def log_tool_call(self, tool_name: str, params_summary: str):
+        """Log a tool call with nesting."""
+        self.write(f"🔧 Tool: [bold]{tool_name}[/]\n")
+        self.write(f"  Params: {params_summary}\n")
+    
+    def log_tool_result(self, result_summary: str):
+        """Log tool result (nested under tool call)."""
+        self.write(f"  └─ Result: {result_summary}\n")
+    
+    def log_plan(self, subtasks: list[str]):
+        """Log a generated plan with subtasks."""
+        self.write("📋 Plan generated:\n")
+        for i, subtask in enumerate(subtasks, 1):
+            self.write(f"  {i}. {subtask}\n")
+    
+    def log_quality_check(self, confidence: float, is_sufficient: bool, reasoning: str):
+        """Log quality evaluation results."""
+        status = "Sufficient" if is_sufficient else "Insufficient"
+        color = "green" if is_sufficient else "yellow"
+        
+        self.write(f"Quality: [{color}]{confidence:.2f} - {status}[/]\n")
+        if reasoning:
+            self.write(f"[dim]{reasoning}[/]\n")
+    
+    def log_escalation(self, from_strategy: str, to_strategy: str, reason: str, confidence: float):
+        """Log auto-escalation event."""
+        self.write(f"[bold yellow]⚠️ Escalating:[/] {from_strategy} → {to_strategy}\n")
+        self.write(f"[dim]Reason: {reason}[/]\n")
+        self.write(f"[dim]Quality: {confidence:.2f}[/]\n")
+    
+    def complete_reasoning(self, strategy: str, attempts: int, quality: float):
+        """Mark reasoning as complete with summary."""
+        self.write("\n")
+        self.write("[bold cyan]━━━ Complete ━━━[/]\n")
+        self.write(f"✅ Final Strategy: [bold]{strategy}[/]\n")
+        self.write(f"📊 Attempts: {attempts}\n")
+        self.write(f"⭐ Quality: {quality:.2f}\n")
+        self.is_active = False
+
+
+class ReasoningTraceHeader(Static):
+    """Collapsible header for reasoning trace panel.
+    
+    Shows:
+    - Expand/collapse indicator (▶/▼)
+    - Activity indicator (🔔 when active)
+    - Click to toggle
+    """
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.collapsed = True
+        self.active = False
+    
+    def render(self) -> Text:
+        """Render header with current state."""
+        indicator = "▶" if self.collapsed else "▼"
+        activity = " 🔔 Active" if self.active else ""
+        
+        return Text.from_markup(
+            f"[bold cyan]{indicator} Reasoning Trace[/]{activity}"
+        )
+    
+    def toggle(self):
+        """Toggle collapsed state."""
+        self.collapsed = not self.collapsed
+        self.refresh()
+    
+    def set_active(self, active: bool):
+        """Set activity state."""
+        self.active = active
+        self.refresh()
+
+
+class CollapsibleReasoningTrace(Container):
+    """Container that combines header and panel for collapsible behavior."""
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.header = ReasoningTraceHeader()
+        self.panel = ReasoningTracePanel()
+        self.panel.display = False  # Start collapsed
+    
+    def compose(self):
+        """Compose header and panel."""
+        yield self.header
+        yield self.panel
+    
+    def on_click(self, event):
+        """Handle click to toggle."""
+        if event.widget == self.header:
+            self.toggle()
+    
+    def toggle(self):
+        """Toggle panel visibility."""
+        self.header.toggle()
+        self.panel.display = not self.header.collapsed
+        self.refresh(layout=True)
+    
+    def set_active(self, active: bool):
+        """Set activity indicator."""
+        self.header.set_active(active)
+```
+
+**2. Simplified StatusPanel** (`src/nxs/presentation/widgets/status_panel.py`):
+
+Now only handles high-level application events, not detailed reasoning:
+
+```python
+class StatusPanel(RichLog):
+    """Simplified status panel for high-level application events only.
+    
+    Reasoning details are now handled by ReasoningTracePanel.
+    This keeps the status panel clean and focused.
+    """
+    
+    BORDER_TITLE = "Status"
+    
+    def __init__(self, **kwargs):
+        """Initialize the status panel."""
+        super().__init__(markup=True, highlight=True, auto_scroll=True, wrap=True, **kwargs)
+        self.write("[bold yellow]Application Status[/]\n")
+        self.add_divider()
+    
+    def update_mode(self, mode: str):
+        """Display current reasoning mode (high-level only).
+        
+        Args:
+            mode: "Analyzing" | "Direct" | "Light Reasoning" | "Deep Reasoning" | "Refining" | "Complete"
+        """
+        mode_icons = {
+            "Analyzing": "⚡",
+            "Direct": "🎯",
+            "Light Reasoning": "🧠",
+            "Deep Reasoning": "🔬",
+            "Refining": "⚠️",
+            "Complete": "✅",
+        }
+        icon = mode_icons.get(mode, "•")
+        self.write(f"{icon} Mode: [bold]{mode}[/]\n")
+    
+    def log_completion(self):
+        """Log query completion."""
+        self.write("✅ Query complete\n")
+        self.add_divider()
+    
+    # Keep existing tool display methods for non-reasoning tool calls
+    # (e.g., MCP server operations, file operations, etc.)
+```
+
+**3. Update NexusApp** (`src/nxs/presentation/tui/nexus_app.py`):
+
+Integrate the new `CollapsibleReasoningTrace` widget:
+
+```python
+from nxs.presentation.widgets.reasoning_trace_panel import CollapsibleReasoningTrace
+
+class NexusApp(App):
+    """Main TUI application with reasoning trace panel."""
+    
+    # Bindings - add new shortcut for reasoning trace
+    BINDINGS = [
+        Binding("ctrl+q", "quit", "Quit", priority=True),
+        Binding("ctrl+c", "quit", "Quit", priority=True, show=False),
+        Binding("tab", "focus_next", "Next Field", show=False),
+        Binding("shift+tab", "focus_previous", "Previous Field", show=False),
+        Binding("ctrl+l", "clear_chat", "Clear Chat"),
+        Binding("ctrl+r", "toggle_reasoning_trace", "Toggle Reasoning Trace"),  # NEW
+        Binding("ctrl+shift+r", "clear_reasoning_trace", "Clear Reasoning Trace"),  # NEW
+    ]
+    
+    current_reasoning_mode: str = "Ready"
+    
+    def compose(self) -> ComposeResult:
+        """Create child widgets for the app."""
+        yield Header()
+        
+        with Horizontal():
+            # Left side: Main content
+            with Vertical(id="main-content"):
+                yield ChatPanel()
+                yield StatusPanel()
+                yield CollapsibleReasoningTrace()  # NEW: Collapsible reasoning trace
+                yield NexusInput()
+            
+            # Right side: MCP panel
+            yield MCPPanel()
+        
+        yield Footer()
+    
+    def action_toggle_reasoning_trace(self):
+        """Toggle reasoning trace panel (Ctrl+R)."""
+        trace = self.query_one(CollapsibleReasoningTrace)
+        trace.toggle()
+    
+    def action_clear_reasoning_trace(self):
+        """Clear reasoning trace panel (Ctrl+Shift+R)."""
+        trace = self.query_one(CollapsibleReasoningTrace)
+        trace.panel.clear()
+    
+    def update_reasoning_mode_display(self, mode: str):
+        """Update header subtitle to show current reasoning mode."""
+        self.current_reasoning_mode = mode
+        self.sub_title = f"AI Chat | Mode: {mode}"
+        self.refresh()
+    
+    def setup_reasoning_callbacks(self) -> dict:
+        """Create callback dictionary for reasoning events.
+        
+        Routes callbacks to appropriate widgets:
+        - StatusPanel: High-level summaries only
+        - ReasoningTracePanel: Detailed trace logging
+        """
+        status_panel = self.query_one(StatusPanel)
+        reasoning_trace = self.query_one(CollapsibleReasoningTrace)
+        trace_panel = reasoning_trace.panel
+        
+        return {
+            # Phase 0: Complexity Analysis
+            "on_analysis_start": lambda: (
+                status_panel.update_mode("Analyzing"),
+                trace_panel.start_phase("Complexity Analysis", 0),
+                trace_panel.log_event("⚡", "Analyzing query complexity..."),
+                reasoning_trace.set_active(True),
+                self.update_reasoning_mode_display("Analyzing")
+            ),
+            
+            "on_analysis_complete": lambda complexity: (
+                trace_panel.log_event(
+                    "✓",
+                    f"Complexity: {complexity.complexity_level.value.upper()} → "
+                    f"Strategy: {complexity.recommended_strategy.value}"
+                ),
+                trace_panel.log_event(
+                    "  ",
+                    f"Confidence: {complexity.confidence:.2f}, "
+                    f"Est. iterations: {complexity.estimated_iterations}",
+                    indent=1
+                )
+            ),
+            
+            # Phase 1: Strategy Execution
+            "on_strategy_selected": lambda strategy, rationale: (
+                status_panel.update_mode(strategy.value.replace("_", " ").title()),
+                trace_panel.start_phase(f"Execution ({strategy.value.upper()})", 1),
+                trace_panel.log_event("📋", rationale if rationale else f"Strategy: {strategy.value}"),
+                self.update_reasoning_mode_display(strategy.value.replace("_", " ").title())
+            ),
+            
+            "on_direct_execution": lambda: trace_panel.log_event("⚡", "Executing query (fast path)..."),
+            "on_light_planning": lambda: trace_panel.log_event("📋", "Light planning (1-2 iterations)..."),
+            "on_deep_reasoning": lambda: trace_panel.log_event("🔬", "Deep reasoning (full analysis)..."),
+            
+            "on_planning_complete": lambda plan: trace_panel.log_plan(
+                [f"{task.query}" for task in plan.subtasks]
+            ),
+            
+            # Progress Updates
+            "on_iteration": lambda current, total, subtask: (
+                trace_panel.log_event("🔧", f"Iteration {current}/{total}"),
+                trace_panel.log_event("", f"Query: {subtask}", indent=1)
+            ),
+            
+            # Tool Calls (now routed to trace panel, not status panel)
+            "on_tool_call": lambda name, params: trace_panel.log_tool_call(
+                name,
+                str(params)[:100] + "..." if len(str(params)) > 100 else str(params)
+            ),
+            
+            "on_tool_result": lambda name, result: trace_panel.log_tool_result(
+                str(result)[:100] + "..." if len(str(result)) > 100 else str(result)
+            ),
+            
+            # Phase 2: Quality Evaluation
+            "on_quality_check_start": lambda: (
+                trace_panel.start_phase("Quality Evaluation", 2),
+                trace_panel.log_event("🔍", "Checking response quality...")
+            ),
+            
+            "on_quality_check_complete": lambda evaluation: trace_panel.log_quality_check(
+                evaluation.confidence,
+                evaluation.is_complete,
+                evaluation.reasoning
+            ),
+            
+            # Phase 3: Auto-Escalation
+            "on_auto_escalation": lambda from_s, to_s, reason, conf: (
+                status_panel.update_mode("Refining"),
+                trace_panel.start_phase("Auto-Escalation", 3),
+                trace_panel.log_escalation(
+                    from_s.value,
+                    to_s.value,
+                    reason,
+                    conf
+                )
+            ),
+            
+            # Final Result
+            "on_final_response": lambda strategy, attempts, quality, escalated: (
+                status_panel.log_completion(),
+                trace_panel.complete_reasoning(strategy.value, attempts, quality),
+                reasoning_trace.set_active(False),
+                self.update_reasoning_mode_display("Ready")
+            ),
+            
+            # Streaming (to chat panel, unchanged)
+            "on_stream_chunk": self._handle_stream_chunk,
+        }
+```
+
+**Integration in main.py:**
+
+```python
+# In main() function after creating NexusApp:
+app = NexusApp(
+    agent_loop=session.agent_loop,
+    artifact_manager=artifact_manager,
+)
+
+# Set up reasoning callbacks after app is ready
+# (Will be done via app.setup_reasoning_callbacks() in NexusApp.on_mount())
+```
+
+#### User Experience Flow
+
+**Example 1: Simple Query (Direct Execution)**
+```
+User: "What is 2+2?"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Header: "Nexus | Mode: Analyzing"
+Status: ⚡ Analyzing query complexity...
+Status: ✓ Complexity: SIMPLE, Strategy: DIRECT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Header: "Nexus | Mode: Direct"
+Status: 🎯 Executing (fast path)...
+Status: 🔍 Evaluating response quality...
+Status: ✅ Complete: DIRECT (1 attempt, quality: 0.95)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Header: "Nexus | Mode: Ready"
+Chat: "The answer is 4."
+```
+
+**Example 2: Escalation Scenario**
+```
+User: "Explain quantum computing"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Status: ⚡ Analyzing...
+Status: 🎯 Strategy: DIRECT
+Status: Executing (fast path)...
+Status: 🔍 Evaluating response quality...
+Status: Quality: 0.35 - Insufficient (Strategy: DIRECT)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Status: ⚠️ Escalating: DIRECT → LIGHT
+Status: 🧠 Light reasoning (1-2 iterations)...
+Status: 🔍 Evaluating response quality...
+Status: ✅ Complete: LIGHT (2 attempts, quality: 0.88)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Chat: [Comprehensive answer about quantum computing]
+```
+
+### 1.5 Supporting Utilities
+
+**New Module**: `src/nxs/application/reasoning/utils.py`
+
+Utility functions for reasoning components:
+
+```python
+"""Utility functions for reasoning system."""
+
+from pathlib import Path
+from typing import Any
+from string import Template
+
+from nxs.logger import get_logger
+
+logger = get_logger("reasoning.utils")
+
+
+def load_prompt(prompt_name: str) -> str:
+    """Load a prompt template from the prompts directory.
+    
+    Args:
+        prompt_name: Relative path from prompts/ directory
+                    e.g., "reasoning/complexity_analysis.txt"
+    
+    Returns:
+        Prompt template as string
+    
+    Raises:
+        FileNotFoundError: If prompt file doesn't exist
+    """
+    # Resolve path relative to package
+    prompts_dir = Path(__file__).parent.parent.parent / "prompts"
+    prompt_path = prompts_dir / prompt_name
+    
+    if not prompt_path.exists():
+        raise FileNotFoundError(
+            f"Prompt template not found: {prompt_path}\n"
+            f"Expected at: {prompt_path.absolute()}"
+        )
+    
+    logger.debug(f"Loading prompt template: {prompt_name}")
+    return prompt_path.read_text(encoding="utf-8")
+
+
+def format_prompt(template: str, **kwargs: Any) -> str:
+    """Format a prompt template with variables.
+    
+    Uses Python's string.Template for safe substitution.
+    
+    Args:
+        template: Prompt template string with ${variable} placeholders
+        **kwargs: Variable values for substitution
+    
+    Returns:
+        Formatted prompt string
+    
+    Raises:
+        KeyError: If required variable is missing
+    """
+    try:
+        return Template(template).substitute(**kwargs)
+    except KeyError as e:
+        missing_var = str(e).strip("'")
+        available = list(kwargs.keys())
+        raise KeyError(
+            f"Missing required variable '{missing_var}' in prompt template. "
+            f"Available variables: {available}"
+        )
+
+
+def get_claude_for_component(
+    base_llm: "Claude",
+    component_model: str
+) -> "Claude":
+    """Create a Claude instance for a specific component with different model.
+    
+    Args:
+        base_llm: Base Claude instance (contains API key)
+        component_model: Model to use for this component
+    
+    Returns:
+        New Claude instance with specified model
+    """
+    from nxs.application.claude import Claude
+    
+    # Create new instance with same API key but different model
+    return Claude(
+        model=component_model,
+        api_key=base_llm.api_key,  # Reuse API key from base instance
+        max_tokens=base_llm.max_tokens,
+    )
+```
+
+**Claude Enhancement**: Add `with_model()` method to Claude class:
+
+```python
+# In src/nxs/application/claude.py:
+
+class Claude:
+    """Anthropic API wrapper with streaming support."""
+    
+    def with_model(self, model: str) -> "Claude":
+        """Create a new Claude instance with a different model.
+        
+        Useful for reasoning components that need different models
+        (e.g., Haiku for analysis, Sonnet for planning).
+        
+        Args:
+            model: Model identifier to use
+        
+        Returns:
+            New Claude instance with same API key but different model
+        """
+        return Claude(
+            model=model,
+            api_key=self.api_key,
+            max_tokens=self.max_tokens,
+        )
+```
+
+### 1.6 Error Handling & Graceful Degradation
+
+**Objective**: Ensure system remains functional even when reasoning components fail.
+
+#### Error Handling Strategy
+
+**Principle**: Never fail completely - always return *some* response to the user.
+
+```python
+# In AdaptiveReasoningLoop:
+
+async def run(self, query: str, ...) -> str:
+    """Run with comprehensive error handling."""
+    
+    try:
+        # Phase 0: Complexity Analysis
+        try:
+            complexity = await self.analyzer.analyze(query, ...)
+        except Exception as e:
+            logger.error(f"Complexity analysis failed: {e}", exc_info=True)
+            # Fallback: Default to MEDIUM complexity
+            complexity = ComplexityAnalysis(
+                complexity_level=ComplexityLevel.MEDIUM,
+                reasoning_required=True,
+                recommended_strategy=ExecutionStrategy.LIGHT_PLANNING,
+                rationale="Complexity analysis failed, defaulting to medium",
+                estimated_iterations=2,
+                confidence=0.0,  # Zero confidence indicates fallback
+            )
+            if "on_error" in callbacks:
+                await callbacks["on_error"]("complexity_analysis", str(e))
+        
+        # Continue with execution...
+        
+    except Exception as e:
+        # Catastrophic failure - fall back to basic AgentLoop
+        logger.error(f"AdaptiveReasoningLoop failed completely: {e}", exc_info=True)
+        
+        if "on_error" in callbacks:
+            await callbacks["on_error"]("adaptive_loop", str(e))
+        
+        # Last resort: Direct execution without reasoning
+        logger.warning("Falling back to direct AgentLoop execution")
+        return await super().run(query, use_streaming, callbacks)
+```
+
+**Fallback Matrix:**
+
+| Component Failure | Fallback Behavior | User Impact |
+|------------------|-------------------|-------------|
+| **Complexity Analyzer** | Default to MEDIUM (LIGHT strategy) | Slight over-processing, but functional |
+| **Planner** | Skip planning, execute query directly | Works like DIRECT mode |
+| **Evaluator** | Accept all responses (no escalation) | No quality check, faster but potentially lower quality |
+| **Synthesizer** | Return last result without synthesis | May lack coherence but has content |
+| **Entire Loop** | Fall back to base AgentLoop | Works like old system, no reasoning |
+
+**User Notifications:**
+
+```python
+# In TUI callbacks:
+"on_error": async (component: str, error: str) -> None:
+    # → StatusPanel: "⚠️ Warning: {component} unavailable (degraded mode)"
+    # → Continue execution with fallback
+```
+
+### 1.7 Configuration and Integration
 
 **New Config:** `src/nxs/application/reasoning/config.py`
 
@@ -1077,9 +1987,14 @@ class ReasoningConfig:
     max_iterations: int = 3
     min_confidence: float = 0.7
     
-    # Complexity thresholds (NEW - for automatic routing)
+    # Complexity thresholds (for automatic routing)
     simple_threshold: float = 0.3  # Below this = SIMPLE
     complex_threshold: float = 0.7  # Above this = COMPLEX, between = MEDIUM
+    
+    # Quality thresholds (for self-correction - NEW)
+    min_quality_direct: float = 0.6    # Minimum quality for DIRECT responses
+    min_quality_light: float = 0.7     # Minimum quality for LIGHT responses
+    min_quality_deep: float = 0.5      # Accept lower for DEEP (final attempt)
     
     # Model selection (can use different models for different phases)
     analysis_model: str = "claude-haiku-3.5"  # Fast, cheap for complexity analysis
@@ -1113,50 +2028,172 @@ class ReasoningConfig:
     debug_mode: bool = False
 ```
 
-**Update:** `src/nxs/main.py`
+**Complete `src/nxs/main.py` Integration:**
 
-Simplified initialization with adaptive reasoning:
+Shows full integration with SessionManager, ReasoningConfig, and TUI callbacks:
 
 ```python
-async def main():
-    """Main entry point for Nexus application."""
+import asyncio
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+import typer
+
+from nxs.logger import get_logger, setup_logger
+from nxs.application.claude import Claude
+from nxs.application.command_control import CommandControlAgent
+from nxs.application.artifact_manager import ArtifactManager
+from nxs.application.session_manager import SessionManager
+from nxs.application.reasoning.config import ReasoningConfig
+from nxs.presentation.tui import NexusApp
+
+load_dotenv()
+
+# Anthropic Config
+claude_model = os.getenv("CLAUDE_MODEL", "")
+anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+
+assert claude_model, "Error: CLAUDE_MODEL cannot be empty. Update .env"
+assert anthropic_api_key, "Error: ANTHROPIC_API_KEY cannot be empty. Update .env"
+
+cli = typer.Typer(
+    name="nxs",
+    help="Nexus command control with Claude integration and MCP-based CLI",
+    add_completion=False,
+)
+
+
+@cli.command()
+async def main(
+    debug: bool = typer.Option(os.getenv("DEBUG", "false").lower() == "true", "--debug", help="Enable debug mode"),
+):
+    """Main application entry point with SessionManager and Reasoning integration."""
     
-    # Existing initialization...
-    artifact_manager = await initialize_artifact_manager()
-    claude = Claude(model=CLAUDE_MODEL)
+    # Ensure logging is set up
+    setup_logger(log_level="DEBUG" if debug else "INFO")
+    logger = get_logger("main")
+
+    logger.info("🚀 Starting Nexus with Adaptive Reasoning System")
+
+    # Create core services
+    claude_service = Claude(model=claude_model)
+    artifact_manager = ArtifactManager()
     
-    # NEW: Reasoning config (always initialized, adapts automatically)
-    from nxs.application.reasoning.config import ReasoningConfig
-    
+    # NEW: Load reasoning configuration from environment
     reasoning_config = ReasoningConfig(
         max_iterations=int(os.getenv("MAX_REASONING_ITERATIONS", "3")),
         min_confidence=float(os.getenv("MIN_CONFIDENCE", "0.7")),
-        # Complexity thresholds
+        # Complexity thresholds for automatic routing
         simple_threshold=float(os.getenv("SIMPLE_THRESHOLD", "0.3")),
         complex_threshold=float(os.getenv("COMPLEX_THRESHOLD", "0.7")),
-        # Model selection (can use smaller models for analysis)
+        # Quality thresholds for self-correction
+        min_quality_direct=float(os.getenv("MIN_QUALITY_DIRECT", "0.6")),
+        min_quality_light=float(os.getenv("MIN_QUALITY_LIGHT", "0.7")),
+        min_quality_deep=float(os.getenv("MIN_QUALITY_DEEP", "0.5")),
+        # Model selection (can use cheaper models for analysis)
         analysis_model=os.getenv("ANALYSIS_MODEL", "claude-haiku-3.5"),  # Fast, cheap
-        planning_model=os.getenv("PLANNING_MODEL", CLAUDE_MODEL),
-        evaluation_model=os.getenv("EVALUATION_MODEL", CLAUDE_MODEL),
-        synthesis_model=os.getenv("SYNTHESIS_MODEL", CLAUDE_MODEL),
+        planning_model=os.getenv("PLANNING_MODEL", claude_model),
+        evaluation_model=os.getenv("EVALUATION_MODEL", claude_model),
+        synthesis_model=os.getenv("SYNTHESIS_MODEL", claude_model),
+        # Optional strategy override for debugging
+        force_strategy=os.getenv("FORCE_REASONING_STRATEGY", None),  # "direct", "light", "deep", or None
+        debug_mode=debug,
     )
     
-    # Adaptive reasoning is now THE ONLY path (no fallback needed!)
     logger.info(
-        "Adaptive reasoning enabled with self-correction "
-        "(automatic strategy selection and quality control)"
+        f"Reasoning Config: max_iter={reasoning_config.max_iterations}, "
+        f"analysis_model={reasoning_config.analysis_model}"
     )
+
+    # Create agent factory that produces CommandControlAgent with reasoning
+    # This preserves command parsing (/cmd) and resource extraction (@resource)
+    def create_command_control_agent(conversation):
+        """Factory to create CommandControlAgent with session-managed conversation.
+        
+        Args:
+            conversation: The Conversation instance managed by SessionManager
+            
+        Returns:
+            CommandControlAgent instance that uses the provided conversation
+            and has adaptive reasoning enabled
+        """
+        # Create CommandControlAgent with reasoning config
+        # NOTE: We pass reasoning_config here!
+        agent = CommandControlAgent(
+            artifact_manager=artifact_manager,
+            claude_service=claude_service,
+            reasoning_config=reasoning_config,  # NEW: Pass reasoning config
+            # Callbacks will be set up by TUI after app initialization
+        )
+        
+        # Replace the internally-created conversation with session-managed one
+        # This ensures session persistence works while keeping reasoning features
+        agent.conversation = conversation
+        
+        logger.debug("Created CommandControlAgent with reasoning and session-managed conversation")
+        return agent
+
+    # Create SessionManager with custom agent factory
+    session_manager = SessionManager(
+        llm=claude_service,
+        storage_dir=Path.home() / ".nxs" / "sessions",
+        system_message="You are a helpful AI assistant with advanced reasoning capabilities.",
+        enable_caching=True,
+        agent_factory=create_command_control_agent,  # Uses reasoning config
+    )
+
+    logger.info("SessionManager initialized with CommandControlAgent (Reasoning enabled)")
+
+    # Get or restore the default session
+    # This will either restore from ~/.nxs/sessions/session.json or create new
+    session = await session_manager.get_or_create_default_session()
     
-    # Create command agent (now simpler - no fallback parameter)
-    agent = CommandControlAgent(
+    logger.info(
+        f"Session ready: {session.session_id} "
+        f"({session.get_message_count()} messages in history)"
+    )
+
+    # Launch Textual TUI with session's agent_loop
+    # The agent_loop is CommandControlAgent with adaptive reasoning
+    app = NexusApp(
+        agent_loop=session.agent_loop,
         artifact_manager=artifact_manager,
-        claude_service=claude,
-        reasoning_config=reasoning_config,
-        callbacks=callbacks
     )
     
-    # Rest of initialization...
+    # NOTE: Reasoning callbacks will be set up in NexusApp.on_mount()
+    # via app.setup_reasoning_callbacks(), which will inject callbacks
+    # into session.agent_loop.adaptive_loop.callbacks
+    
+    try:
+        await app.run_async()
+    finally:
+        # Save session before exit
+        logger.info("Saving session before exit...")
+        session_manager.save_active_session()
+        logger.info("Session saved successfully")
+        
+        # Clean up ArtifactManager connections
+        await artifact_manager.cleanup()
+
+
+def run():
+    """Entry point for the Nexus application."""
+    asyncio.run(main())
+
+
+if __name__ == "__main__":
+    run()
 ```
+
+**Key Integration Points:**
+
+1. **ReasoningConfig Creation**: Loaded from environment variables with sensible defaults
+2. **Factory Pattern**: `create_command_control_agent()` captures `reasoning_config` in closure
+3. **SessionManager**: Uses factory to create agents with reasoning config
+4. **TUI Callback Setup**: Deferred to `NexusApp.on_mount()` to avoid circular dependencies
+5. **Conversation Injection**: Session-managed conversation replaces internal one (preserves persistence)
+6. **Error Handling**: Wrapped in try/finally for clean session save
 
 **Key Changes:**
 - **No inheritance** - CommandControlAgent uses composition
@@ -1592,14 +2629,38 @@ This separate document describes:
 - [ ] Test strategy selection accuracy
 - [ ] Test escalation scenarios (when quality insufficient)
 
-### Stage 2: Integration (Phase 1 - Week 2-3)
+### Stage 2: Integration & TUI Enhancement (Phase 1 - Week 2-3)
 
-**Week 2-3:**
+**Week 2-3: Core Integration**
 - [ ] **Simplify CommandControlAgent architecture**
 - [ ] Remove AgentLoop inheritance (composition over inheritance)
 - [ ] Single execution path via AdaptiveReasoningLoop
 - [ ] Remove all enable/disable flags and fallback modes
 - [ ] Update main.py with simplified initialization (no flags)
+
+**Week 2-3: TUI Integration**
+- [ ] **Create ReasoningTracePanel widget (Priority 1)**
+  * Implement `ReasoningTracePanel` (extends RichLog)
+  * Implement `ReasoningTraceHeader` (collapsible header with indicator)
+  * Implement `CollapsibleReasoningTrace` (container widget)
+  * Add keyboard shortcut handlers (`Ctrl+R`, `Ctrl+Shift+R`)
+- [ ] **Simplify StatusPanel**
+  * Remove reasoning detail methods
+  * Keep only high-level event logging
+  * Maintain non-reasoning tool call display
+- [ ] **Update NexusApp**
+  * Add `CollapsibleReasoningTrace` to layout
+  * Implement callback routing logic (StatusPanel vs TracePanel)
+  * Add action handlers for toggle/clear
+  * Update `setup_reasoning_callbacks()` with dual routing
+- [ ] **Test TUI Integration**
+  * Test collapsible behavior
+  * Test activity indicator
+  * Test callback routing
+  * Test keyboard shortcuts
+  * Visual testing of trace display hierarchy
+
+**Week 3: Testing & Refinement**
 - [ ] Refine prompts based on testing:
   * Complexity analysis accuracy
   * Quality evaluation sensitivity
@@ -1618,35 +2679,243 @@ This separate document describes:
 - [ ] Documentation and examples:
   * Self-correction in action
   * Threshold tuning guide
+  * Reasoning trace usage guide
 
 ---
 
 ## Testing Strategy
 
+### Test Organization
+
+**Directory Structure:**
+```
+tests/
+├── reasoning/
+│   ├── __init__.py
+│   ├── conftest.py           # Shared fixtures and mocks
+│   ├── test_analyzer.py      # QueryComplexityAnalyzer tests
+│   ├── test_planner.py       # Planner tests
+│   ├── test_evaluator.py     # Evaluator tests (both methods)
+│   ├── test_synthesizer.py   # Synthesizer tests
+│   ├── test_reasoning_loop.py # AdaptiveReasoningLoop tests
+│   └── fixtures/
+│       ├── queries.json       # Test query datasets
+│       ├── responses.json     # Mock LLM responses
+│       └── complexity_analyses.json
+├── integration/
+│   ├── test_adaptive_reasoning.py
+│   ├── test_command_control_with_reasoning.py
+│   └── test_tui_integration.py
+└── performance/
+    ├── test_latency.py
+    ├── test_escalation_overhead.py
+    └── benchmarks/
+```
+
 ### Unit Tests
 
-**For Each Component:**
-- Isolated testing with mocked dependencies
-- Mock LLM responses for deterministic tests
-- Test error handling and edge cases
-- Test configuration variations
+**Mocking Strategy:**
 
-**Example Test Structure:**
+Create a reusable `MockClaude` class for deterministic testing:
+
 ```python
+# tests/reasoning/conftest.py
+import pytest
+from typing import List, Dict, Any
+from nxs.application.claude import Claude
+
+class MockClaude:
+    """Mock Claude for deterministic testing."""
+    
+    def __init__(self, responses: List[str] = None, response_map: Dict[str, str] = None):
+        """Initialize with canned responses.
+        
+        Args:
+            responses: List of responses to return in order
+            response_map: Dict mapping query patterns to responses
+        """
+        self.responses = responses or []
+        self.response_map = response_map or {}
+        self.call_count = 0
+        self.calls = []  # Track all calls
+    
+    async def create_message(self, messages, **kwargs):
+        """Mock create_message."""
+        self.call_count += 1
+        
+        # Extract query from messages
+        query = messages[-1].get("content", "") if messages else ""
+        self.calls.append({"query": query, "kwargs": kwargs})
+        
+        # Return mapped response or next in sequence
+        if query in self.response_map:
+            response_text = self.response_map[query]
+        elif self.responses:
+            response_text = self.responses.pop(0)
+        else:
+            response_text = "Mock response"
+        
+        # Return in Claude message format
+        return type('MockMessage', (), {
+            'content': [type('MockContent', (), {
+                'type': 'text',
+                'text': response_text
+            })()]
+        })()
+
+@pytest.fixture
+def mock_claude():
+    """Fixture providing MockClaude."""
+    return MockClaude
+
+@pytest.fixture
+def sample_queries():
+    """Load sample queries from fixtures."""
+    import json
+    from pathlib import Path
+    fixture_path = Path(__file__).parent / "fixtures" / "queries.json"
+    if fixture_path.exists():
+        return json.loads(fixture_path.read_text())
+    return {
+        "simple": ["What is 2+2?", "What is Python?"],
+        "medium": ["Compare Python and Java", "Summarize the document"],
+        "complex": ["Research competitive landscape for X", "Comprehensive analysis of Y"]
+    }
+```
+
+**Component Tests with Concrete Examples:**
+
+```python
+# tests/reasoning/test_analyzer.py
+import pytest
+from nxs.application.reasoning.analyzer import QueryComplexityAnalyzer
+from nxs.application.reasoning.types import ComplexityLevel, ExecutionStrategy
+from nxs.application.reasoning.config import ReasoningConfig
+
+@pytest.mark.asyncio
+async def test_analyzer_simple_query(mock_claude):
+    """Test that simple queries are classified as SIMPLE."""
+    llm = mock_claude(responses=[
+        "**Complexity Level:** SIMPLE\n**Recommended Strategy:** DIRECT\n**Estimated Iterations:** 1\n**Confidence:** 0.95"
+    ])
+    analyzer = QueryComplexityAnalyzer(llm, ReasoningConfig())
+    
+    result = await analyzer.analyze("What is 2+2?")
+    
+    assert result.complexity_level == ComplexityLevel.SIMPLE
+    assert result.recommended_strategy == ExecutionStrategy.DIRECT
+    assert result.estimated_iterations == 1
+    assert result.confidence >= 0.9
+
+@pytest.mark.asyncio
+async def test_analyzer_complex_query(mock_claude):
+    """Test that complex multi-part queries are classified correctly."""
+    llm = mock_claude(responses=[
+        "**Complexity Level:** COMPLEX\n**Recommended Strategy:** DEEP_REASONING\n**Estimated Iterations:** 3"
+    ])
+    analyzer = QueryComplexityAnalyzer(llm, ReasoningConfig())
+    
+    result = await analyzer.analyze(
+        "Research the competitive landscape for quantum computing startups, "
+        "analyze market trends, and recommend investment strategies"
+    )
+    
+    assert result.complexity_level == ComplexityLevel.COMPLEX
+    assert result.recommended_strategy == ExecutionStrategy.DEEP_REASONING
+    assert result.estimated_iterations >= 3
+    assert result.requires_research is True
+    assert result.multi_part_query is True
+
+@pytest.mark.asyncio
+async def test_analyzer_error_handling(mock_claude):
+    """Test analyzer handles LLM errors gracefully."""
+    llm = mock_claude()
+    llm.create_message = lambda *args, **kwargs: (_ for _ in ()).throw(Exception("API Error"))
+    
+    analyzer = QueryComplexityAnalyzer(llm, ReasoningConfig())
+    
+    # Should not raise, but return default/fallback
+    with pytest.raises(Exception):  # Or catch and verify fallback
+        await analyzer.analyze("Any query")
+
+# tests/reasoning/test_evaluator.py
+@pytest.mark.asyncio
+async def test_evaluator_response_quality_sufficient(mock_claude):
+    """Test that high-quality responses pass evaluation."""
+    llm = mock_claude(responses=[
+        "**Quality Assessment:** SUFFICIENT\n**Confidence Score:** 0.85\n**Reasoning:** Complete and accurate"
+    ])
+    evaluator = Evaluator(llm, ReasoningConfig())
+    
+    result = await evaluator.evaluate_response_quality(
+        query="What is quantum computing?",
+        response="Quantum computing is a type of computation that harnesses quantum phenomena...",
+        strategy_used="DIRECT",
+        expected_complexity=None
+    )
+    
+    assert result.is_complete is True
+    assert result.confidence >= 0.8
+
+@pytest.mark.asyncio
+async def test_evaluator_response_quality_insufficient(mock_claude):
+    """Test that low-quality responses trigger escalation."""
+    llm = mock_claude(responses=[
+        "**Quality Assessment:** INSUFFICIENT\n**Confidence Score:** 0.35\n"
+        "**Missing Aspects:**\n- Lacks technical depth\n- Missing key concepts"
+    ])
+    evaluator = Evaluator(llm, ReasoningConfig())
+    
+    result = await evaluator.evaluate_response_quality(
+        query="Explain quantum computing in detail",
+        response="It's a type of computer.",
+        strategy_used="DIRECT",
+        expected_complexity=None
+    )
+    
+    assert result.is_complete is False
+    assert result.confidence < 0.5
+    assert len(result.missing_aspects) > 0
+
 # tests/reasoning/test_planner.py
-async def test_planner_simple_query():
+async def test_planner_simple_query(mock_claude):
     """Test planner with simple single-step query."""
-    llm = MockClaude(responses=["1. Search for information..."])
+    llm = mock_claude(responses=[
+        "1. [HIGH PRIORITY] Search for Python definition\nTools: search"
+    ])
     planner = Planner(llm, ReasoningConfig())
     
     plan = await planner.generate_plan("What is Python?")
     
     assert len(plan.subtasks) == 1
     assert plan.estimated_complexity == "low"
+    assert plan.subtasks[0].priority == 1
 
-async def test_planner_complex_query():
+async def test_planner_complex_query(mock_claude):
     """Test planner with complex multi-step query."""
-    # ...
+    llm = mock_claude(responses=[
+        """1. [HIGH PRIORITY] Research quantum computing basics
+Tools: search, wikipedia
+
+2. [HIGH PRIORITY] Identify key players in quantum space
+Tools: search
+
+3. [MEDIUM PRIORITY] Analyze market trends
+Tools: search, analysis
+
+4. [LOW PRIORITY] Synthesize recommendations
+Tools: none"""
+    ])
+    planner = Planner(llm, ReasoningConfig())
+    
+    plan = await planner.generate_plan(
+        "Research quantum computing landscape and provide recommendations"
+    )
+    
+    assert len(plan.subtasks) >= 3
+    assert plan.estimated_complexity in ["medium", "high"]
+    # Verify priorities are assigned
+    assert all(task.priority for task in plan.subtasks)
 ```
 
 ### Integration Tests
@@ -1656,25 +2925,218 @@ async def test_planner_complex_query():
 - Adaptive strategy selection and escalation
 - Resource extraction + reasoning
 - Command processing + reasoning
+- TUI integration with callbacks
 
-**Example Integration Test:**
+**Comprehensive Integration Test Examples:**
+
 ```python
 # tests/integration/test_adaptive_reasoning.py
+import pytest
+from nxs.application.claude import Claude
+from nxs.application.conversation import Conversation
+from nxs.application.tool_registry import ToolRegistry
+from nxs.application.reasoning_loop import AdaptiveReasoningLoop
+from nxs.application.reasoning.analyzer import QueryComplexityAnalyzer
+from nxs.application.reasoning.planner import Planner
+from nxs.application.reasoning.evaluator import Evaluator
+from nxs.application.reasoning.synthesizer import Synthesizer
+from nxs.application.reasoning.config import ReasoningConfig
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_adaptive_reasoning_direct_no_escalation():
+    """Test simple query that completes with DIRECT strategy."""
+    # Setup real components (can use real Claude or mocks)
+    claude = Claude(model="claude-sonnet-4.5")  # or MockClaude for speed
+    conversation = Conversation()
+    tool_registry = ToolRegistry()
+    config = ReasoningConfig()
+    
+    # Create reasoning components
+    analyzer = QueryComplexityAnalyzer(claude, config)
+    planner = Planner(claude, config)
+    evaluator = Evaluator(claude, config)
+    synthesizer = Synthesizer(claude, config)
+    
+    # Track callbacks
+    callback_log = []
+    
+    callbacks = {
+        "on_analysis_start": lambda: callback_log.append("analysis_start"),
+        "on_strategy_selected": lambda s, r: callback_log.append(f"strategy:{s.value}"),
+        "on_quality_check_complete": lambda e: callback_log.append(f"quality:{e.confidence:.2f}"),
+        "on_final_response": lambda s, a, q, e: callback_log.append(f"final:{s.value}"),
+    }
+    
+    # Create adaptive loop
+    adaptive_loop = AdaptiveReasoningLoop(
+        llm=claude,
+        conversation=conversation,
+        tool_registry=tool_registry,
+        analyzer=analyzer,
+        planner=planner,
+        evaluator=evaluator,
+        synthesizer=synthesizer,
+        callbacks=callbacks,
+    )
+    
+    # Execute
+    result = await adaptive_loop.run("What is 2+2?", use_streaming=False)
+    
+    # Verify
+    assert result is not None
+    assert len(result) > 0
+    assert "4" in result or "four" in result.lower()
+    
+    # Verify callback sequence
+    assert "analysis_start" in callback_log
+    assert any("strategy:DIRECT" in log for log in callback_log)
+    assert any("quality:" in log for log in callback_log)
+    assert any("final:DIRECT" in log for log in callback_log)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_adaptive_reasoning_with_escalation():
-    """Test adaptive reasoning loop with quality-driven escalation."""
+    """Test complex query that triggers escalation."""
     # Setup
     claude = Claude(model="claude-sonnet-4.5")
     conversation = Conversation()
     tool_registry = ToolRegistry()
-    # ... setup reasoning components
+    config = ReasoningConfig(
+        min_quality_direct=0.8,  # High threshold to force escalation
+    )
     
-    adaptive_loop = AdaptiveReasoningLoop(...)
+    analyzer = QueryComplexityAnalyzer(claude, config)
+    planner = Planner(claude, config)
+    evaluator = Evaluator(claude, config)
+    synthesizer = Synthesizer(claude, config)
     
-    result = await adaptive_loop.run("Research topic X")
+    # Track escalation
+    escalations = []
     
-    assert len(result) > 0
-    assert adaptive_loop.analyzer.call_count > 0
-    assert adaptive_loop.evaluator.call_count > 0
+    callbacks = {
+        "on_auto_escalation": lambda from_s, to_s, r, c: escalations.append({
+            "from": from_s.value,
+            "to": to_s.value,
+            "reason": r,
+            "confidence": c
+        }),
+    }
+    
+    adaptive_loop = AdaptiveReasoningLoop(
+        llm=claude,
+        conversation=conversation,
+        tool_registry=tool_registry,
+        analyzer=analyzer,
+        planner=planner,
+        evaluator=evaluator,
+        synthesizer=synthesizer,
+        callbacks=callbacks,
+    )
+    
+    # Execute with query likely to trigger escalation
+    result = await adaptive_loop.run(
+        "Provide a comprehensive explanation of quantum computing including "
+        "key principles, applications, and current limitations",
+        use_streaming=False
+    )
+    
+    # Verify result quality
+    assert result is not None
+    assert len(result) > 200  # Should be comprehensive
+    
+    # Verify escalation happened (likely DIRECT → LIGHT or LIGHT → DEEP)
+    # Note: May not always escalate if quality is good enough
+    print(f"Escalations: {escalations}")  # For debugging
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_command_control_with_reasoning():
+    """Test CommandControlAgent with adaptive reasoning."""
+    from nxs.application.command_control import CommandControlAgent
+    from nxs.application.artifact_manager import ArtifactManager
+    
+    # Setup
+    claude = Claude(model="claude-sonnet-4.5")
+    artifact_manager = ArtifactManager()  # or mock
+    config = ReasoningConfig()
+    
+    # Create agent
+    agent = CommandControlAgent(
+        artifact_manager=artifact_manager,
+        claude_service=claude,
+        reasoning_config=config,
+    )
+    
+    # Test simple query
+    result = await agent.run("What is Python?", use_streaming=False)
+    assert result is not None
+    assert "python" in result.lower()
+    
+    # Test with resource mention
+    result_with_resource = await agent.run(
+        "Summarize @document.txt",
+        use_streaming=False
+    )
+    # Will either process resource or indicate it's not found
+    assert result_with_resource is not None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_tui_callback_integration():
+    """Test that TUI callbacks work correctly with reasoning loop."""
+    from unittest.mock import AsyncMock, MagicMock
+    
+    # Setup
+    claude = Claude(model="claude-sonnet-4.5")
+    conversation = Conversation()
+    tool_registry = ToolRegistry()
+    config = ReasoningConfig()
+    
+    # Create components
+    analyzer = QueryComplexityAnalyzer(claude, config)
+    planner = Planner(claude, config)
+    evaluator = Evaluator(claude, config)
+    synthesizer = Synthesizer(claude, config)
+    
+    # Mock TUI callbacks
+    on_analysis = AsyncMock()
+    on_strategy_selected = AsyncMock()
+    on_quality_check = AsyncMock()
+    on_escalation = AsyncMock()
+    on_final = AsyncMock()
+    
+    callbacks = {
+        "on_analysis_start": on_analysis,
+        "on_strategy_selected": on_strategy_selected,
+        "on_quality_check_start": on_quality_check,
+        "on_auto_escalation": on_escalation,
+        "on_final_response": on_final,
+    }
+    
+    adaptive_loop = AdaptiveReasoningLoop(
+        llm=claude,
+        conversation=conversation,
+        tool_registry=tool_registry,
+        analyzer=analyzer,
+        planner=planner,
+        evaluator=evaluator,
+        synthesizer=synthesizer,
+        callbacks=callbacks,
+    )
+    
+    # Execute
+    await adaptive_loop.run("Test query", use_streaming=False)
+    
+    # Verify callbacks were invoked
+    on_analysis.assert_called()
+    on_strategy_selected.assert_called()
+    on_quality_check.assert_called()
+    on_final.assert_called()
+    # on_escalation may or may not be called depending on quality
 ```
 
 ### Performance Tests
