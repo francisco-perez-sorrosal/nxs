@@ -178,12 +178,18 @@ class ServiceContainer:
     def query_handler(self) -> QueryHandler:
         """Get QueryHandler, creating it on first access."""
         if self._query_handler is None:
+            # Get reasoning callbacks from app if available
+            reasoning_callbacks = {}
+            if hasattr(self.app, 'get_reasoning_callbacks'):
+                reasoning_callbacks = self.app.get_reasoning_callbacks()
+            
             self._query_handler = QueryHandler(
                 agent_loop=self.agent_loop,
                 chat_panel_getter=self._get_chat_panel,
                 status_queue=self.status_queue,  # Triggers lazy creation
                 mcp_initialized_getter=self._mcp_initialized_getter,
                 focus_input=self._focus_input,
+                reasoning_callbacks=reasoning_callbacks,
             )
         return self._query_handler
 

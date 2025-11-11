@@ -34,6 +34,7 @@ class QueryHandler:
         status_queue: "StatusQueue",
         mcp_initialized_getter: Callable[[], bool],
         focus_input: Callable[[], None],
+        reasoning_callbacks: Optional[dict[str, Callable]] = None,
     ):
         """
         Initialize the QueryHandler.
@@ -44,12 +45,14 @@ class QueryHandler:
             status_queue: StatusQueue for status updates
             mcp_initialized_getter: Function to check if MCP is initialized
             focus_input: Function to focus the input field
+            reasoning_callbacks: Optional callbacks for reasoning trace events
         """
         self.agent_loop = agent_loop
         self.chat_panel_getter = chat_panel_getter
         self.status_queue = status_queue
         self.mcp_initialized_getter = mcp_initialized_getter
         self.focus_input = focus_input
+        self.reasoning_callbacks = reasoning_callbacks or {}
 
     async def process_query(self, query: str, query_id: int) -> None:
         """
@@ -83,15 +86,19 @@ class QueryHandler:
             # it appears in submission order
             logger.info(f"Running agent loop with query (query_id={query_id}): {query[:100]}...")
 
+            # Merge agent loop callbacks with reasoning callbacks
+            all_callbacks = {
+                "on_stream_chunk": self._on_stream_chunk,
+                "on_stream_complete": self._on_stream_complete,
+                "on_tool_call": self._on_tool_call,
+                "on_tool_result": self._on_tool_result,
+                "on_start": self._on_start,
+                **self.reasoning_callbacks,  # Add reasoning trace callbacks
+            }
+
             await self.agent_loop.run(
                 query,
-                callbacks={
-                    "on_stream_chunk": self._on_stream_chunk,
-                    "on_stream_complete": self._on_stream_complete,
-                    "on_tool_call": self._on_tool_call,
-                    "on_tool_result": self._on_tool_result,
-                    "on_start": self._on_start,
-                },
+                callbacks=all_callbacks,
             )
 
             logger.info(f"Query processing completed successfully (query_id={query_id})")

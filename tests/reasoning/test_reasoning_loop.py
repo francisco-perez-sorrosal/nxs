@@ -247,7 +247,7 @@ Medium complexity query needs light planning.
 
     callbacks = {
         "on_light_planning": lambda: None,
-        "on_planning_complete": lambda p: None,
+        "on_planning_complete": lambda count, mode: None,
     }
 
     adaptive_loop = AdaptiveReasoningLoop(

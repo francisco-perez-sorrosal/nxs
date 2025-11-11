@@ -268,6 +268,9 @@ class AdaptiveReasoningLoop(AgentLoop):
                     for i in range(0, len(result), 20):
                         chunk = result[i : i + 20]
                         await _call_callback(callbacks, "on_stream_chunk", chunk)
+                    
+                    # Signal streaming completion so chat panel can render the buffered message
+                    await _call_callback(callbacks, "on_stream_complete")
 
                 await _call_callback(
                     callbacks,
@@ -385,10 +388,19 @@ class AdaptiveReasoningLoop(AgentLoop):
             query, context={"complexity": complexity, "mode": "light"}
         )
 
-        await _call_callback(callbacks, "on_planning_complete", plan)
+        await _call_callback(callbacks, "on_planning_complete", len(plan.subtasks), "light")
+
+        # If no subtasks were generated, fall back to direct execution
+        if not plan.subtasks or len(plan.subtasks) == 0:
+            logger.warning("No subtasks generated, falling back to direct execution")
+            return await super().run(
+                query=query,
+                use_streaming=False,  # Buffer
+                callbacks={k: v for k, v in callbacks.items() if k not in ["on_stream_chunk"]},
+            )
 
         # Limit iterations for light planning
-        max_iters = min(2, complexity.estimated_iterations)
+        max_iters = min(2, complexity.estimated_iterations or 2)
 
         accumulated_results = []
 
@@ -419,7 +431,14 @@ class AdaptiveReasoningLoop(AgentLoop):
             plan.subtasks.pop(0)
 
         # Simple synthesis (no filtering, just combine)
-        if len(accumulated_results) == 1:
+        if len(accumulated_results) == 0:
+            logger.warning("No results accumulated, returning original query execution")
+            return await super().run(
+                query=query,
+                use_streaming=False,
+                callbacks={k: v for k, v in callbacks.items() if k not in ["on_stream_chunk"]},
+            )
+        elif len(accumulated_results) == 1:
             return accumulated_results[0]["result"]
         else:
             # Quick synthesis without filtering
@@ -461,7 +480,7 @@ class AdaptiveReasoningLoop(AgentLoop):
         plan.complexity_analysis = complexity
         logger.info(f"Generated plan with {len(plan.subtasks)} subtasks")
 
-        await _call_callback(callbacks, "on_planning_complete", plan)
+        await _call_callback(callbacks, "on_planning_complete", len(plan.subtasks), "deep")
 
         # Phase 2: Iterative execution and evaluation
         accumulated_results = []
