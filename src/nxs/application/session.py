@@ -17,13 +17,32 @@ Sessions can be:
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
 from nxs.application.agentic_loop import AgentLoop
 from nxs.application.conversation import Conversation
 from nxs.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+@runtime_checkable
+class AgentProtocol(Protocol):
+    """Protocol for agent types that can execute queries.
+    
+    Supports both AgentLoop and CommandControlAgent (with composition).
+    """
+    
+    async def run(
+        self,
+        query: str,
+        use_streaming: bool = True,
+        callbacks: Optional[dict[str, Callable]] = None,
+    ) -> str:
+        """Execute a query and return the response."""
+        ...
+    
+    conversation: Conversation  # Agent must have access to conversation
 
 
 @dataclass
@@ -113,14 +132,14 @@ class Session:
         self,
         metadata: SessionMetadata,
         conversation: Conversation,
-        agent_loop: AgentLoop,
+        agent_loop: AgentProtocol,
     ):
         """Initialize a session.
 
         Args:
             metadata: Session metadata (ID, title, timestamps, etc.).
             conversation: Conversation instance with message history.
-            agent_loop: AgentLoop instance for query execution.
+            agent_loop: Agent instance for query execution (AgentLoop or CommandControlAgent).
         """
         self.metadata = metadata
         self.conversation = conversation
@@ -221,13 +240,13 @@ class Session:
 
     @classmethod
     def from_dict(
-        cls, data: dict[str, Any], agent_loop: AgentLoop
+        cls, data: dict[str, Any], agent_loop: AgentProtocol
     ) -> "Session":
         """Deserialize session from dictionary.
 
         Args:
             data: Dictionary from to_dict().
-            agent_loop: AgentLoop instance to use (not persisted).
+            agent_loop: Agent instance to use (not persisted, can be AgentLoop or CommandControlAgent).
 
         Returns:
             Restored Session instance.

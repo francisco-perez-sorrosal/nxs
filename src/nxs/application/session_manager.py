@@ -17,7 +17,7 @@ TUI Integration (Future):
 
 import json
 from pathlib import Path
-from typing import Callable, Optional, Dict
+from typing import Callable, Optional, Dict, Protocol, runtime_checkable
 
 from nxs.application.agentic_loop import AgentLoop
 from nxs.application.claude import Claude
@@ -27,6 +27,23 @@ from nxs.application.tool_registry import ToolRegistry
 from nxs.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+@runtime_checkable
+class AgentProtocol(Protocol):
+    """Protocol for agent types that can execute queries.
+    
+    Supports both AgentLoop and CommandControlAgent (with composition).
+    """
+    
+    async def run(
+        self,
+        query: str,
+        use_streaming: bool = True,
+        callbacks: Optional[dict[str, Callable]] = None,
+    ) -> str:
+        """Execute a query and return the response."""
+        ...
 
 
 class SessionManager:
@@ -86,7 +103,7 @@ class SessionManager:
         system_message: Optional[str] = None,
         enable_caching: bool = True,
         callbacks: Optional[dict[str, Callable]] = None,
-        agent_factory: Optional[Callable[[Conversation], AgentLoop]] = None,
+        agent_factory: Optional[Callable[[Conversation], AgentProtocol]] = None,
     ):
         """Initialize session manager.
 

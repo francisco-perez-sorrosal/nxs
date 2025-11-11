@@ -38,11 +38,18 @@ class MockClaude:
         # Extract query from messages
         query = ""
         if messages:
-            last_msg = messages[-1]
-            if isinstance(last_msg, dict):
-                query = last_msg.get("content", "")
+            # Handle list of messages (from AgentLoop)
+            if isinstance(messages, list):
+                last_msg = messages[-1]
+                if isinstance(last_msg, dict):
+                    query = last_msg.get("content", "")
+                else:
+                    query = str(last_msg)
+            # Handle single message dict (from reasoning components)
+            elif isinstance(messages, dict):
+                query = messages.get("content", "")
             else:
-                query = str(last_msg)
+                query = str(messages)
 
         self.calls.append({"query": query, "kwargs": kwargs})
 
@@ -65,6 +72,7 @@ class MockClaude:
         class MockMessage:
             def __init__(self, text):
                 self.content = [MockContent(text)]
+                self.stop_reason = "end_turn"  # Default stop reason
 
         return MockMessage(response_text)
 

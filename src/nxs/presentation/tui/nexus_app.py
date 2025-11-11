@@ -11,6 +11,7 @@ from textual.binding import Binding
 
 from nxs.presentation.widgets.chat_panel import ChatPanel
 from nxs.presentation.widgets.status_panel import StatusPanel
+from nxs.presentation.widgets.reasoning_trace_panel import ReasoningTracePanel
 from nxs.presentation.widgets.input_field import NexusInput
 from nxs.presentation.widgets.mcp_panel import MCPPanel
 from nxs.presentation.services import ServiceContainer
@@ -27,21 +28,24 @@ class NexusApp(App):
     The main Nexus TUI application.
 
     Layout:
-    ┌─────────────────────────────┬──────────┐
-    │         Header              │          │
-    ├─────────────────────────────┼──────────┤
-    │                             │          │
-    │      Chat Panel             │   MCP    │
-    │     (scrollable)            │  Panel   │
-    │                             │(servers, │
-    ├─────────────────────────────┤ artifacts│
-    │    Status Panel             │)         │
-    │     (scrollable)            │          │
-    ├─────────────────────────────┤          │
-    │      Input Field            │          │
-    ├─────────────────────────────┼──────────┤
-    │         Footer              │          │
-    └─────────────────────────────┴──────────┘
+    ┌─────────────────────────────────────────┬──────────┐
+    │               Header                    │          │
+    ├─────────────────────────────────────────┼──────────┤
+    │                                         │          │
+    │          Chat Panel                     │   MCP    │
+    │         (scrollable)                    │  Panel   │
+    │                                         │(servers, │
+    ├─────────────────────────────────────────┤ artifacts│
+    │    Reasoning Trace Panel (collapsible)  │)         │
+    │         (scrollable, Ctrl+R to toggle)  │          │
+    ├─────────────────────────────────────────┤          │
+    │      Status Panel (tool execution)      │          │
+    │           (scrollable)                  │          │
+    ├─────────────────────────────────────────┤          │
+    │          Input Field                    │          │
+    ├─────────────────────────────────────────┼──────────┤
+    │               Footer                    │          │
+    └─────────────────────────────────────────┴──────────┘
     """
 
     TITLE = "Nexus"
@@ -55,6 +59,7 @@ class NexusApp(App):
         Binding("tab", "focus_next", "Next Field", show=False),
         Binding("shift+tab", "focus_previous", "Previous Field", show=False),
         Binding("ctrl+l", "clear_chat", "Clear Chat"),
+        Binding("ctrl+r", "toggle_reasoning", "Toggle Reasoning", show=True),
     ]
 
     def __init__(
@@ -125,6 +130,12 @@ class NexusApp(App):
                 with Vertical(id="main-content"):
                     yield ChatPanel(id="chat")
 
+                    # Reasoning trace panel (collapsible with Ctrl+R)
+                    yield ReasoningTracePanel(id="reasoning-trace")
+
+                    # Status panel for tool execution
+                    yield StatusPanel(id="status")
+
                     # Create input widget
                     yield NexusInput(
                         resources=self.resources,
@@ -132,8 +143,6 @@ class NexusApp(App):
                         artifact_manager=self.artifact_manager,
                         id="input",
                     )
-
-                    yield StatusPanel(id="status")
 
                 # MCP servers panel on the right
                 yield MCPPanel(id="mcp-panel")
@@ -318,6 +327,55 @@ class NexusApp(App):
         chat = self._get_chat_panel()
         chat.clear_chat()
         chat.add_panel("Chat history cleared", style="dim")
+
+    def action_toggle_reasoning(self) -> None:
+        """Toggle the reasoning trace panel visibility (Ctrl+R)."""
+        reasoning_panel = self.query_one("#reasoning-trace", ReasoningTracePanel)
+        reasoning_panel.display = not reasoning_panel.display
+
+    # ====================================================================
+    # Reasoning Callback Routing
+    # ====================================================================
+    # These methods route reasoning events from AdaptiveReasoningLoop
+    # to the ReasoningTracePanel widget
+    # ====================================================================
+
+    def _get_reasoning_trace_panel(self) -> ReasoningTracePanel:
+        """Helper to get the reasoning trace panel widget."""
+        return self.query_one("#reasoning-trace", ReasoningTracePanel)
+
+    def get_reasoning_callbacks(self) -> dict[str, Callable]:
+        """
+        Get callbacks dict for routing reasoning events to the trace panel.
+
+        Returns:
+            Dictionary of callback functions for AdaptiveReasoningLoop
+        """
+        # Get the reasoning panel
+        reasoning_panel = self._get_reasoning_trace_panel()
+
+        # Return callback dictionary that routes events to the panel
+        return {
+            # Complexity analysis
+            "on_analysis_start": lambda: reasoning_panel.on_analysis_start(),
+            "on_analysis_complete": lambda complexity: reasoning_panel.on_analysis_complete(complexity),
+            # Strategy selection
+            "on_strategy_selected": lambda strategy, reason: reasoning_panel.on_strategy_selected(strategy, reason),
+            # Planning
+            "on_planning_start": lambda: reasoning_panel.on_planning_start(),
+            "on_planning_complete": lambda count, mode: reasoning_panel.on_planning_complete(count, mode),
+            # Quality evaluation
+            "on_quality_check_start": lambda: reasoning_panel.on_quality_check_start(),
+            "on_quality_check_complete": lambda evaluation: reasoning_panel.on_quality_check_complete(evaluation),
+            # Auto-escalation
+            "on_auto_escalation": lambda from_s, to_s, reason, conf: reasoning_panel.on_auto_escalation(
+                from_s, to_s, reason, conf
+            ),
+            # Final response
+            "on_final_response": lambda strategy, attempts, quality, escalated: reasoning_panel.on_final_response(
+                strategy, attempts, quality, escalated
+            ),
+        }
 
     def update_resources(self, resources: list[str]):
         """

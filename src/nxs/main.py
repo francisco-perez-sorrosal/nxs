@@ -11,6 +11,15 @@ from nxs.application.claude import Claude
 from nxs.application.command_control import CommandControlAgent
 from nxs.application.artifact_manager import ArtifactManager
 from nxs.application.session_manager import SessionManager
+from nxs.application.conversation import Conversation
+from nxs.application.tool_registry import ToolRegistry
+from nxs.application.mcp_tool_provider import MCPToolProvider
+from nxs.application.reasoning_loop import AdaptiveReasoningLoop
+from nxs.application.reasoning.config import ReasoningConfig
+from nxs.application.reasoning.analyzer import QueryComplexityAnalyzer
+from nxs.application.reasoning.planner import Planner
+from nxs.application.reasoning.evaluator import Evaluator
+from nxs.application.reasoning.synthesizer import Synthesizer
 from nxs.presentation.tui import NexusApp
 
 load_dotenv()
@@ -50,30 +59,64 @@ async def main(
     claude_service = Claude(model=claude_model)
     artifact_manager = ArtifactManager()
 
+    # Create reasoning configuration (can be customized via env vars)
+    reasoning_config = ReasoningConfig()
+    
+    logger.info(f"Reasoning config: max_iterations={reasoning_config.max_iterations}, "
+                f"direct_threshold={reasoning_config.min_quality_direct}")
+
     # Create agent factory that produces CommandControlAgent instances
-    # This preserves command parsing (/cmd) and resource extraction (@resource)
+    # This uses composition: CommandControlAgent -> AdaptiveReasoningLoop -> AgentLoop
     def create_command_control_agent(conversation):
         """Factory to create CommandControlAgent with session-managed conversation.
+        
+        Uses composition architecture:
+        - CommandControlAgent: High-level command/resource processing
+        - AdaptiveReasoningLoop: Adaptive reasoning with quality guarantees
+        - AgentLoop: Core conversation loop with tools
         
         Args:
             conversation: The Conversation instance managed by SessionManager
             
         Returns:
-            CommandControlAgent instance that uses the provided conversation
+            CommandControlAgent instance that uses AdaptiveReasoningLoop
         """
-        # Create CommandControlAgent with artifact_manager
-        # It will use backward compatibility mode and create its own conversation,
-        # but we'll replace it with the session-managed one
-        agent = CommandControlAgent(
-            artifact_manager=artifact_manager,
-            claude_service=claude_service,
+        # Create ToolRegistry and register MCP tools
+        tool_registry = ToolRegistry()
+        mcp_provider = MCPToolProvider(artifact_manager.clients)
+        tool_registry.register_provider(mcp_provider)
+        
+        logger.debug(f"ToolRegistry initialized with {len(artifact_manager.clients)} MCP clients")
+        
+        # Create reasoning components
+        analyzer = QueryComplexityAnalyzer(claude_service, reasoning_config)
+        planner = Planner(claude_service, reasoning_config)
+        evaluator = Evaluator(claude_service, reasoning_config)
+        synthesizer = Synthesizer(claude_service, reasoning_config)
+        
+        logger.debug("Reasoning components initialized (Analyzer, Planner, Evaluator, Synthesizer)")
+        
+        # Create AdaptiveReasoningLoop with reasoning components
+        reasoning_loop = AdaptiveReasoningLoop(
+            llm=claude_service,
+            conversation=conversation,  # Session-managed conversation
+            tool_registry=tool_registry,
+            analyzer=analyzer,
+            planner=planner,
+            evaluator=evaluator,
+            synthesizer=synthesizer,
+            config=reasoning_config,
         )
         
-        # Replace the internally-created conversation with session-managed one
-        # This ensures session persistence works while keeping command/resource features
-        agent.conversation = conversation
+        logger.debug("AdaptiveReasoningLoop initialized with session-managed conversation")
         
-        logger.debug("Created CommandControlAgent with session-managed conversation")
+        # Create CommandControlAgent with composition (no inheritance!)
+        agent = CommandControlAgent(
+            artifact_manager=artifact_manager,
+            reasoning_loop=reasoning_loop,
+        )
+        
+        logger.debug("CommandControlAgent created with AdaptiveReasoningLoop composition")
         return agent
 
     # Create SessionManager with custom agent factory
@@ -98,11 +141,14 @@ async def main(
 
     # Launch Textual TUI with session's agent_loop
     # The agent_loop is CommandControlAgent with session-managed conversation
+    # CommandControlAgent uses AdaptiveReasoningLoop via composition
     # Session saves on exit (not after every query - too frequent)
     app = NexusApp(
         agent_loop=session.agent_loop,
         artifact_manager=artifact_manager,
     )
+    
+    logger.info("NexusApp initialized with CommandControlAgent (using AdaptiveReasoningLoop)")
     
     try:
         await app.run_async()

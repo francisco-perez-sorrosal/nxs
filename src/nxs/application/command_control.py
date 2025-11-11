@@ -1,8 +1,9 @@
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Callable
 from mcp.types import Prompt, PromptMessage
 from anthropic.types import MessageParam
 
-from nxs.application.agentic_loop import AgentLoop
+from nxs.application.reasoning_loop import AdaptiveReasoningLoop
+from nxs.application.conversation import Conversation
 from nxs.application.claude import Claude
 from nxs.application.artifact_manager import ArtifactManager
 from nxs.application.parsers import CompositeArgumentParser
@@ -11,18 +12,51 @@ from nxs.logger import get_logger
 logger = get_logger("main")
 
 
-class CommandControlAgent(AgentLoop):
+class CommandControlAgent:
+    """Command and control agent using AdaptiveReasoningLoop via composition.
+
+    This agent:
+    - Processes commands (starting with /) to execute MCP prompts
+    - Extracts resources (starting with @) to provide context
+    - Delegates query execution to AdaptiveReasoningLoop for adaptive reasoning
+    - Uses composition over inheritance for cleaner architecture
+
+    Architecture:
+    - CommandControlAgent: High-level command/resource processing
+    - AdaptiveReasoningLoop: Adaptive reasoning with quality guarantees
+    - ArtifactManager: MCP server and resource management
+    """
+
     def __init__(
         self,
         artifact_manager: ArtifactManager,
-        claude_service: Claude,
-        callbacks=None,
+        reasoning_loop: AdaptiveReasoningLoop,
+        callbacks: Optional[dict[str, Callable]] = None,
     ):
-        # Get clients from ArtifactManager for the base AgentLoop
-        clients = artifact_manager.clients
-        super().__init__(clients=clients, llm=claude_service, callbacks=callbacks)
+        """Initialize CommandControlAgent with composition.
+
+        Args:
+            artifact_manager: Manages MCP servers, resources, prompts, and tools
+            reasoning_loop: AdaptiveReasoningLoop for query execution
+            callbacks: Optional callbacks for command/resource processing events
+        """
         self.artifact_manager = artifact_manager
+        self.reasoning_loop = reasoning_loop
+        self.callbacks = callbacks or {}
         self.argument_parser = CompositeArgumentParser()
+
+        # Access tool clients from artifact manager for resource extraction
+        self.tool_clients = artifact_manager.clients
+
+    @property
+    def conversation(self) -> "Conversation":
+        """Get the conversation from the reasoning loop."""
+        return self.reasoning_loop.conversation
+
+    @conversation.setter
+    def conversation(self, value: "Conversation") -> None:
+        """Set the conversation in the reasoning loop."""
+        self.reasoning_loop.conversation = value
 
     async def _extract_resources(self, query: str) -> str:
         mentions = [word[1:] for word in query.split() if word.startswith("@")]
@@ -148,7 +182,9 @@ class CommandControlAgent(AgentLoop):
                     logger.info(f"Successfully processed command '{command_name}'")
                     logger.info(f"Returned prompt messages: {len(prompt_messages)} message(s)")
                     logger.debug(f"First message structure: {prompt_messages[0] if prompt_messages else 'None'}")
-                    self.messages += prompt_messages
+                    # Add prompt messages to the reasoning loop's conversation
+                    for msg in prompt_messages:
+                        self.reasoning_loop.conversation.add_message(msg["role"], msg["content"])
                     return True
                 else:
                     logger.warning(f"No messages returned from prompt '{command_name}'")
@@ -167,43 +203,72 @@ class CommandControlAgent(AgentLoop):
             logger.error(traceback.format_exc())
             return False
 
-    async def _process_query(self, query: str):
+    async def run(
+        self,
+        query: str,
+        use_streaming: bool = True,
+        callbacks: Optional[dict[str, Callable]] = None,
+    ) -> str:
+        """Process a query with command/resource extraction, then delegate to AdaptiveReasoningLoop.
+
+        Args:
+            query: User query (may contain /commands or @resources)
+            use_streaming: Whether to stream the response
+            callbacks: Optional callbacks (merged with instance callbacks)
+
+        Returns:
+            The final response from the reasoning loop
+        """
         logger.info(f"CommandControlAgent processing query: '{query[:50]}{'...' if len(query) > 50 else ''}'")
+
+        # Merge callbacks
+        merged_callbacks = {**self.callbacks, **(callbacks or {})}
 
         # Check if this is a command
         is_command = await self._process_command(query)
         if is_command:
-            logger.info("Query was processed as a command")
-            return
+            logger.info("Query was processed as a command, delegating to reasoning loop")
+            # Command has been added to conversation, now execute with reasoning loop
+            return await self.reasoning_loop.run(
+                query="",  # Empty query since command already added to conversation
+                use_streaming=use_streaming,
+                callbacks=merged_callbacks,
+            )
 
         logger.debug("Extracting resources from query")
         added_resources = await self._extract_resources(query)
 
         if added_resources:
             logger.info(f"Found {len(added_resources)} characters of resource content")
+            # Build enriched query with resources
+            enriched_query = f"""
+The user has a question:
+<query>
+{query}
+</query>
+
+The following context may be useful in answering their question:
+<context>
+{added_resources}
+</context>
+
+Note the user's query might contain references to documents like "@report.docx". The "@" is only
+included as a way of mentioning the doc. The actual name of the document would be "report.docx".
+If the document content is included in this prompt, you don't need to use an additional tool to read the document.
+Answer the user's question directly and concisely. Start with the exact information they need.
+Don't refer to or mention the provided context in any way - just use it to inform your answer.
+"""
         else:
             logger.debug("No resources found in query")
+            enriched_query = query
 
-        prompt = f"""
-        The user has a question:
-        <query>
-        {query}
-        </query>
-
-        The following context may be useful in answering their question:
-        <context>
-        {added_resources}
-        </context>
-
-        Note the user's query might contain references to documents like "@report.docx". The "@" is only
-        included as a way of mentioning the doc. The actual name of the document would be "report.docx".
-        If the document content is included in this prompt, you don't need to use an additional tool to read the document.
-        Answer the user's question directly and concisely. Start with the exact information they need.
-        Don't refer to or mention the provided context in any way - just use it to inform your answer.
-        """
-
-        logger.debug("Adding user message to conversation")
-        self.messages.append({"role": "user", "content": prompt})
+        logger.debug("Delegating to AdaptiveReasoningLoop")
+        # Delegate to reasoning loop for adaptive execution
+        return await self.reasoning_loop.run(
+            query=enriched_query,
+            use_streaming=use_streaming,
+            callbacks=merged_callbacks,
+        )
 
 
 def convert_prompt_message_to_message_param(
