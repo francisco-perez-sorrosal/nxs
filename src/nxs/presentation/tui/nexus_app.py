@@ -3,7 +3,7 @@ NexusApp - Main Textual application for the Nexus TUI.
 """
 
 import asyncio
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer
 from textual.containers import Container, Vertical, Horizontal
@@ -108,6 +108,7 @@ class NexusApp(App):
         self.session = session
         self._summary_tasks: set[asyncio.Task] = set()
         self._last_displayed_summary: tuple[str, int] | None = None
+        self._session_info_displayed = False
         self.session_manager = session_manager
 
         summarization_service = (
@@ -203,36 +204,41 @@ class NexusApp(App):
                 title="Getting Started",
                 style="green",
             )
+            self._session_info_displayed = True
         else:
             logger.info("Loading session with %s existing messages", conversation_msg_count)
 
             metadata = self.session.metadata if self.session else None
+            session_header = f"[bold cyan]Session Loaded:[/] {self._session_name}"
             if metadata and metadata.conversation_summary:
                 summarised_up_to = min(metadata.summary_last_message_index or 0, conversation_msg_count)
                 if metadata.summary_last_message_index and metadata.summary_last_message_index > conversation_msg_count:
                     metadata.summary_last_message_index = conversation_msg_count
+                footer_notes: list[str] = []
+                if summarised_up_to < conversation_msg_count:
+                    footer_notes.append("[dim]⏳ Updating summary with the latest messages...[/]")
                 self._display_summary(
                     metadata.conversation_summary,
                     summarized_messages=summarised_up_to,
                     total_messages=conversation_msg_count,
                     updated=False,
+                    force_display=True,
+                    session_header=session_header,
+                    extra_footer_lines=footer_notes,
                 )
 
                 if summarised_up_to < conversation_msg_count:
-                    chat.add_panel(
-                        "[dim]⏳ Updating summary with the latest messages...[/]",
-                        title="",
-                        style="dim",
-                    )
                     self._start_summary_update()
             else:
                 basic_summary = self._generate_basic_summary()
-                chat.add_panel(
-                    f"[bold cyan]Session Restored: {self._session_name}[/]\n\n"
-                    f"{basic_summary}\n\n"
-                    "[dim]⏳ Generating conversation summary...[/]",
-                    title="📜 Conversation History",
-                    style="cyan",
+                self._display_summary(
+                    basic_summary,
+                    summarized_messages=0,
+                    total_messages=conversation_msg_count,
+                    updated=False,
+                    force_display=True,
+                    session_header=session_header,
+                    status_override="[dim]⏳ Generating conversation summary...[/]",
                 )
                 self._start_summary_update(force=True)
 
@@ -523,6 +529,7 @@ class NexusApp(App):
                 summarized_messages=result.messages_summarized,
                 total_messages=result.total_messages,
                 updated=bool(self._last_displayed_summary),
+                force_display=force,
             )
         elif result.skipped:
             logger.debug(
@@ -543,30 +550,40 @@ class NexusApp(App):
         summarized_messages: int,
         total_messages: int,
         updated: bool = False,
+        force_display: bool = False,
+        session_header: str | None = None,
+        status_override: str | None = None,
+        extra_footer_lines: Sequence[str] | None = None,
     ) -> None:
         """Render the summary in the chat panel."""
         if not summary_text:
             return
 
         key = (summary_text, summarized_messages)
-        if self._last_displayed_summary == key:
+        if self._last_displayed_summary == key and not force_display:
+            return
+
+        if self._session_info_displayed and not force_display:
+            self._last_displayed_summary = key
             return
 
         chat = self._get_chat_panel()
-        status_line = (
+        status_line = status_override or (
             "[yellow]Summary pending update for recent messages[/]"
             if total_messages > summarized_messages
             else "[dim]Summary includes all messages so far[/]"
         )
 
-        header = Text.from_markup(
-            f"[bold cyan]Session: {self._session_name}[/]"
-        )
+        header_markup = session_header or f"[bold cyan]Session: {self._session_name}[/]"
+        header = Text.from_markup(header_markup)
         stats = Text.from_markup(
             f"[dim]Messages summarised: {summarized_messages} of {total_messages}[/]"
         )
         summary_renderable = Markdown(summary_text, justify="left")
         status_text = Text.from_markup(status_line)
+        additional_footer = [
+            Text.from_markup(line) for line in (extra_footer_lines or [])
+        ]
         prompt = Text.from_markup("[dim]Type your next message to continue...[/]")
 
         panel_content = Group(
@@ -576,6 +593,7 @@ class NexusApp(App):
             summary_renderable,
             Text(),
             status_text,
+            *additional_footer,
             prompt,
         )
 
@@ -589,6 +607,7 @@ class NexusApp(App):
         chat.write(panel)
         chat.write("\n")
         self._last_displayed_summary = key
+        self._session_info_displayed = True
 
     def _show_summary_error(self, message: str) -> None:
         """Display summary error/info message in the chat panel."""
