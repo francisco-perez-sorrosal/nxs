@@ -1,9 +1,10 @@
 """Result synthesis and answer generation."""
 
 import re
-from typing import Optional
+from typing import Callable, Optional
 
 from nxs.application.claude import Claude
+from nxs.application.cost_calculator import CostCalculator
 from nxs.application.reasoning.config import ReasoningConfig
 from nxs.application.reasoning.utils import format_prompt, load_prompt
 from nxs.logger import get_logger
@@ -21,15 +22,23 @@ class Synthesizer:
     - Generate final comprehensive answer
     """
 
-    def __init__(self, llm: Claude, config: ReasoningConfig):
+    def __init__(
+        self,
+        llm: Claude,
+        config: ReasoningConfig,
+        on_usage: Optional[Callable[[dict, float], None]] = None,
+    ):
         """Initialize synthesizer.
 
         Args:
             llm: Claude instance for synthesis
             config: Reasoning configuration
+            on_usage: Optional callback for tracking API usage (usage dict, cost)
         """
         self.llm = llm
         self.config = config
+        self.on_usage = on_usage
+        self.cost_calculator = CostCalculator()
         self.filter_prompt = load_prompt("reasoning/filter.txt")
         self.synthesis_prompt = load_prompt("reasoning/synthesis.txt")
 
@@ -70,6 +79,28 @@ class Synthesizer:
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1000,
             )
+            
+            # Track cost for reasoning API call
+            if hasattr(response, "usage") and response.usage:
+                input_tokens = response.usage.input_tokens
+                output_tokens = response.usage.output_tokens
+                cost = self.cost_calculator.calculate_cost(
+                    self.llm.model, input_tokens, output_tokens
+                )
+                if self.on_usage:
+                    usage = {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                    }
+                    try:
+                        self.on_usage(usage, cost)
+                    except Exception as e:
+                        logger.warning(f"Error in reasoning cost callback: {e}")
+                logger.debug(
+                    f"Reasoning (synthesizer filter) cost: {input_tokens} input, "
+                    f"{output_tokens} output tokens, ${cost:.6f}"
+                )
+            
             # Extract text from response
             response_text = getattr(response.content[0], "text", str(response.content[0]))
 
@@ -127,6 +158,28 @@ class Synthesizer:
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=2000,
             )
+            
+            # Track cost for reasoning API call
+            if hasattr(response, "usage") and response.usage:
+                input_tokens = response.usage.input_tokens
+                output_tokens = response.usage.output_tokens
+                cost = self.cost_calculator.calculate_cost(
+                    self.llm.model, input_tokens, output_tokens
+                )
+                if self.on_usage:
+                    usage = {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                    }
+                    try:
+                        self.on_usage(usage, cost)
+                    except Exception as e:
+                        logger.warning(f"Error in reasoning cost callback: {e}")
+                logger.debug(
+                    f"Reasoning (synthesizer) cost: {input_tokens} input, "
+                    f"{output_tokens} output tokens, ${cost:.6f}"
+                )
+            
             # Extract text from response
             synthesized = getattr(response.content[0], "text", str(response.content[0]))
 

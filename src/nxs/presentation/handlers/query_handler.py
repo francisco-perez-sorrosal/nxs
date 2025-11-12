@@ -14,6 +14,7 @@ from nxs.logger import get_logger
 
 if TYPE_CHECKING:
     from nxs.application.agentic_loop import AgentLoop
+    from nxs.application.session import Session
     from nxs.presentation.widgets.chat_panel import ChatPanel
     from nxs.presentation.status_queue import StatusQueue
 
@@ -37,6 +38,7 @@ class QueryHandler:
         focus_input: Callable[[], None],
         reasoning_callbacks: Optional[dict[str, Callable]] = None,
         on_conversation_updated: Optional[Callable[[], Awaitable[None]]] = None,
+        session_getter: Optional[Callable[[], Optional["Session"]]] = None,
     ):
         """
         Initialize the QueryHandler.
@@ -48,6 +50,8 @@ class QueryHandler:
             mcp_initialized_getter: Function to check if MCP is initialized
             focus_input: Function to focus the input field
             reasoning_callbacks: Optional callbacks for reasoning trace events
+            on_conversation_updated: Optional callback when conversation is updated
+            session_getter: Optional function to get the current Session instance
         """
         self.agent_loop = agent_loop
         self.chat_panel_getter = chat_panel_getter
@@ -56,6 +60,7 @@ class QueryHandler:
         self.focus_input = focus_input
         self.reasoning_callbacks = reasoning_callbacks or {}
         self.on_conversation_updated = on_conversation_updated
+        self.session_getter = session_getter
 
     async def process_query(self, query: str, query_id: int) -> None:
         """
@@ -96,6 +101,7 @@ class QueryHandler:
                 "on_tool_call": self._on_tool_call,
                 "on_tool_result": self._on_tool_result,
                 "on_start": self._on_start,
+                "on_usage": self._on_usage,
                 **self.reasoning_callbacks,  # Add reasoning trace callbacks
             }
 
@@ -167,3 +173,35 @@ class QueryHandler:
         """
         logger.info(f"Tool result: {tool_name} - success={success}, result length={len(str(result))}")
         await self.status_queue.add_tool_result(tool_name, result, success)
+
+    async def _on_usage(self, usage: dict, cost: float) -> None:
+        """
+        Handle token usage and cost updates.
+
+        Args:
+            usage: Dictionary with 'input_tokens' and 'output_tokens'
+            cost: Cost in USD for this API call
+        """
+        logger.debug(
+            f"Token usage: {usage.get('input_tokens', 0)} input, "
+            f"{usage.get('output_tokens', 0)} output, ${cost:.6f} cost"
+        )
+
+        # Update session conversation cost tracker if available
+        # Note: This is for conversation costs from AgentLoop, NOT reasoning costs
+        if self.session_getter:
+            session = self.session_getter()
+            if session and hasattr(session, "conversation_cost_tracker"):
+                session.conversation_cost_tracker.add_usage(
+                    usage.get("input_tokens", 0),
+                    usage.get("output_tokens", 0),
+                    cost,
+                )
+
+                # Update chat panel display with all cost summaries
+                chat = self.chat_panel_getter()
+                chat.update_cost_display(
+                    conversation_summary=session.get_conversation_cost_summary(),
+                    reasoning_summary=session.get_reasoning_cost_summary(),
+                    summarization_summary=session.get_summarization_cost_summary(),
+                )

@@ -375,6 +375,21 @@ class SessionManager:
             metadata = session.metadata
             start_index = 0 if force else max(metadata.summary_last_message_index or 0, 0)
             existing_summary = metadata.conversation_summary or ""
+            
+            # Clean up corrupted summaries (duplicate concatenations) on load
+            if existing_summary and self._summarizer._detect_duplicate_summary(existing_summary):
+                logger.warning(
+                    f"Detected duplicate concatenated summary for session {session.session_id}. "
+                    f"Cleaning up corrupted summary."
+                )
+                cleaned_summary = self._summarizer._clean_duplicate_summary(existing_summary)
+                if cleaned_summary != existing_summary:
+                    session.update_conversation_summary(cleaned_summary, metadata.summary_last_message_index)
+                    existing_summary = cleaned_summary
+                    logger.info(
+                        f"Cleaned summary for session {session.session_id}: "
+                        f"reduced from {len(metadata.conversation_summary)} to {len(cleaned_summary)} chars"
+                    )
 
             result = await self._summarizer.summarize(
                 messages,
@@ -383,8 +398,48 @@ class SessionManager:
                 force=force,
             )
 
-            if result.summary:
-                session.update_conversation_summary(result.summary, result.messages_summarized)
+            # Only update summary if:
+            # 1. We have a new summary AND it's different from the existing one, OR
+            # 2. We've processed more messages than before
+            if result.summary and not result.skipped:
+                # Normalize both summaries for comparison (strip whitespace)
+                normalized_existing = existing_summary.strip()
+                normalized_new = result.summary.strip()
+                
+                # Only update if the summary actually changed or we processed new messages
+                if (
+                    normalized_new != normalized_existing
+                    or result.messages_summarized > metadata.summary_last_message_index
+                ):
+                    # Additional safeguard: check if the new summary is a duplicate concatenation
+                    # This can happen if the LLM returns a summary that includes the existing summary
+                    if normalized_existing and normalized_new.startswith(normalized_existing):
+                        # The new summary starts with the existing one - likely a concatenation issue
+                        # Extract only the new part (everything after the existing summary)
+                        # But be careful: the LLM might have reformatted, so we need to be smarter
+                        # For now, if the new summary is significantly longer and starts with existing,
+                        # it's likely a concatenation - reject it and log a warning
+                        if len(normalized_new) > len(normalized_existing) * 1.5:
+                            logger.warning(
+                                f"Detected potential summary concatenation for session {session.session_id}. "
+                                f"Existing length: {len(normalized_existing)}, New length: {len(normalized_new)}. "
+                                f"Skipping update to prevent duplication."
+                            )
+                            # Don't update - keep existing summary
+                            return result
+                    
+                    session.update_conversation_summary(result.summary, result.messages_summarized)
+                    logger.debug(
+                        f"Updated summary for session {session.session_id}: "
+                        f"messages_summarized={result.messages_summarized}, "
+                        f"summary_length={len(result.summary)}"
+                    )
+                else:
+                    logger.debug(
+                        f"Skipped summary update for session {session.session_id}: "
+                        f"no new content (messages_summarized={result.messages_summarized}, "
+                        f"last_index={metadata.summary_last_message_index})"
+                    )
             elif (
                 result.messages_summarized > metadata.summary_last_message_index
             ):

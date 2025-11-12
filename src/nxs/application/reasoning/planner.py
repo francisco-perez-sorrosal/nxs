@@ -1,9 +1,10 @@
 """Strategic query planning and task decomposition."""
 
 import re
-from typing import Optional
+from typing import Callable, Optional
 
 from nxs.application.claude import Claude
+from nxs.application.cost_calculator import CostCalculator
 from nxs.application.reasoning.config import ReasoningConfig
 from nxs.application.reasoning.types import ResearchPlan, SubTask
 from nxs.application.reasoning.utils import format_prompt, load_prompt
@@ -22,15 +23,23 @@ class Planner:
     - Prioritize execution order
     """
 
-    def __init__(self, llm: Claude, config: ReasoningConfig):
+    def __init__(
+        self,
+        llm: Claude,
+        config: ReasoningConfig,
+        on_usage: Optional[Callable[[dict, float], None]] = None,
+    ):
         """Initialize planner.
 
         Args:
             llm: Claude instance for planning
             config: Reasoning configuration
+            on_usage: Optional callback for tracking API usage (usage dict, cost)
         """
         self.llm = llm
         self.config = config
+        self.on_usage = on_usage
+        self.cost_calculator = CostCalculator()
         self.prompt_template = load_prompt("reasoning/planning.txt")
 
     async def generate_plan(
@@ -74,6 +83,28 @@ class Planner:
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1500,
             )
+            
+            # Track cost for reasoning API call
+            if hasattr(response, "usage") and response.usage:
+                input_tokens = response.usage.input_tokens
+                output_tokens = response.usage.output_tokens
+                cost = self.cost_calculator.calculate_cost(
+                    self.llm.model, input_tokens, output_tokens
+                )
+                if self.on_usage:
+                    usage = {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                    }
+                    try:
+                        self.on_usage(usage, cost)
+                    except Exception as e:
+                        logger.warning(f"Error in reasoning cost callback: {e}")
+                logger.debug(
+                    f"Reasoning (planner) cost: {input_tokens} input, "
+                    f"{output_tokens} output tokens, ${cost:.6f}"
+                )
+            
             # Extract text from response
             response_text = getattr(response.content[0], "text", str(response.content[0]))
 

@@ -115,6 +115,9 @@ class ServiceContainer:
         self._on_commands_loaded = on_commands_loaded
         self._focus_input = focus_input
         self._mcp_initialized_getter = mcp_initialized_getter
+        # Optional session getter for cost tracking
+        # Create a lambda that returns the session if it exists on the app
+        self._session_getter = lambda: getattr(app, "session", None) if hasattr(app, "session") else None
         
         # Caches
         self._prompt_info_cache = prompt_info_cache or MemoryCache[str, str | None]()
@@ -202,6 +205,7 @@ class ServiceContainer:
                 focus_input=self._focus_input,
                 reasoning_callbacks=reasoning_callbacks,
                 on_conversation_updated=conversation_updated_callback,
+                session_getter=self._session_getter,
             )
         return self._query_handler
 

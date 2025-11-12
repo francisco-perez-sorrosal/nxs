@@ -21,6 +21,7 @@ from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
 from nxs.application.agentic_loop import AgentLoop
 from nxs.application.conversation import Conversation
+from nxs.application.cost_tracker import CostTracker
 from nxs.logger import get_logger
 
 logger = get_logger(__name__)
@@ -139,6 +140,11 @@ class Session:
         metadata: SessionMetadata,
         conversation: Conversation,
         agent_loop: AgentProtocol,
+        conversation_cost_tracker: Optional[CostTracker] = None,
+        reasoning_cost_tracker: Optional[CostTracker] = None,
+        summarization_cost_tracker: Optional[CostTracker] = None,
+        # Legacy support: if cost_tracker is provided, use it for conversation
+        cost_tracker: Optional[CostTracker] = None,
     ):
         """Initialize a session.
 
@@ -146,10 +152,23 @@ class Session:
             metadata: Session metadata (ID, title, timestamps, etc.).
             conversation: Conversation instance with message history.
             agent_loop: Agent instance for query execution (AgentLoop or CommandControlAgent).
+            conversation_cost_tracker: Optional cost tracker for conversation costs (created if None).
+            reasoning_cost_tracker: Optional cost tracker for reasoning costs (created if None).
+            summarization_cost_tracker: Optional cost tracker for summarization costs (created if None).
+            cost_tracker: Legacy parameter - if provided, used for conversation_cost_tracker.
         """
         self.metadata = metadata
         self.conversation = conversation
         self.agent_loop = agent_loop
+        
+        # Support legacy cost_tracker parameter for backward compatibility
+        if cost_tracker is not None:
+            self.conversation_cost_tracker = cost_tracker
+        else:
+            self.conversation_cost_tracker = conversation_cost_tracker or CostTracker()
+        
+        self.reasoning_cost_tracker = reasoning_cost_tracker or CostTracker()
+        self.summarization_cost_tracker = summarization_cost_tracker or CostTracker()
 
         logger.debug(
             f"Session initialized: {metadata.session_id}, "
@@ -204,6 +223,9 @@ class Session:
             >>> assert session.get_message_count() == 0
         """
         self.conversation.clear_history()
+        self.conversation_cost_tracker.reset()
+        self.reasoning_cost_tracker.reset()
+        self.summarization_cost_tracker.reset()
         self.metadata.last_active_at = datetime.now()
         logger.info(f"Session {self.metadata.session_id} history cleared")
 
@@ -239,6 +261,76 @@ class Session:
         """
         return self.conversation.get_token_estimate()
 
+    def get_cost_summary(self) -> dict[str, Any]:
+        """Get formatted cost summary for the session (total of all cost types).
+
+        Returns:
+            Dictionary with total cost summary (conversation + reasoning + summarization):
+            - total_input_tokens: Total input tokens used
+            - total_output_tokens: Total output tokens used
+            - total_cost: Total cost in USD
+            - round_count: Total conversation rounds
+        """
+        conv_summary = self.conversation_cost_tracker.get_total()
+        reason_summary = self.reasoning_cost_tracker.get_total()
+        summ_summary = self.summarization_cost_tracker.get_total()
+        
+        return {
+            "total_input_tokens": conv_summary.total_input_tokens + reason_summary.total_input_tokens + summ_summary.total_input_tokens,
+            "total_output_tokens": conv_summary.total_output_tokens + reason_summary.total_output_tokens + summ_summary.total_output_tokens,
+            "total_cost": conv_summary.total_cost + reason_summary.total_cost + summ_summary.total_cost,
+            "round_count": conv_summary.round_count,
+        }
+    
+    def get_conversation_cost_summary(self) -> dict[str, Any]:
+        """Get conversation cost summary (excludes reasoning and summarization).
+
+        Returns:
+            Dictionary with conversation cost summary
+        """
+        summary = self.conversation_cost_tracker.get_total()
+        return {
+            "total_input_tokens": summary.total_input_tokens,
+            "total_output_tokens": summary.total_output_tokens,
+            "total_cost": summary.total_cost,
+            "round_count": summary.round_count,
+        }
+    
+    def get_reasoning_cost_summary(self) -> dict[str, Any]:
+        """Get reasoning cost summary (excludes conversation and summarization).
+
+        Returns:
+            Dictionary with reasoning cost summary
+        """
+        summary = self.reasoning_cost_tracker.get_total()
+        return {
+            "total_input_tokens": summary.total_input_tokens,
+            "total_output_tokens": summary.total_output_tokens,
+            "total_cost": summary.total_cost,
+            "round_count": summary.round_count,
+        }
+    
+    def get_summarization_cost_summary(self) -> dict[str, Any]:
+        """Get summarization cost summary (excludes conversation and reasoning).
+
+        Returns:
+            Dictionary with summarization cost summary
+        """
+        summary = self.summarization_cost_tracker.get_total()
+        return {
+            "total_input_tokens": summary.total_input_tokens,
+            "total_output_tokens": summary.total_output_tokens,
+            "total_cost": summary.total_cost,
+            "round_count": summary.round_count,
+        }
+
+    def reset_costs(self) -> None:
+        """Reset all cost tracking for the session."""
+        self.conversation_cost_tracker.reset()
+        self.reasoning_cost_tracker.reset()
+        self.summarization_cost_tracker.reset()
+        logger.info(f"Session {self.metadata.session_id} costs reset")
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize session to dictionary for persistence.
 
@@ -246,6 +338,10 @@ class Session:
             Dictionary containing:
             - metadata: Session metadata
             - conversation: Conversation state
+            - conversation_cost_tracker: Conversation cost tracking data
+            - reasoning_cost_tracker: Reasoning cost tracking data
+            - summarization_cost_tracker: Summarization cost tracking data
+            - cost_tracker: Legacy field (conversation costs) for backward compatibility
             - Note: AgentLoop is NOT serialized (reconstructed on load)
 
         Example:
@@ -256,6 +352,11 @@ class Session:
         return {
             "metadata": self.metadata.to_dict(),
             "conversation": self.conversation.to_dict(),
+            "conversation_cost_tracker": self.conversation_cost_tracker.to_dict(),
+            "reasoning_cost_tracker": self.reasoning_cost_tracker.to_dict(),
+            "summarization_cost_tracker": self.summarization_cost_tracker.to_dict(),
+            # Legacy support: include cost_tracker for backward compatibility
+            "cost_tracker": self.conversation_cost_tracker.to_dict(),
             # Note: AgentLoop is not serialized - it's reconstructed on load
             # with fresh LLM and tool registry instances
         }
@@ -285,6 +386,43 @@ class Session:
         """
         metadata = SessionMetadata.from_dict(data["metadata"])
         conversation = Conversation.from_dict(data["conversation"])
+        
+        # Clean up corrupted summaries (duplicate concatenations) on load
+        # This ensures summaries are always clean when loaded from disk
+        if metadata.conversation_summary:
+            # Import here to avoid circular dependency
+            from nxs.application.summarization.service import SummarizationService
+            
+            if SummarizationService._detect_duplicate_summary(metadata.conversation_summary):
+                logger.warning(
+                    f"Detected duplicate concatenated summary for session {metadata.session_id} "
+                    f"during load. Cleaning up corrupted summary."
+                )
+                cleaned_summary = SummarizationService._clean_duplicate_summary(metadata.conversation_summary)
+                if cleaned_summary != metadata.conversation_summary:
+                    metadata.conversation_summary = cleaned_summary
+                    logger.info(
+                        f"Cleaned summary for session {metadata.session_id} on load: "
+                        f"reduced from {len(data['metadata'].get('conversation_summary', ''))} "
+                        f"to {len(cleaned_summary)} chars"
+                    )
+
+        # Restore cost trackers (support both new format and legacy)
+        conversation_cost_tracker = None
+        reasoning_cost_tracker = None
+        summarization_cost_tracker = None
+        
+        if "conversation_cost_tracker" in data:
+            conversation_cost_tracker = CostTracker.from_dict(data["conversation_cost_tracker"])
+        elif "cost_tracker" in data:
+            # Legacy support: use cost_tracker as conversation_cost_tracker
+            conversation_cost_tracker = CostTracker.from_dict(data["cost_tracker"])
+        
+        if "reasoning_cost_tracker" in data:
+            reasoning_cost_tracker = CostTracker.from_dict(data["reasoning_cost_tracker"])
+        
+        if "summarization_cost_tracker" in data:
+            summarization_cost_tracker = CostTracker.from_dict(data["summarization_cost_tracker"])
 
         # Update agent_loop's conversation to use restored one
         agent_loop.conversation = conversation
@@ -293,11 +431,16 @@ class Session:
             metadata=metadata,
             conversation=conversation,
             agent_loop=agent_loop,
+            conversation_cost_tracker=conversation_cost_tracker,
+            reasoning_cost_tracker=reasoning_cost_tracker,
+            summarization_cost_tracker=summarization_cost_tracker,
         )
 
+        total_cost = session.get_cost_summary()["total_cost"]
         logger.info(
             f"Session restored: {metadata.session_id}, "
-            f"{conversation.get_message_count()} messages"
+            f"{conversation.get_message_count()} messages, "
+            f"${total_cost:.6f} total cost"
         )
 
         return session

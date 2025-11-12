@@ -124,6 +124,20 @@ class AdaptiveReasoningLoop(AgentLoop):
             f"AdaptiveReasoningLoop initialized: max_iterations={max_iterations}, "
             f"force_strategy={force_strategy}"
         )
+    
+    def set_reasoning_cost_callback(
+        self, on_usage: Optional[Callable[[dict, float], None]]
+    ) -> None:
+        """Set cost tracking callback for all reasoning components.
+        
+        Args:
+            on_usage: Callback function (usage dict, cost) -> None
+        """
+        self.analyzer.on_usage = on_usage
+        self.planner.on_usage = on_usage
+        self.evaluator.on_usage = on_usage
+        self.synthesizer.on_usage = on_usage
+        logger.debug("Reasoning cost callback set on all reasoning components")
 
     async def run(
         self,

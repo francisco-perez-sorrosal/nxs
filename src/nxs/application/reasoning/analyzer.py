@@ -1,9 +1,10 @@
 """Query complexity analyzer for adaptive execution strategy selection."""
 
 import re
-from typing import Optional
+from typing import Callable, Optional
 
 from nxs.application.claude import Claude
+from nxs.application.cost_calculator import CostCalculator
 from nxs.application.reasoning.config import ReasoningConfig
 from nxs.application.reasoning.types import (
     ComplexityAnalysis,
@@ -32,15 +33,23 @@ class QueryComplexityAnalyzer:
     - Recommend execution strategy
     """
 
-    def __init__(self, llm: Claude, config: ReasoningConfig):
+    def __init__(
+        self,
+        llm: Claude,
+        config: ReasoningConfig,
+        on_usage: Optional[Callable[[dict, float], None]] = None,
+    ):
         """Initialize analyzer.
 
         Args:
             llm: Claude instance for analysis
             config: Reasoning configuration
+            on_usage: Optional callback for tracking API usage (usage dict, cost)
         """
         self.llm = llm
         self.config = config
+        self.on_usage = on_usage
+        self.cost_calculator = CostCalculator()
         self.prompt_template = load_prompt("reasoning/complexity_analysis.txt")
 
     async def analyze(
@@ -78,6 +87,28 @@ class QueryComplexityAnalyzer:
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1000,
             )
+            
+            # Track cost for reasoning API call
+            if hasattr(response, "usage") and response.usage:
+                input_tokens = response.usage.input_tokens
+                output_tokens = response.usage.output_tokens
+                cost = self.cost_calculator.calculate_cost(
+                    self.llm.model, input_tokens, output_tokens
+                )
+                if self.on_usage:
+                    usage = {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                    }
+                    try:
+                        self.on_usage(usage, cost)
+                    except Exception as e:
+                        logger.warning(f"Error in reasoning cost callback: {e}")
+                logger.debug(
+                    f"Reasoning (analyzer) cost: {input_tokens} input, "
+                    f"{output_tokens} output tokens, ${cost:.6f}"
+                )
+            
             # Extract text from response - handle different content block types
             content_block = response.content[0]
             response_text = getattr(content_block, "text", str(content_block))

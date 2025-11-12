@@ -185,8 +185,23 @@ class NexusApp(App):
         # Services are created lazily on first access via properties
         await self.services.start()
 
+        # Set up summarization cost tracking callback
+        # This connects summarization costs to the session and reasoning trace panel
+        self._setup_summarization_cost_tracking()
+
         # Get chat panel
         chat = self.query_one("#chat", ChatPanel)
+
+        # Set up reasoning cost tracking callback
+        self._setup_reasoning_cost_tracking()
+
+        # Update chat panel with cost information if session exists
+        if self.session:
+            chat.update_cost_display(
+                conversation_summary=self.session.get_conversation_cost_summary(),
+                reasoning_summary=self.session.get_reasoning_cost_summary(),
+                summarization_summary=self.session.get_summarization_cost_summary(),
+            )
 
         # Check if there's existing conversation history
         existing_messages = self.agent_loop.conversation.get_messages()
@@ -419,6 +434,103 @@ class NexusApp(App):
     def _get_reasoning_trace_panel(self) -> ReasoningTracePanel:
         """Helper to get the reasoning trace panel widget."""
         return self.query_one("#reasoning-trace", ReasoningTracePanel)
+    
+    def _setup_reasoning_cost_tracking(self) -> None:
+        """Set up callback to track reasoning costs in session and chat panel.
+        
+        This callback:
+        - Updates the session's reasoning_cost_tracker (separate from conversation/summarization)
+        - Updates the chat panel header with all cost types
+        """
+        # Check if agent_loop is AdaptiveReasoningLoop
+        if not hasattr(self.agent_loop, "set_reasoning_cost_callback"):
+            logger.debug("Agent loop does not support reasoning cost tracking")
+            return
+        
+        def on_reasoning_usage(usage: dict, cost: float) -> None:
+            """Track reasoning API usage in the active session and update UI."""
+            try:
+                # Update session reasoning cost tracker (separate from conversation/summarization)
+                if self.session and hasattr(self.session, "reasoning_cost_tracker"):
+                    self.session.reasoning_cost_tracker.add_usage(
+                        usage.get("input_tokens", 0),
+                        usage.get("output_tokens", 0),
+                        cost,
+                    )
+                
+                # Update chat panel with all cost summaries
+                try:
+                    chat_panel = self._get_chat_panel()
+                    if chat_panel and self.session:
+                        chat_panel.update_cost_display(
+                            conversation_summary=self.session.get_conversation_cost_summary(),
+                            reasoning_summary=self.session.get_reasoning_cost_summary(),
+                            summarization_summary=self.session.get_summarization_cost_summary(),
+                        )
+                except Exception as e:
+                    logger.debug(f"Could not update chat panel: {e}")
+                
+                logger.debug(
+                    f"Reasoning cost tracked: {usage.get('input_tokens', 0)} input, "
+                    f"{usage.get('output_tokens', 0)} output tokens, ${cost:.6f}"
+                )
+            except Exception as e:
+                logger.warning(f"Error tracking reasoning cost: {e}")
+        
+        # Set the callback on all reasoning components
+        self.agent_loop.set_reasoning_cost_callback(on_reasoning_usage)
+        logger.debug("Reasoning cost tracking callback configured")
+    
+    def _setup_summarization_cost_tracking(self) -> None:
+        """Set up callback to track summarization costs in session and chat panel.
+        
+        This callback:
+        - Updates the session's cost tracker (for total costs)
+        - Updates the chat panel header with summarization costs separately
+        """
+        if not self._summarization_service:
+            return
+        
+        # Track summarization costs separately for the chat panel
+        summarization_totals = {
+            "total_cost": 0.0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+        }
+        
+        def on_summarization_usage(usage: dict, cost: float) -> None:
+            """Track summarization API usage in the active session and update UI."""
+            try:
+                # Update session summarization cost tracker (separate from conversation/reasoning)
+                if self.session and hasattr(self.session, "summarization_cost_tracker"):
+                    self.session.summarization_cost_tracker.add_usage(
+                        usage.get("input_tokens", 0),
+                        usage.get("output_tokens", 0),
+                        cost,
+                    )
+                
+                # Update chat panel with all cost summaries
+                try:
+                    chat_panel = self._get_chat_panel()
+                    if chat_panel and self.session:
+                        chat_panel.update_cost_display(
+                            conversation_summary=self.session.get_conversation_cost_summary(),
+                            reasoning_summary=self.session.get_reasoning_cost_summary(),
+                            summarization_summary=self.session.get_summarization_cost_summary(),
+                        )
+                except Exception as e:
+                    logger.debug(f"Could not update chat panel: {e}")
+                
+                logger.debug(
+                    f"Summarization cost tracked: {usage.get('input_tokens', 0)} input, "
+                    f"{usage.get('output_tokens', 0)} output tokens, ${cost:.6f}"
+                )
+            except Exception as e:
+                logger.warning(f"Error tracking summarization cost: {e}")
+        
+        # Set the callback on the summarization service
+        self._summarization_service.on_usage = on_summarization_usage
+        logger.debug("Summarization cost tracking callback configured")
 
     def get_reasoning_callbacks(self) -> dict[str, Callable]:
         """

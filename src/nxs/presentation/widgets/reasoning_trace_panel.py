@@ -54,6 +54,7 @@ class ReasoningTracePanel(RichLog):
     def __init__(self, **kwargs):
         """Initialize the reasoning trace panel with Rich markup enabled."""
         super().__init__(markup=True, highlight=True, auto_scroll=True, wrap=True, **kwargs)
+        self.border_title = "Reasoning Trace"
         self.write("[bold magenta]Adaptive Reasoning Trace[/]\n")
         self.add_divider()
 

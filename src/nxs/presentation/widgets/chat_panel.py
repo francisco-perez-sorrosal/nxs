@@ -56,9 +56,83 @@ class ChatPanel(RichLog):
         self._session_name = session_name
         self._update_border_title()
     
-    def _update_border_title(self) -> None:
-        """Update the border title to show session name."""
-        self.border_title = f"Chat - Session: {self._session_name}"
+    def _update_border_title(
+        self, 
+        conversation_summary: dict | None = None,
+        reasoning_summary: dict | None = None,
+        summarization_summary: dict | None = None
+    ) -> None:
+        """Update the border title to show session name and all cost types separately.
+        
+        Args:
+            conversation_summary: Optional dict with conversation cost information:
+                - total_cost: Conversation cost in USD
+                - total_input_tokens: Conversation input tokens
+                - total_output_tokens: Conversation output tokens
+            reasoning_summary: Optional dict with reasoning cost information:
+                - total_cost: Reasoning cost in USD
+                - total_input_tokens: Reasoning input tokens
+                - total_output_tokens: Reasoning output tokens
+            summarization_summary: Optional dict with summarization cost information:
+                - total_cost: Summarization cost in USD
+                - total_input_tokens: Summarization input tokens
+                - total_output_tokens: Summarization output tokens
+        """
+        title = f"Chat - Session: {self._session_name}"
+        
+        # Build cost display parts
+        cost_parts = []
+        
+        # Add conversation cost
+        if conversation_summary:
+            conv_cost = conversation_summary.get("total_cost", 0.0)
+            conv_input = conversation_summary.get("total_input_tokens", 0)
+            conv_output = conversation_summary.get("total_output_tokens", 0)
+            if conv_cost > 0 or conv_input > 0 or conv_output > 0:
+                cost_parts.append(
+                    f"Conversation: ${conv_cost:.4f} ({conv_input:,} in / {conv_output:,} out)"
+                )
+        
+        # Add reasoning cost
+        if reasoning_summary:
+            reason_cost = reasoning_summary.get("total_cost", 0.0)
+            reason_input = reasoning_summary.get("total_input_tokens", 0)
+            reason_output = reasoning_summary.get("total_output_tokens", 0)
+            if reason_cost > 0 or reason_input > 0 or reason_output > 0:
+                cost_parts.append(
+                    f"Reasoning: ${reason_cost:.4f} ({reason_input:,} in / {reason_output:,} out)"
+                )
+        
+        # Add summarization cost
+        if summarization_summary:
+            summ_cost = summarization_summary.get("total_cost", 0.0)
+            summ_input = summarization_summary.get("total_input_tokens", 0)
+            summ_output = summarization_summary.get("total_output_tokens", 0)
+            if summ_cost > 0 or summ_input > 0 or summ_output > 0:
+                cost_parts.append(
+                    f"Summarization: ${summ_cost:.4f} ({summ_input:,} in / {summ_output:,} out)"
+                )
+        
+        # Combine all parts
+        if cost_parts:
+            title = f"{title} | {' | '.join(cost_parts)}"
+        
+        self.border_title = title
+
+    def update_cost_display(
+        self,
+        conversation_summary: dict | None = None,
+        reasoning_summary: dict | None = None,
+        summarization_summary: dict | None = None,
+    ) -> None:
+        """Update the border title with all cost summaries.
+        
+        Args:
+            conversation_summary: Dictionary with conversation cost information
+            reasoning_summary: Dictionary with reasoning cost information
+            summarization_summary: Dictionary with summarization cost information
+        """
+        self._update_border_title(conversation_summary, reasoning_summary, summarization_summary)
 
     def add_user_message(self, text: str):
         """

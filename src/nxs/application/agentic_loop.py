@@ -23,6 +23,7 @@ from anthropic.types import ContentBlockDeltaEvent, Message, MessageStopEvent, T
 from nxs.application.claude import Claude
 from nxs.application.conversation import Conversation
 from nxs.application.tool_registry import ToolRegistry
+from nxs.application.cost_calculator import CostCalculator
 from nxs.logger import get_logger
 
 logger = get_logger("agent_loop")
@@ -123,6 +124,7 @@ class AgentLoop:
 
         self.conversation = conversation
         self.tool_registry = tool_registry
+        self.cost_calculator = CostCalculator()
 
         logger.debug(
             f"AgentLoop initialized: {conversation.get_message_count()} "
@@ -159,6 +161,7 @@ class AgentLoop:
             - on_stream_chunk(chunk: str): Called for each streamed text chunk
             - on_tool_call(name: str, input: dict): Called when tool requested
             - on_tool_result(name: str, result: str, success: bool): Called with tool result
+            - on_usage(usage: dict, cost: float): Called after each API response with token usage
             - on_stream_complete(): Called when streaming completes
 
         Example:
@@ -183,6 +186,9 @@ class AgentLoop:
             self.conversation.add_user_message(query)
 
         final_text_response = ""
+        # Track cumulative usage for this conversation round (may include multiple API calls)
+        round_input_tokens = 0
+        round_output_tokens = 0
 
         # Main conversation loop: continue until Claude stops requesting tools
         while True:
@@ -211,6 +217,28 @@ class AgentLoop:
             # Add assistant response to conversation
             self.conversation.add_assistant_message(response)
 
+            # Extract usage from response and notify callback
+            if hasattr(response, "usage") and response.usage:
+                input_tokens = response.usage.input_tokens
+                output_tokens = response.usage.output_tokens
+                round_input_tokens += input_tokens
+                round_output_tokens += output_tokens
+
+                # Calculate cost for this API call
+                cost = self.cost_calculator.calculate_cost(
+                    self.llm.model, input_tokens, output_tokens
+                )
+
+                # Notify callback with usage
+                if "on_usage" in callbacks:
+                    usage = {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                    }
+                    await callbacks["on_usage"](usage, cost)
+            else:
+                logger.warning("API response missing usage field - cannot track tokens/cost")
+
             # Check stop reason
             if response.stop_reason == "tool_use":
                 logger.info("Claude requested tool execution")
@@ -235,6 +263,16 @@ class AgentLoop:
 
                 if "on_stream_complete" in callbacks:
                     await callbacks["on_stream_complete"]()
+
+                # Log round totals if we had multiple API calls
+                if round_input_tokens > 0 or round_output_tokens > 0:
+                    round_cost = self.cost_calculator.calculate_cost(
+                        self.llm.model, round_input_tokens, round_output_tokens
+                    )
+                    logger.debug(
+                        f"Round totals: {round_input_tokens} input, "
+                        f"{round_output_tokens} output tokens, ${round_cost:.6f}"
+                    )
 
                 break
 

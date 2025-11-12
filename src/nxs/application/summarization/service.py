@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Callable, Optional, Sequence
 
 from anthropic.types import MessageParam
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from nxs.application.claude import Claude
+from nxs.application.cost_calculator import CostCalculator
 from nxs.application.reasoning.utils import load_prompt, format_prompt
 from nxs.logger import get_logger
 
@@ -33,7 +34,11 @@ class SummaryResult(BaseModel):
 
 
 class SummarizationService:
-    """Agentic summarization helper that can summarise message collections."""
+    """Agentic summarization helper that can summarise message collections.
+    
+    Tracks token usage and costs for all summarization API calls using CostCalculator.
+    Supports optional on_usage callback for integration with session cost tracking.
+    """
 
     def __init__(
         self,
@@ -44,13 +49,30 @@ class SummarizationService:
         min_messages: int = 4,
         initial_prompt_path: str = "summarization/initial_summary.txt",
         update_prompt_path: str = "summarization/update_summary.txt",
+        cost_calculator: Optional[CostCalculator] = None,
+        on_usage: Optional[Callable[[dict, float], None]] = None,
     ) -> None:
+        """Initialize the summarization service.
+        
+        Args:
+            llm: Claude API wrapper for making summarization requests.
+            chunk_size: Number of messages to process per chunk.
+            max_tokens: Maximum tokens for summary generation.
+            min_messages: Minimum messages required before summarization.
+            initial_prompt_path: Path to initial summarization prompt template.
+            update_prompt_path: Path to incremental summarization prompt template.
+            cost_calculator: Optional CostCalculator instance. Creates new one if not provided.
+            on_usage: Optional callback for cost tracking: on_usage(usage: dict, cost: float).
+                     Called after each API response with token usage and calculated cost.
+        """
         self.llm = llm
         self.chunk_size = max(1, chunk_size)
         self.max_tokens = max(32, max_tokens)
         self.min_messages = max(0, min_messages)
         self._initial_prompt_template = load_prompt(initial_prompt_path)
         self._update_prompt_template = load_prompt(update_prompt_path)
+        self.cost_calculator = cost_calculator or CostCalculator()
+        self.on_usage = on_usage
 
     async def summarize(
         self,
@@ -120,6 +142,9 @@ class SummarizationService:
                 chunk_text[:200],
             )
 
+            # For chunk summaries, we don't pass existing_summary because we want
+            # each chunk to be summarized independently, then we'll combine all chunks
+            # before doing the final update with the existing summary
             chunk_summary, error = await self._summarize_text(
                 chunk_text,
                 existing_summary="",
@@ -156,6 +181,20 @@ class SummarizationService:
 
         if not concatenated_summary_text and start_index < total_messages:
             concatenated_summary_text = self._format_messages(messages[start_index:]).strip()
+
+        # If there are no new messages to summarize, return the existing summary
+        # This prevents duplicate summaries from being generated during shutdown
+        if messages_processed <= start_index or not concatenated_summary_text:
+            logger.debug(
+                f"Skipping summarization: no new messages "
+                f"(start_index={start_index}, messages_processed={messages_processed}, total={total_messages})"
+            )
+            return SummaryResult(
+                summary=existing_summary.strip(),
+                total_messages=total_messages,
+                messages_summarized=total_messages if start_index >= total_messages else start_index,
+                skipped=True,
+            )
 
         final_summary_text, error = await self._summarize_text(
             concatenated_summary_text,
@@ -197,7 +236,10 @@ class SummarizationService:
         *,
         existing_summary: str,
     ) -> tuple[str, str | None]:
-        """Summarise a single string of text."""
+        """Summarise a single string of text.
+        
+        Tracks token usage and costs for the API call.
+        """
         if not text.strip():
             return existing_summary, None
 
@@ -208,13 +250,55 @@ class SummarizationService:
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=self.max_tokens,
             )
+            
+            # Extract usage and calculate cost (same pattern as AgentLoop)
+            if hasattr(response, "usage") and response.usage:
+                input_tokens = response.usage.input_tokens
+                output_tokens = response.usage.output_tokens
+                
+                # Calculate cost for this API call
+                cost = self.cost_calculator.calculate_cost(
+                    self.llm.model, input_tokens, output_tokens
+                )
+                
+                # Notify callback if provided (for session cost tracking)
+                if self.on_usage:
+                    usage = {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                    }
+                    try:
+                        self.on_usage(usage, cost)
+                    except Exception as e:
+                        logger.warning(f"Error in on_usage callback: {e}")
+                
+                logger.debug(
+                    f"Summarization API call: {input_tokens} input, "
+                    f"{output_tokens} output tokens, ${cost:.6f} cost"
+                )
+            else:
+                logger.warning("Summarization API response missing usage field - cannot track tokens/cost")
+            
             summary_text = self._extract_summary_text(response).strip()
             if not summary_text:
                 warning_message = "Summary unavailable: model returned an empty response."
                 logger.warning(warning_message)
                 return warning_message, "empty-summary"
-            combined = self._combine_summaries(existing_summary, summary_text)
-            return combined, None
+            
+            # When using the update prompt, the LLM returns a COMPLETE updated summary,
+            # not just the new part. So we should REPLACE the existing summary, not combine it.
+            # Only combine if this is an initial summary (no existing_summary).
+            if existing_summary.strip():
+                # LLM was asked to update the summary, so it returned a complete updated version
+                # Replace the existing summary instead of concatenating
+                logger.debug(
+                    f"Replacing existing summary (length={len(existing_summary)}) "
+                    f"with updated summary (length={len(summary_text)})"
+                )
+                return summary_text, None
+            else:
+                # Initial summary - no existing summary to replace
+                return summary_text, None
         except Exception as exc:  # pragma: no cover - network/SDK failure
             warning_message = "Summary unavailable: summarization service encountered an error."
             logger.warning("%s %s", warning_message, exc)
@@ -243,14 +327,60 @@ class SummarizationService:
         return format_prompt(self._initial_prompt_template, conversation=text)
 
     @staticmethod
-    def _combine_summaries(existing_summary: str, new_summary: str) -> str:
-        existing = existing_summary.strip()
-        new = new_summary.strip()
-        if not existing:
-            return new
-        if not new:
-            return existing
-        return f"{existing}\n\n{new}"
+    def _detect_duplicate_summary(summary: str) -> bool:
+        """Detect if a summary contains duplicate concatenated summaries.
+        
+        Checks for multiple "**Topics:**" markers which indicate concatenation.
+        
+        Args:
+            summary: Summary text to check
+            
+        Returns:
+            True if duplicates detected, False otherwise
+        """
+        if not summary or not summary.strip():
+            return False
+        
+        # Count occurrences of the summary marker
+        topics_markers = summary.count("**Topics:**")
+        return topics_markers > 1
+    
+    @staticmethod
+    def _clean_duplicate_summary(summary: str) -> str:
+        """Clean a summary that contains duplicate concatenated summaries.
+        
+        Takes the last (most recent) summary section, which should be the most complete.
+        
+        Args:
+            summary: Summary text that may contain duplicates
+            
+        Returns:
+            Cleaned summary with only the most recent section
+        """
+        if not summary or not summary.strip():
+            return summary
+        
+        # Split by "**Topics:**" markers (this is the start of each summary section)
+        parts = summary.split("**Topics:**")
+        
+        if len(parts) <= 1:
+            # No duplicates detected
+            return summary
+        
+        # Take the last part (most recent summary) and restore the marker
+        # The last part should be the most complete and up-to-date summary
+        last_part = parts[-1].strip()
+        if last_part:
+            cleaned = f"**Topics:**{last_part}"
+            logger.debug(
+                f"Cleaned duplicate summary: {len(parts)} parts detected, "
+                f"kept last part (length: {len(cleaned)} chars)"
+            )
+            return cleaned
+        
+        # Fallback: return original if cleaning fails
+        logger.warning("Failed to clean duplicate summary, returning original")
+        return summary
 
     def _format_messages(self, messages: Sequence[MessageParam]) -> str:
         lines: list[str] = []

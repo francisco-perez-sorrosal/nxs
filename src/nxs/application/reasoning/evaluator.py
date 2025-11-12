@@ -1,9 +1,10 @@
 """Evaluator for research completeness and response quality assessment."""
 
 import re
-from typing import Optional
+from typing import Callable, Optional
 
 from nxs.application.claude import Claude
+from nxs.application.cost_calculator import CostCalculator
 from nxs.application.reasoning.config import ReasoningConfig
 from nxs.application.reasoning.types import (
     ComplexityAnalysis,
@@ -31,15 +32,23 @@ class Evaluator:
        - Identify what's missing or inadequate
     """
 
-    def __init__(self, llm: Claude, config: ReasoningConfig):
+    def __init__(
+        self,
+        llm: Claude,
+        config: ReasoningConfig,
+        on_usage: Optional[Callable[[dict, float], None]] = None,
+    ):
         """Initialize evaluator.
 
         Args:
             llm: Claude instance for evaluation
             config: Reasoning configuration
+            on_usage: Optional callback for tracking API usage (usage dict, cost)
         """
         self.llm = llm
         self.config = config
+        self.on_usage = on_usage
+        self.cost_calculator = CostCalculator()
         self.research_evaluation_prompt = load_prompt("reasoning/evaluation.txt")
         self.quality_evaluation_prompt = load_prompt("reasoning/quality_check.txt")
 
@@ -77,6 +86,28 @@ class Evaluator:
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1000,
             )
+            
+            # Track cost for reasoning API call
+            if hasattr(response, "usage") and response.usage:
+                input_tokens = response.usage.input_tokens
+                output_tokens = response.usage.output_tokens
+                cost = self.cost_calculator.calculate_cost(
+                    self.llm.model, input_tokens, output_tokens
+                )
+                if self.on_usage:
+                    usage = {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                    }
+                    try:
+                        self.on_usage(usage, cost)
+                    except Exception as e:
+                        logger.warning(f"Error in reasoning cost callback: {e}")
+                logger.debug(
+                    f"Reasoning (evaluator) cost: {input_tokens} input, "
+                    f"{output_tokens} output tokens, ${cost:.6f}"
+                )
+            
             # Extract text from response
             response_text = getattr(response.content[0], "text", str(response.content[0]))
 
@@ -141,6 +172,28 @@ class Evaluator:
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1000,
             )
+            
+            # Track cost for reasoning API call
+            if hasattr(response_obj, "usage") and response_obj.usage:
+                input_tokens = response_obj.usage.input_tokens
+                output_tokens = response_obj.usage.output_tokens
+                cost = self.cost_calculator.calculate_cost(
+                    self.llm.model, input_tokens, output_tokens
+                )
+                if self.on_usage:
+                    usage = {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                    }
+                    try:
+                        self.on_usage(usage, cost)
+                    except Exception as e:
+                        logger.warning(f"Error in reasoning cost callback: {e}")
+                logger.debug(
+                    f"Reasoning (evaluator quality) cost: {input_tokens} input, "
+                    f"{output_tokens} output tokens, ${cost:.6f}"
+                )
+            
             # Extract text from response
             response_text = getattr(response_obj.content[0], "text", str(response_obj.content[0]))
 

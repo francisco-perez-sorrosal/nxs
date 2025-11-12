@@ -59,6 +59,9 @@ async def main(
     # Create core services
     claude_service = Claude(model=claude_model)
     artifact_manager = ArtifactManager()
+    
+    # Create SummarizationService - callback will be set after SessionManager is created
+    # We'll create a placeholder callback that will be updated with session access
     summarization_service = SummarizationService(llm=claude_service)
 
     # Create reasoning configuration (can be customized via env vars)
@@ -130,7 +133,7 @@ async def main(
         agent_factory=create_command_control_agent,
         summarizer=summarization_service,
     )
-
+    
     logger.info("SessionManager initialized with CommandControlAgent factory")
 
     # Get or restore the default session
@@ -146,6 +149,7 @@ async def main(
     # The agent_loop is CommandControlAgent with session-managed conversation
     # CommandControlAgent uses AdaptiveReasoningLoop via composition
     # Session saves on exit (not after every query - too frequent)
+    # Note: Summarization cost tracking callback is set up in NexusApp.on_mount()
     app = NexusApp(
         agent_loop=session.agent_loop,
         artifact_manager=artifact_manager,
