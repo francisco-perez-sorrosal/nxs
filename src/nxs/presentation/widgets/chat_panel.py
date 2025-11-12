@@ -22,12 +22,18 @@ class ChatPanel(RichLog):
     - Rich markup for colored/styled text
     - Proper markdown rendering for assistant messages
     - Right-aligned assistant label with indented content
+    - Session name in border title
     """
 
     BORDER_TITLE = "Chat"
 
-    def __init__(self, **kwargs):
-        """Initialize the chat panel with Rich markup enabled."""
+    def __init__(self, session_name: str = "default", **kwargs):
+        """Initialize the chat panel with Rich markup enabled.
+        
+        Args:
+            session_name: Name of the active session to display in border
+            **kwargs: Additional arguments passed to RichLog
+        """
         super().__init__(
             markup=True,  # Enable Rich console markup ([bold], [cyan], etc.)
             highlight=True,  # Auto syntax highlighting for code-like text
@@ -38,6 +44,21 @@ class ChatPanel(RichLog):
         # State for assistant message streaming
         self._assistant_buffer = ""
         self._assistant_active = False
+        self._session_name = session_name
+        self._update_border_title()
+    
+    def set_session_name(self, session_name: str) -> None:
+        """Update the session name displayed in the border.
+        
+        Args:
+            session_name: Name of the active session
+        """
+        self._session_name = session_name
+        self._update_border_title()
+    
+    def _update_border_title(self) -> None:
+        """Update the border title to show session name."""
+        self.border_title = f"Chat - Session: {self._session_name}"
 
     def add_user_message(self, text: str):
         """

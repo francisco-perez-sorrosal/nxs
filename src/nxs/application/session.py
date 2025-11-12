@@ -59,6 +59,8 @@ class SessionMetadata:
     tags: list[str] = field(default_factory=list)
     model: str = "claude-sonnet-4.5"
     description: Optional[str] = None
+    conversation_summary: Optional[str] = None
+    summary_last_message_index: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize metadata to dictionary.
@@ -74,6 +76,8 @@ class SessionMetadata:
             "tags": self.tags,
             "model": self.model,
             "description": self.description,
+            "conversation_summary": self.conversation_summary,
+            "summary_last_message_index": self.summary_last_message_index,
         }
 
     @classmethod
@@ -94,6 +98,8 @@ class SessionMetadata:
             tags=data.get("tags", []),
             model=data.get("model", "claude-sonnet-4.5"),
             description=data.get("description"),
+            conversation_summary=data.get("conversation_summary"),
+            summary_last_message_index=data.get("summary_last_message_index", 0),
         )
 
 
@@ -200,6 +206,22 @@ class Session:
         self.conversation.clear_history()
         self.metadata.last_active_at = datetime.now()
         logger.info(f"Session {self.metadata.session_id} history cleared")
+
+    def update_conversation_summary(self, summary: str, last_message_index: int) -> None:
+        """Update stored conversation summary metadata.
+
+        Args:
+            summary: Summary text describing the conversation.
+            last_message_index: Index of the last message included in the summary.
+        """
+        self.metadata.conversation_summary = summary
+        self.metadata.summary_last_message_index = last_message_index
+        self.metadata.last_active_at = datetime.now()
+        logger.debug(
+            "Updated session summary: session_id=%s messages=%s",
+            self.metadata.session_id,
+            last_message_index,
+        )
 
     def get_message_count(self) -> int:
         """Get conversation message count.

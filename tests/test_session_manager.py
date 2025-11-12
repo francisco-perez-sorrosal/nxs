@@ -10,6 +10,7 @@ from nxs.application.claude import Claude
 from nxs.application.session import Session
 from nxs.application.session_manager import SessionManager
 from nxs.application.tool_registry import ToolRegistry
+from nxs.application.summarization import SummarizationService
 
 
 class TestSessionManager:
@@ -20,7 +21,13 @@ class TestSessionManager:
         """Create a mock Claude instance."""
         llm = Mock(spec=Claude)
         llm.model = "claude-sonnet-4.5"
+        llm.create_message = AsyncMock(return_value=Mock(content=[]))
         return llm
+
+    @pytest.fixture
+    def mock_summarizer(self, mock_llm):
+        """Provide a shared summarization service using the mock LLM."""
+        return SummarizationService(llm=mock_llm)
 
     @pytest.fixture
     def mock_tool_registry(self):
@@ -37,7 +44,7 @@ class TestSessionManager:
         return storage
 
     @pytest.fixture
-    def session_manager(self, mock_llm, mock_tool_registry, temp_storage_dir):
+    def session_manager(self, mock_llm, mock_tool_registry, temp_storage_dir, mock_summarizer):
         """Create a SessionManager instance."""
         return SessionManager(
             llm=mock_llm,
@@ -45,6 +52,7 @@ class TestSessionManager:
             storage_dir=temp_storage_dir,
             system_message="You are helpful",
             enable_caching=True,
+            summarizer=mock_summarizer,
         )
 
     def test_initialization(self, session_manager, temp_storage_dir, mock_llm):
@@ -56,7 +64,7 @@ class TestSessionManager:
         assert session_manager._active_session is None
         assert temp_storage_dir.exists()
 
-    def test_initialization_creates_storage_dir(self, mock_llm, mock_tool_registry, tmp_path):
+    def test_initialization_creates_storage_dir(self, mock_llm, mock_tool_registry, tmp_path, mock_summarizer):
         """Test that initialization creates storage directory if it doesn't exist."""
         storage_dir = tmp_path / "new" / "nested" / "dir"
         assert not storage_dir.exists()
@@ -65,6 +73,7 @@ class TestSessionManager:
             llm=mock_llm,
             tool_registry=mock_tool_registry,
             storage_dir=storage_dir,
+            summarizer=mock_summarizer,
         )
 
         assert storage_dir.exists()
@@ -252,7 +261,7 @@ class TestSessionManager:
 
     @pytest.mark.asyncio
     async def test_session_persistence_across_instances(
-        self, mock_llm, mock_tool_registry, temp_storage_dir
+        self, mock_llm, mock_tool_registry, temp_storage_dir, mock_summarizer
     ):
         """Test that session persists across SessionManager instances."""
         # Create first manager and session
@@ -261,6 +270,7 @@ class TestSessionManager:
             tool_registry=mock_tool_registry,
             storage_dir=temp_storage_dir,
             system_message="Test",
+            summarizer=mock_summarizer,
         )
 
         session1 = await manager1.get_or_create_default_session()
@@ -274,6 +284,7 @@ class TestSessionManager:
             tool_registry=mock_tool_registry,
             storage_dir=temp_storage_dir,
             system_message="Test",
+            summarizer=SummarizationService(llm=mock_llm),
         )
 
         session2 = await manager2.get_or_create_default_session()
@@ -288,6 +299,7 @@ class TestSessionManager:
             llm=mock_llm,
             tool_registry=mock_tool_registry,
             storage_dir=Path("~/.nxs/test"),
+            summarizer=SummarizationService(llm=mock_llm),
         )
 
         # Path should be expanded
@@ -303,6 +315,7 @@ class TestSessionManager:
             tool_registry=mock_tool_registry,
             storage_dir=temp_storage_dir,
             callbacks=callbacks,
+            summarizer=SummarizationService(llm=mock_llm),
         )
 
         session = manager._create_new_session("test")

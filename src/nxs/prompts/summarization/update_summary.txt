@@ -1,0 +1,16 @@
+You previously summarised a conversation as follows:
+${summary}
+
+New messages have been added:
+${new_messages}
+
+Update the summary to include the new information while keeping it concise.
+Maintain the same format:
+**Topics:** ...
+**Summary:** ...
+**Status:** ...
+
+Ensure the updated summary reflects both the previous discussion and the new messages.
+Disregard assistant meta-dialogue that only asks the user to clarify or restate their request; focus on substantive content contributed by either participant.
+Do not interpret or judge topic shifts—capture the evolving set of themes, even if the conversation returns to previous subjects or introduces entirely new ones.
+

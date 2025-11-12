@@ -309,6 +309,42 @@ class Conversation:
         """
         return len(self._messages)
 
+    def get_messages(
+        self,
+        start: int | None = None,
+        end: int | None = None,
+        *,
+        copy: bool = True,
+    ) -> list[MessageParam]:
+        """Return conversation messages (optionally sliced).
+
+        Args:
+            start: Optional start index (inclusive).
+            end: Optional end index (exclusive).
+            copy: When True (default) return shallow copies to prevent mutation.
+
+        Returns:
+            List of MessageParam dictionaries representing the conversation.
+        """
+        selected = self._messages[slice(start, end)]
+
+        if not copy:
+            return list(selected)
+
+        cloned_messages: list[MessageParam] = []
+        for message in selected:
+            cloned = dict(message)
+            content = cloned.get("content")
+
+            if isinstance(content, list):
+                cloned["content"] = [
+                    block.copy() if isinstance(block, dict) else block for block in content
+                ]
+
+            cloned_messages.append(cast(MessageParam, cloned))
+
+        return cloned_messages
+
     def get_token_estimate(self) -> int:
         """Estimate token count for the conversation.
 

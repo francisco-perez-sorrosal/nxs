@@ -15,35 +15,20 @@ TUI Integration (Future):
 - Session creation/deletion UI
 """
 
+import asyncio
 import json
 from pathlib import Path
-from typing import Callable, Optional, Dict, Protocol, runtime_checkable
+from typing import Callable, Optional, Dict, cast
 
 from nxs.application.agentic_loop import AgentLoop
 from nxs.application.claude import Claude
 from nxs.application.conversation import Conversation
-from nxs.application.session import Session, SessionMetadata
+from nxs.application.session import Session, SessionMetadata, AgentProtocol
 from nxs.application.tool_registry import ToolRegistry
+from nxs.application.summarization import SummarizationService, SummaryResult
 from nxs.logger import get_logger
 
 logger = get_logger(__name__)
-
-
-@runtime_checkable
-class AgentProtocol(Protocol):
-    """Protocol for agent types that can execute queries.
-    
-    Supports both AgentLoop and CommandControlAgent (with composition).
-    """
-    
-    async def run(
-        self,
-        query: str,
-        use_streaming: bool = True,
-        callbacks: Optional[dict[str, Callable]] = None,
-    ) -> str:
-        """Execute a query and return the response."""
-        ...
 
 
 class SessionManager:
@@ -57,10 +42,13 @@ class SessionManager:
     - Per-session JSON files: {session_id}.json
 
     Example (Single Session - Default Usage):
+        >>> from nxs.application.summarization import SummarizationService
+        >>> summarizer = SummarizationService(llm=claude)
         >>> manager = SessionManager(
         ...     llm=claude,
         ...     tool_registry=tool_registry,
-        ...     storage_dir=Path("~/.nxs/sessions")
+        ...     storage_dir=Path("~/.nxs/sessions"),
+        ...     summarizer=summarizer,
         ... )
         >>>
         >>> # Get or create default session
@@ -73,7 +61,8 @@ class SessionManager:
         >>> manager.save_active_session()
 
     Example (Multi-Session Usage):
-        >>> manager = SessionManager(llm=claude, tool_registry=registry)
+        >>> summarizer = SummarizationService(llm=claude)
+        >>> manager = SessionManager(llm=claude, tool_registry=registry, summarizer=summarizer)
         >>>
         >>> # Create multiple sessions
         >>> session1 = manager.create_session("work", "Work Chat")
@@ -98,6 +87,7 @@ class SessionManager:
     def __init__(
         self,
         llm: Claude,
+        summarizer: SummarizationService,
         tool_registry: Optional[ToolRegistry] = None,
         storage_dir: Optional[Path] = None,
         system_message: Optional[str] = None,
@@ -109,6 +99,7 @@ class SessionManager:
 
         Args:
             llm: Claude API wrapper.
+            summarizer: Shared summarization service instance used to summarize sessions.
             tool_registry: ToolRegistry for tools (optional if using agent_factory).
             storage_dir: Directory for session persistence (defaults to ~/.nxs/sessions).
             system_message: Default system message for new conversations.
@@ -135,6 +126,8 @@ class SessionManager:
         self.enable_caching = enable_caching
         self.callbacks = callbacks or {}
         self._agent_factory = agent_factory
+        self._summarizer = summarizer
+        self._summary_locks: Dict[str, asyncio.Lock] = {}
 
         # Validate: need either tool_registry or agent_factory
         if tool_registry is None and agent_factory is None:
@@ -276,7 +269,7 @@ class SessionManager:
         session = Session(
             metadata=metadata,
             conversation=conversation,
-            agent_loop=agent_loop,
+            agent_loop=cast(AgentProtocol, agent_loop),
         )
 
         return session
@@ -313,7 +306,7 @@ class SessionManager:
             logger.debug("Restored session with default AgentLoop")
 
         # Restore session
-        session = Session.from_dict(data, agent_loop)
+        session = Session.from_dict(data, cast(AgentProtocol, agent_loop))
 
         return session
 
@@ -352,6 +345,66 @@ class SessionManager:
             return
 
         self._save_session(session)
+
+    @property
+    def summarizer(self) -> SummarizationService:
+        """Return the shared summarization service instance."""
+        return self._summarizer
+
+    async def update_session_summary(
+        self,
+        session: Session,
+        *,
+        force: bool = False,
+    ) -> SummaryResult | None:
+        """Generate and persist an updated summary for the given session."""
+        lock = self._summary_locks.setdefault(session.session_id, asyncio.Lock())
+
+        async with lock:
+            messages = session.conversation.get_messages()
+            total_messages = len(messages)
+
+            if total_messages == 0:
+                return SummaryResult(
+                    summary="",
+                    total_messages=0,
+                    messages_summarized=0,
+                    skipped=True,
+                )
+
+            metadata = session.metadata
+            start_index = 0 if force else max(metadata.summary_last_message_index or 0, 0)
+            existing_summary = metadata.conversation_summary or ""
+
+            result = await self._summarizer.summarize(
+                messages,
+                existing_summary=existing_summary,
+                start_index=start_index,
+                force=force,
+            )
+
+            if result.summary:
+                session.update_conversation_summary(result.summary, result.messages_summarized)
+            elif (
+                result.messages_summarized > metadata.summary_last_message_index
+            ):
+                metadata.summary_last_message_index = result.messages_summarized
+
+            if result.error:
+                logger.warning(
+                    "Summary generation reported an issue (session=%s): %s",
+                    session.session_id,
+                    result.error,
+                )
+
+            return result
+
+    async def update_active_session_summary(self, force: bool = False) -> SummaryResult | None:
+        """Update summary for the currently active session."""
+        session = self.get_active_session()
+        if session is None:
+            return None
+        return await self.update_session_summary(session, force=force)
 
     def get_active_session(self) -> Optional[Session]:
         """Get the currently active session.

@@ -16,6 +16,9 @@ from nxs.presentation.widgets.input_field import NexusInput
 from nxs.presentation.widgets.mcp_panel import MCPPanel
 from nxs.presentation.services import ServiceContainer
 from nxs.application.artifact_manager import ArtifactManager
+from nxs.application.session import Session
+from nxs.application.session_manager import SessionManager
+from nxs.application.summarization import SummarizationService
 from nxs.domain.events import EventBus
 from nxs.domain.protocols import Cache
 from nxs.logger import get_logger
@@ -69,6 +72,9 @@ class NexusApp(App):
         event_bus: EventBus | None = None,
         prompt_info_cache: Cache[str, str | None] | None = None,
         prompt_schema_cache: Cache[str, tuple] | None = None,
+        session_name: str = "default",
+        session: Session | None = None,
+        session_manager: SessionManager | None = None,
     ):
         """
         Initialize the Nexus TUI application.
@@ -83,6 +89,9 @@ class NexusApp(App):
                               If None, a MemoryCache will be created.
             prompt_schema_cache: Optional Cache instance for caching prompt schema tuples.
                                 If None, a MemoryCache will be created.
+            session_name: Name of the active session (default: "default")
+            session: Optional Session instance for metadata persistence
+            session_manager: Optional SessionManager for summary management
         """
         super().__init__()
         self.agent_loop = agent_loop
@@ -90,6 +99,18 @@ class NexusApp(App):
         self.resources: list[str] = []
         self.commands: list[str] = []
         self._mcp_initialized = False  # Track MCP initialization status
+        self._session_name = session_name
+        self.session = session
+        self._summary_tasks: set[asyncio.Task] = set()
+        self._last_displayed_summary: tuple[str, int] | None = None
+        self.session_manager = session_manager
+
+        summarization_service = (
+            session_manager.summarizer
+            if session_manager is not None
+            else SummarizationService(llm=agent_loop.llm)
+        )
+        self._summarization_service = summarization_service
 
         # Create or use provided event bus
         self.event_bus = event_bus or artifact_manager.event_bus or EventBus()
@@ -116,6 +137,7 @@ class NexusApp(App):
             # Optional caches
             prompt_info_cache=prompt_info_cache,
             prompt_schema_cache=prompt_schema_cache,
+            summarization_service=summarization_service,
         )
 
         # Subscribe to events (idempotent, can be called multiple times)
@@ -128,7 +150,7 @@ class NexusApp(App):
         with Container(id="app-container"):
             with Horizontal(id="main-horizontal"):
                 with Vertical(id="main-content"):
-                    yield ChatPanel(id="chat")
+                    yield ChatPanel(session_name=self._session_name, id="chat")
 
                     # Reasoning trace panel (collapsible with Ctrl+R)
                     yield ReasoningTracePanel(id="reasoning-trace")
@@ -157,17 +179,57 @@ class NexusApp(App):
         # Services are created lazily on first access via properties
         await self.services.start()
 
-        # Show welcome message immediately (TUI is ready)
+        # Get chat panel
         chat = self.query_one("#chat", ChatPanel)
-        chat.add_panel(
-            "[bold]Welcome to Nexus![/]\n\n"
-            "Type [cyan]@[/] to reference documents\n"
-            "Type [cyan]/[/] to execute commands\n"
-            "Press [cyan]Ctrl+Q[/] to quit\n"
-            "Press [cyan]Ctrl+L[/] to clear chat",
-            title="Getting Started",
-            style="green",
-        )
+
+        # Check if there's existing conversation history
+        existing_messages = self.agent_loop.conversation.get_messages()
+        conversation_msg_count = len(existing_messages)
+
+        if conversation_msg_count == 0:
+            # New session - show welcome message
+            chat.add_panel(
+                "[bold]Welcome to Nexus![/]\n\n"
+                "Type [cyan]@[/] to reference documents\n"
+                "Type [cyan]/[/] to execute commands\n"
+                "Press [cyan]Ctrl+Q[/] to quit\n"
+                "Press [cyan]Ctrl+L[/] to clear chat\n"
+                "Press [cyan]Ctrl+R[/] to toggle reasoning trace",
+                title="Getting Started",
+                style="green",
+            )
+        else:
+            logger.info("Loading session with %s existing messages", conversation_msg_count)
+
+            metadata = self.session.metadata if self.session else None
+            if metadata and metadata.conversation_summary:
+                summarised_up_to = min(metadata.summary_last_message_index or 0, conversation_msg_count)
+                if metadata.summary_last_message_index and metadata.summary_last_message_index > conversation_msg_count:
+                    metadata.summary_last_message_index = conversation_msg_count
+                self._display_summary(
+                    metadata.conversation_summary,
+                    summarized_messages=summarised_up_to,
+                    total_messages=conversation_msg_count,
+                    updated=False,
+                )
+
+                if summarised_up_to < conversation_msg_count:
+                    chat.add_panel(
+                        "[dim]⏳ Updating summary with the latest messages...[/]",
+                        title="",
+                        style="dim",
+                    )
+                    self._start_summary_update()
+            else:
+                basic_summary = self._generate_basic_summary()
+                chat.add_panel(
+                    f"[bold cyan]Session Restored: {self._session_name}[/]\n\n"
+                    f"{basic_summary}\n\n"
+                    "[dim]⏳ Generating conversation summary...[/]",
+                    title="📜 Conversation History",
+                    style="cyan",
+                )
+                self._start_summary_update(force=True)
 
         # Initialize MCP connections asynchronously in the background
         # This MUST run before autocomplete is used so resources/prompts are available
@@ -316,6 +378,9 @@ class NexusApp(App):
         """Handle app quit - cleanup background tasks."""
         logger.info("Quitting application, cleaning up...")
 
+        # Ensure summary metadata is synced before shutting down
+        await self.ensure_summary_synced()
+
         # Stop all services (QueryQueue, StatusQueue, etc.)
         await self.services.stop()
 
@@ -365,6 +430,7 @@ class NexusApp(App):
             "on_planning_start": lambda: reasoning_panel.on_planning_start(),
             "on_planning_complete": lambda count, mode: reasoning_panel.on_planning_complete(count, mode),
             # Quality evaluation
+            "on_response_for_judgment": lambda response, strategy: reasoning_panel.on_response_for_judgment(response, strategy),
             "on_quality_check_start": lambda: reasoning_panel.on_quality_check_start(),
             "on_quality_check_complete": lambda evaluation: reasoning_panel.on_quality_check_complete(evaluation),
             # Auto-escalation
@@ -398,3 +464,134 @@ class NexusApp(App):
         assert self.services.autocomplete_service is not None, "Services should be initialized"
         self.commands = commands
         self.services.autocomplete_service.update_commands(commands)
+
+    def _generate_basic_summary(self) -> str:
+        """Generate a quick basic summary without AI (just stats)."""
+        try:
+            messages = self.agent_loop.conversation.get_messages()
+            msg_count = len(messages)
+
+            if msg_count == 0:
+                return "No messages in conversation"
+
+            user_msgs = sum(1 for m in messages if m.get("role") == "user")
+            assistant_msgs = sum(1 for m in messages if m.get("role") == "assistant")
+            return f"[bold]Messages:[/] {msg_count} total ({user_msgs} user, {assistant_msgs} assistant)"
+        except Exception as e:
+            logger.error("Failed to generate basic summary: %s", e, exc_info=True)
+            return f"[yellow]{self.agent_loop.conversation.get_message_count()} messages in conversation[/]"
+
+    def _start_summary_update(self, force: bool = False) -> None:
+        """Schedule a background summary update task."""
+        if not self.session or not self.session_manager:
+            logger.debug("Session manager unavailable; skipping summary update.")
+            return
+
+        task = asyncio.create_task(self._run_summary_update(force=force))
+        self._summary_tasks.add(task)
+
+        def _cleanup(completed: asyncio.Task) -> None:
+            self._summary_tasks.discard(completed)
+            if completed.cancelled():
+                return
+            try:
+                exc = completed.exception()
+                if exc:
+                    logger.error("Summary update task failed: %s", exc, exc_info=True)
+            except Exception as error:  # pragma: no cover - defensive
+                logger.error("Error processing summary task completion: %s", error, exc_info=True)
+
+        task.add_done_callback(_cleanup)
+
+    async def _run_summary_update(self, force: bool = False) -> None:
+        """Run summary update via the session manager and display the result."""
+        if not self.session or not self.session_manager:
+            return
+
+        result = await self.session_manager.update_session_summary(self.session, force=force)
+        if result is None:
+            return
+
+        if result.summary:
+            self._display_summary(
+                result.summary,
+                summarized_messages=result.messages_summarized,
+                total_messages=result.total_messages,
+                updated=force or result.used_fallback,
+            )
+        elif result.skipped:
+            logger.debug(
+                "Summary update skipped for session %s (messages=%s).",
+                self.session.session_id,
+                result.total_messages,
+            )
+        elif result.error and not result.skipped:
+            self._show_summary_error(
+                "Conversation summary unavailable at the moment. "
+                "Try continuing the conversation to refresh it."
+            )
+
+    def _display_summary(
+        self,
+        summary_text: str,
+        *,
+        summarized_messages: int,
+        total_messages: int,
+        updated: bool = False,
+    ) -> None:
+        """Render the summary in the chat panel."""
+        if not summary_text:
+            return
+
+        key = (summary_text, summarized_messages)
+        if self._last_displayed_summary == key:
+            return
+
+        chat = self._get_chat_panel()
+        status_line = (
+            "[yellow]Summary pending update for recent messages[/]"
+            if total_messages > summarized_messages
+            else "[dim]Summary includes all messages so far[/]"
+        )
+        content = (
+            f"[bold cyan]Session: {self._session_name}[/]\n"
+            f"[dim]Messages summarised: {summarized_messages} of {total_messages}[/]\n\n"
+            f"{summary_text}\n\n"
+            f"{status_line}\n"
+            "[dim]Type your next message to continue...[/]"
+        )
+        chat.add_panel(
+            content,
+            title="💡 Updated Conversation Summary" if updated else "💡 Conversation Summary",
+            style="cyan",
+        )
+        self._last_displayed_summary = key
+
+    def _show_summary_error(self, message: str) -> None:
+        """Display summary error/info message in the chat panel."""
+        chat = self._get_chat_panel()
+        chat.add_panel(
+            f"[yellow]{message}[/]",
+            title="⚠️ Summary",
+            style="yellow",
+        )
+
+    async def handle_conversation_updated(self) -> None:
+        """Callback invoked when the conversation history changes."""
+        if self.session and self.session_manager:
+            self._start_summary_update()
+
+    async def _wait_for_summary_tasks(self) -> None:
+        """Wait for any in-flight summary tasks to complete."""
+        if not self._summary_tasks:
+            return
+
+        pending = list(self._summary_tasks)
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    async def ensure_summary_synced(self) -> None:
+        """Ensure conversation summary metadata is up to date."""
+        await self._wait_for_summary_tasks()
+        if self.session and self.session_manager:
+            await self.session_manager.update_session_summary(self.session, force=False)

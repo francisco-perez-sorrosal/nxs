@@ -37,6 +37,19 @@ class ReasoningTracePanel(RichLog):
     """
 
     BORDER_TITLE = "Reasoning Trace"
+    
+    # Color mapping for strategies and complexity levels
+    STRATEGY_COLORS = {
+        "DIRECT": "green",
+        "LIGHT_PLANNING": "yellow",
+        "DEEP_REASONING": "red",
+    }
+    
+    COMPLEXITY_COLORS = {
+        "SIMPLE": "green",
+        "MEDIUM": "yellow",
+        "COMPLEX": "red",
+    }
 
     def __init__(self, **kwargs):
         """Initialize the reasoning trace panel with Rich markup enabled."""
@@ -70,21 +83,11 @@ class ReasoningTracePanel(RichLog):
         table.add_column("Value", style="white")
 
         # Color-code complexity level
-        level_colors = {
-            "SIMPLE": "green",
-            "MEDIUM": "yellow",
-            "COMPLEX": "red",
-        }
-        level_color = level_colors.get(complexity.complexity_level.value, "white")
+        level_color = self.COMPLEXITY_COLORS.get(complexity.complexity_level.value, "white")
         table.add_row("Complexity", f"[{level_color}]{complexity.complexity_level.value}[/]")
 
         # Color-code strategy
-        strategy_colors = {
-            "DIRECT": "green",
-            "LIGHT_PLANNING": "yellow",
-            "DEEP_REASONING": "red",
-        }
-        strategy_color = strategy_colors.get(complexity.recommended_strategy.value, "white")
+        strategy_color = self.STRATEGY_COLORS.get(complexity.recommended_strategy.value, "white")
         table.add_row("Strategy", f"[{strategy_color}]{complexity.recommended_strategy.value}[/]")
 
         table.add_row("Iterations", str(complexity.estimated_iterations))
@@ -106,12 +109,7 @@ class ReasoningTracePanel(RichLog):
             strategy: Selected execution strategy
             reason: Reason for selection
         """
-        strategy_colors = {
-            "DIRECT": "green",
-            "LIGHT_PLANNING": "yellow",
-            "DEEP_REASONING": "red",
-        }
-        color = strategy_colors.get(strategy.value, "white")
+        color = self.STRATEGY_COLORS.get(strategy.value, "white")
         self.write(f"[{color}]▶ Executing with {strategy.value} strategy[/]\n")
         if reason:
             self.write(f"[dim]  Reason: {reason}[/]\n")
@@ -140,6 +138,32 @@ class ReasoningTracePanel(RichLog):
     # Quality Evaluation Events
     # ====================================================================
 
+    def on_response_for_judgment(self, response: str, strategy: str):
+        """Display the assistant response that will be evaluated.
+        
+        Args:
+            response: The assistant's response to be judged
+            strategy: The strategy used to generate this response
+        """
+        # Truncate very long responses but show substantial content
+        max_preview_length = 500
+        response_preview = response[:max_preview_length]
+        if len(response) > max_preview_length:
+            response_preview += f"\n[dim]... ({len(response) - max_preview_length} more characters)[/]"
+        
+        table = Table(
+            title=f"Response to Judge ({strategy} strategy)",
+            show_header=False,
+            border_style="yellow",
+            expand=False,
+        )
+        table.add_column("Content", style="white", overflow="fold")
+        table.add_row(response_preview)
+        
+        panel = Panel(table, border_style="yellow", expand=False)
+        self.write(panel)
+        self.write("\n")
+
     def on_quality_check_start(self):
         """Display quality evaluation start message."""
         self.write("[dim]🔎 Evaluating response quality...[/]\n")
@@ -155,24 +179,33 @@ class ReasoningTracePanel(RichLog):
         status_color = "green" if evaluation.is_complete else "red"
         confidence = evaluation.confidence
 
-        table = Table(
-            title="Quality Evaluation",
+        # Create summary table with key metrics
+        summary_table = Table(
+            title="Quality Evaluation Summary",
             show_header=False,
             border_style=status_color,
             expand=False,
         )
-        table.add_column("Field", style="cyan", width=20)
-        table.add_column("Value", style="white")
+        summary_table.add_column("Field", style="cyan", width=20)
+        summary_table.add_column("Value", style="white")
 
-        table.add_row("Status", f"[{status_color}]{status}[/]")
-        table.add_row("Confidence", f"{confidence:.2f}")
-        if evaluation.reasoning:
-            reasoning_preview = evaluation.reasoning[:100] + "..." if len(evaluation.reasoning) > 100 else evaluation.reasoning
-            table.add_row("Reasoning", reasoning_preview)
+        summary_table.add_row("Status", f"[{status_color}]{status}[/]")
+        summary_table.add_row("Confidence", f"{confidence:.2f}")
 
-        panel = Panel(table, border_style=status_color, expand=False)
+        panel = Panel(summary_table, border_style=status_color, expand=False)
         self.write(panel)
         self.write("\n")
+
+        # Show full reasoning text in a separate panel
+        if evaluation.reasoning:
+            reasoning_panel = Panel(
+                evaluation.reasoning,
+                title="Judge's Reasoning (Full Text)",
+                border_style="yellow",
+                expand=False,
+            )
+            self.write(reasoning_panel)
+            self.write("\n")
 
     # ====================================================================
     # Auto-Escalation Events

@@ -7,7 +7,8 @@ This handler processes:
 - Status updates during query processing
 """
 
-from typing import TYPE_CHECKING, Callable, Optional
+import asyncio
+from typing import TYPE_CHECKING, Callable, Optional, Awaitable
 
 from nxs.logger import get_logger
 
@@ -35,6 +36,7 @@ class QueryHandler:
         mcp_initialized_getter: Callable[[], bool],
         focus_input: Callable[[], None],
         reasoning_callbacks: Optional[dict[str, Callable]] = None,
+        on_conversation_updated: Optional[Callable[[], Awaitable[None]]] = None,
     ):
         """
         Initialize the QueryHandler.
@@ -53,6 +55,7 @@ class QueryHandler:
         self.mcp_initialized_getter = mcp_initialized_getter
         self.focus_input = focus_input
         self.reasoning_callbacks = reasoning_callbacks or {}
+        self.on_conversation_updated = on_conversation_updated
 
     async def process_query(self, query: str, query_id: int) -> None:
         """
@@ -138,6 +141,9 @@ class QueryHandler:
         logger.debug("Stream completed")
         chat = self.chat_panel_getter()
         chat.finish_assistant_message()  # Properly finish the assistant message
+
+        if self.on_conversation_updated:
+            asyncio.create_task(self.on_conversation_updated())
 
     async def _on_tool_call(self, tool_name: str, params: dict) -> None:
         """

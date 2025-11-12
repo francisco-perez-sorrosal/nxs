@@ -1,0 +1,14 @@
+Analyze the following conversation and provide a concise summary.
+
+Format your response exactly as:
+**Topics:** Topic 1, Topic 2
+**Summary:** One or two sentences summarizing the discussion.
+**Status:** What is the current stage or next step?
+
+Conversation:
+${conversation}
+
+Focus on the main ideas and keep it concise.
+Ignore meta-dialogue where the assistant is asking the user to clarify or restate their request; those interactions should not influence the topics or summary unless the user provides new substantive information in response.
+Do not judge or attempt to reconcile shifts between unrelated topics—simply reflect the major themes discussed, even if the conversation jumps between them.
+

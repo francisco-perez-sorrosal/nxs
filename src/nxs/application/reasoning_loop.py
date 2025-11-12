@@ -227,6 +227,10 @@ class AdaptiveReasoningLoop(AgentLoop):
 
             # Phase 2: QUALITY EVALUATION (Always performed!)
             logger.info("Phase 2: Evaluating response quality")
+            
+            # Show the response that will be judged
+            await _call_callback(callbacks, "on_response_for_judgment", result, current_strategy.value)
+            
             await _call_callback(callbacks, "on_quality_check_start")
 
             evaluation = await self._evaluate_response_quality(

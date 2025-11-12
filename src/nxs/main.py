@@ -21,6 +21,7 @@ from nxs.application.reasoning.planner import Planner
 from nxs.application.reasoning.evaluator import Evaluator
 from nxs.application.reasoning.synthesizer import Synthesizer
 from nxs.presentation.tui import NexusApp
+from nxs.application.summarization import SummarizationService
 
 load_dotenv()
 
@@ -58,6 +59,7 @@ async def main(
     # Create core services
     claude_service = Claude(model=claude_model)
     artifact_manager = ArtifactManager()
+    summarization_service = SummarizationService(llm=claude_service)
 
     # Create reasoning configuration (can be customized via env vars)
     reasoning_config = ReasoningConfig()
@@ -126,6 +128,7 @@ async def main(
         system_message="You are a helpful AI assistant.",
         enable_caching=True,
         agent_factory=create_command_control_agent,
+        summarizer=summarization_service,
     )
 
     logger.info("SessionManager initialized with CommandControlAgent factory")
@@ -146,13 +149,19 @@ async def main(
     app = NexusApp(
         agent_loop=session.agent_loop,
         artifact_manager=artifact_manager,
+        session_name=session.session_id,
+        session=session,
+        session_manager=session_manager,
     )
     
-    logger.info("NexusApp initialized with CommandControlAgent (using AdaptiveReasoningLoop)")
+    logger.info(f"NexusApp initialized with session '{session.session_id}' (using AdaptiveReasoningLoop)")
     
     try:
         await app.run_async()
     finally:
+        # Ensure conversation summary is synced before saving session state
+        await app.ensure_summary_synced()
+
         # Save session before exit
         logger.info("Saving session before exit...")
         session_manager.save_active_session()

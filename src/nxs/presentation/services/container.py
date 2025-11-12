@@ -6,6 +6,7 @@ while ensuring MCP connections are initialized eagerly so resources/prompts
 are available immediately for autocomplete.
 """
 
+import asyncio
 from typing import Callable, Optional, TYPE_CHECKING
 
 from nxs.presentation.services.status_queue import StatusQueue
@@ -17,6 +18,7 @@ from nxs.presentation.services import (
 from nxs.presentation.handlers import QueryHandler
 from nxs.presentation.tui.query_queue import QueryQueue
 from nxs.application.artifact_manager import ArtifactManager
+from nxs.application.summarization import SummarizationService
 from nxs.domain.events import (
     EventBus,
     ConnectionStatusChanged,
@@ -69,6 +71,7 @@ class ServiceContainer:
         # Optional caches
         prompt_info_cache: Cache[str, str | None] | None = None,
         prompt_schema_cache: Cache[str, tuple] | None = None,
+        summarization_service: SummarizationService,
     ):
         """
         Initialize the service container.
@@ -92,6 +95,7 @@ class ServiceContainer:
             mcp_initialized_getter: Lambda to check if MCP is initialized
             prompt_info_cache: Optional cache for prompt info
             prompt_schema_cache: Optional cache for prompt schemas
+            summarization_service: Shared summarization service instance
         """
         # Core dependencies
         self.app = app
@@ -115,6 +119,7 @@ class ServiceContainer:
         # Caches
         self._prompt_info_cache = prompt_info_cache or MemoryCache[str, str | None]()
         self._prompt_schema_cache = prompt_schema_cache or MemoryCache[str, tuple]()
+        self._summarization_service: SummarizationService = summarization_service
         
         # Services (created lazily via properties)
         self._status_queue: StatusQueue | None = None
@@ -179,9 +184,15 @@ class ServiceContainer:
         """Get QueryHandler, creating it on first access."""
         if self._query_handler is None:
             # Get reasoning callbacks from app if available
-            reasoning_callbacks = {}
-            if hasattr(self.app, 'get_reasoning_callbacks'):
-                reasoning_callbacks = self.app.get_reasoning_callbacks()
+            reasoning_getter = getattr(self.app, "get_reasoning_callbacks", None)
+            callbacks_obj = reasoning_getter() if callable(reasoning_getter) else {}
+            reasoning_callbacks = callbacks_obj if isinstance(callbacks_obj, dict) else {}
+
+            conversation_candidate = getattr(self.app, "handle_conversation_updated", None)
+            if callable(conversation_candidate) and asyncio.iscoroutinefunction(conversation_candidate):
+                conversation_updated_callback = conversation_candidate
+            else:
+                conversation_updated_callback = None
             
             self._query_handler = QueryHandler(
                 agent_loop=self.agent_loop,
@@ -190,6 +201,7 @@ class ServiceContainer:
                 mcp_initialized_getter=self._mcp_initialized_getter,
                 focus_input=self._focus_input,
                 reasoning_callbacks=reasoning_callbacks,
+                on_conversation_updated=conversation_updated_callback,
             )
         return self._query_handler
 
@@ -201,6 +213,11 @@ class ServiceContainer:
                 processor=self.query_handler.process_query  # Triggers lazy creation
             )
         return self._query_queue
+
+    @property
+    def summarization_service(self) -> SummarizationService:
+        """Return the shared SummarizationService instance."""
+        return self._summarization_service
 
     # -------------------------------------------------------------------------
     # Lifecycle Management
