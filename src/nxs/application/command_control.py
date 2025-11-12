@@ -1,7 +1,8 @@
-from typing import List, Tuple, Optional, Callable
+from typing import Any, List, Tuple, Optional, Callable, cast
 from mcp.types import Prompt, PromptMessage
 from anthropic.types import MessageParam
 
+from nxs.application.agentic_loop import AgentLoop
 from nxs.application.reasoning_loop import AdaptiveReasoningLoop
 from nxs.application.conversation import Conversation
 from nxs.application.claude import Claude
@@ -184,7 +185,19 @@ class CommandControlAgent:
                     logger.debug(f"First message structure: {prompt_messages[0] if prompt_messages else 'None'}")
                     # Add prompt messages to the reasoning loop's conversation
                     for msg in prompt_messages:
-                        self.reasoning_loop.conversation.add_message(msg["role"], msg["content"])
+                        content = msg["content"]
+                        # Normalize content to the expected format (str or list[dict])
+                        if isinstance(content, str):
+                            normalized_content: str | list[dict[str, Any]] = content
+                        elif isinstance(content, list):
+                            # Cast to expected type (list[dict[str, Any]])
+                            normalized_content = cast(list[dict[str, Any]], content)
+                        else:
+                            # Fallback for unexpected types
+                            normalized_content = str(content)
+
+                        # Add to conversation as user message (prompts are treated as user input)
+                        self.reasoning_loop.conversation.add_user_message(normalized_content)
                     return True
                 else:
                     logger.warning(f"No messages returned from prompt '{command_name}'")
@@ -209,7 +222,10 @@ class CommandControlAgent:
         use_streaming: bool = True,
         callbacks: Optional[dict[str, Callable]] = None,
     ) -> str:
-        """Process a query with command/resource extraction, then delegate to AdaptiveReasoningLoop.
+        """Process a query with command/resource extraction, then delegate appropriately.
+
+        MCP commands and resource-only queries bypass the reasoning loop for direct execution,
+        while regular queries go through adaptive reasoning.
 
         Args:
             query: User query (may contain /commands or @resources)
@@ -217,26 +233,45 @@ class CommandControlAgent:
             callbacks: Optional callbacks (merged with instance callbacks)
 
         Returns:
-            The final response from the reasoning loop
+            The final response
         """
         logger.info(f"CommandControlAgent processing query: '{query[:50]}{'...' if len(query) > 50 else ''}'")
 
         # Merge callbacks
         merged_callbacks = {**self.callbacks, **(callbacks or {})}
 
+        # Extract resources FIRST (before command processing)
+        # This ensures resources mentioned in commands (e.g., `/summary @resource`) are available
+        logger.debug("Extracting resources from query")
+        added_resources = await self._extract_resources(query)
+
         # Check if this is a command
         is_command = await self._process_command(query)
         if is_command:
-            logger.info("Query was processed as a command, delegating to reasoning loop")
-            # Command has been added to conversation, now execute with reasoning loop
-            return await self.reasoning_loop.run(
+            logger.info("Query was processed as a command, executing directly via base AgentLoop")
+            # Command messages already added to conversation
+
+            # If resources were mentioned, add them as context to the conversation
+            if added_resources:
+                logger.info(f"Adding {len(added_resources)} characters of resource context to command")
+                resource_context_message = f"""
+The following resources were referenced in your request and may be useful:
+<context>
+{added_resources}
+</context>
+
+Note: The content above is provided as reference material. Use it as needed to complete the task.
+"""
+                self.reasoning_loop.conversation.add_user_message(resource_context_message)
+
+            # Execute directly via base AgentLoop (bypass reasoning loop overhead)
+            return await self._execute_direct(
                 query="",  # Empty query since command already added to conversation
                 use_streaming=use_streaming,
                 callbacks=merged_callbacks,
             )
 
-        logger.debug("Extracting resources from query")
-        added_resources = await self._extract_resources(query)
+        # Not a command - process as regular query with resources
 
         if added_resources:
             logger.info(f"Found {len(added_resources)} characters of resource content")
@@ -258,16 +293,49 @@ If the document content is included in this prompt, you don't need to use an add
 Answer the user's question directly and concisely. Start with the exact information they need.
 Don't refer to or mention the provided context in any way - just use it to inform your answer.
 """
+            # Resources provide context - execute directly without reasoning overhead
+            logger.info("Executing resource-enriched query directly via base AgentLoop")
+            return await self._execute_direct(
+                query=enriched_query,
+                use_streaming=use_streaming,
+                callbacks=merged_callbacks,
+            )
         else:
             logger.debug("No resources found in query")
-            enriched_query = query
+            # Regular query - use adaptive reasoning loop
+            logger.debug("Delegating to AdaptiveReasoningLoop for adaptive execution")
+            return await self.reasoning_loop.run(
+                query=query,
+                use_streaming=use_streaming,
+                callbacks=merged_callbacks,
+            )
 
-        logger.debug("Delegating to AdaptiveReasoningLoop")
-        # Delegate to reasoning loop for adaptive execution
-        return await self.reasoning_loop.run(
-            query=enriched_query,
+    async def _execute_direct(
+        self,
+        query: str,
+        use_streaming: bool,
+        callbacks: dict[str, Callable],
+    ) -> str:
+        """Execute query directly via base AgentLoop, bypassing reasoning overhead.
+
+        Used for MCP commands and resource-enriched queries that don't need
+        complexity analysis and quality evaluation.
+
+        Args:
+            query: Query to execute (may be empty if messages already in conversation)
+            use_streaming: Whether to stream the response
+            callbacks: Callbacks for execution
+
+        Returns:
+            The response from Claude
+        """
+        # Access the base AgentLoop methods directly
+        # The reasoning loop inherits from AgentLoop, so we can call super()
+        return await AgentLoop.run(
+            self.reasoning_loop,
+            query=query,
             use_streaming=use_streaming,
-            callbacks=merged_callbacks,
+            callbacks=callbacks,
         )
 
 

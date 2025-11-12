@@ -178,8 +178,9 @@ class AgentLoop:
         if "on_start" in callbacks:
             await callbacks["on_start"]()
 
-        # Add user query to conversation
-        self.conversation.add_user_message(query)
+        # Add user query to conversation (skip if empty - used for pre-added messages like commands)
+        if query:
+            self.conversation.add_user_message(query)
 
         final_text_response = ""
 
@@ -266,11 +267,15 @@ class AgentLoop:
             "messages": messages,
             "temperature": 1.0,
         }
-        
+
         # Only add tools if we have any (empty list is falsy, so this works)
         if tools:
             params["tools"] = tools
-            
+            tool_names = [t.get("name", "unknown") for t in tools]
+            logger.info(f"Adding {len(tools)} tools to streaming request: {tool_names}")  # DEBUG: Check tools
+        else:
+            logger.warning("No tools being sent to Claude API in streaming request")  # DEBUG: Warn if no tools
+
         # Only add system if we have one
         if system:
             params["system"] = system
