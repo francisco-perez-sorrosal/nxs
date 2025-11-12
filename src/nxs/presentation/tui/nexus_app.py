@@ -9,6 +9,11 @@ from textual.widgets import Header, Footer
 from textual.containers import Container, Vertical, Horizontal
 from textual.binding import Binding
 
+from rich.console import Group
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.text import Text
+
 from nxs.presentation.widgets.chat_panel import ChatPanel
 from nxs.presentation.widgets.status_panel import StatusPanel
 from nxs.presentation.widgets.reasoning_trace_panel import ReasoningTracePanel
@@ -517,7 +522,7 @@ class NexusApp(App):
                 result.summary,
                 summarized_messages=result.messages_summarized,
                 total_messages=result.total_messages,
-                updated=force or result.used_fallback,
+                updated=bool(self._last_displayed_summary),
             )
         elif result.skipped:
             logger.debug(
@@ -553,18 +558,36 @@ class NexusApp(App):
             if total_messages > summarized_messages
             else "[dim]Summary includes all messages so far[/]"
         )
-        content = (
-            f"[bold cyan]Session: {self._session_name}[/]\n"
-            f"[dim]Messages summarised: {summarized_messages} of {total_messages}[/]\n\n"
-            f"{summary_text}\n\n"
-            f"{status_line}\n"
-            "[dim]Type your next message to continue...[/]"
+
+        header = Text.from_markup(
+            f"[bold cyan]Session: {self._session_name}[/]"
         )
-        chat.add_panel(
-            content,
+        stats = Text.from_markup(
+            f"[dim]Messages summarised: {summarized_messages} of {total_messages}[/]"
+        )
+        summary_renderable = Markdown(summary_text, justify="left")
+        status_text = Text.from_markup(status_line)
+        prompt = Text.from_markup("[dim]Type your next message to continue...[/]")
+
+        panel_content = Group(
+            header,
+            stats,
+            Text(),
+            summary_renderable,
+            Text(),
+            status_text,
+            prompt,
+        )
+
+        panel = Panel(
+            panel_content,
             title="💡 Updated Conversation Summary" if updated else "💡 Conversation Summary",
-            style="cyan",
+            border_style="cyan",
+            padding=(1, 2),
         )
+
+        chat.write(panel)
+        chat.write("\n")
         self._last_displayed_summary = key
 
     def _show_summary_error(self, message: str) -> None:

@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from textual_autocomplete import AutoComplete, DropdownItem, TargetState
+from textual.geometry import Offset, Region, Spacing
 
 from nxs.application.suggestions import ArgumentSuggestionGenerator
 from nxs.logger import get_logger
@@ -135,3 +136,43 @@ class NexusAutoComplete(AutoComplete):
         decision = helper_should_show_dropdown(text_before_cursor)
         logger.debug("Dropdown visibility=%s for text=%r", decision, text_before_cursor)
         return decision
+
+    def _align_and_rebuild(self) -> None:
+        self._align_to_target()
+        self._target_state = self._get_target_state()
+        search_string = self.get_search_string(self._target_state)
+        self._rebuild_options(self._target_state, search_string)
+
+    def _align_to_target(self) -> None:
+        """Align dropdown above the cursor when possible."""
+        dropdown = self.option_list
+        width, height = dropdown.outer_size
+        if width == 0 and height == 0:
+            super()._align_to_target()
+            return
+
+        cursor_x, cursor_y = self.target.cursor_screen_offset
+        content_region = self.screen.scrollable_content_region
+
+        # Prefer positioning above the cursor
+        preferred_region = Region(cursor_x - 1, cursor_y - height - 1, width, height)
+        top_x, top_y, _, _ = preferred_region.constrain(
+            "inside",
+            "none",
+            Spacing.all(0),
+            content_region,
+        )
+
+        if top_y + height <= cursor_y:
+            self.absolute_offset = Offset(top_x, top_y)
+            return
+
+        # Fallback to default (below) positioning if there isn't enough space above
+        fallback_region = Region(cursor_x - 1, cursor_y + 1, width, height).constrain(
+            "inside",
+            "none",
+            Spacing.all(0),
+            content_region,
+        )
+        fallback_x, fallback_y, _, _ = fallback_region
+        self.absolute_offset = Offset(fallback_x, fallback_y)

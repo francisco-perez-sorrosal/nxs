@@ -108,6 +108,21 @@ ServerWidget {
     border: solid $warning-darken-1;
 }
 
+/* Reasoning trace panel styling */
+#reasoning-trace {
+    height: 2fr;
+    border: solid $accent;
+    border-title-color: $accent;
+    border-title-align: left;
+    padding: 1;
+    scrollbar-gutter: stable;
+    background: $surface;
+}
+
+#reasoning-trace:focus {
+    border: solid $accent-darken-1;
+}
+
 /* Input field - part of vertical layout */
 #input {
     height: 3;
