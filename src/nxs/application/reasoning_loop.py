@@ -124,6 +124,10 @@ class AdaptiveReasoningLoop(AgentLoop):
         self.config = config or ReasoningConfig()
         self.force_strategy = force_strategy
         self.approval_manager = approval_manager
+        
+        # Flag to prevent recursive reasoning during sub-executions
+        # When _execute_with_tool_tracking calls run(), we skip reasoning logic
+        self._in_sub_execution = False
 
         logger.info(
             f"AdaptiveReasoningLoop initialized: max_iterations={max_iterations}, "
@@ -175,6 +179,14 @@ class AdaptiveReasoningLoop(AgentLoop):
         """
         callbacks = callbacks or self.callbacks
 
+        # If we're in a sub-execution (called from _execute_with_tool_tracking),
+        # skip all reasoning logic and just call the base AgentLoop.run()
+        # This prevents infinite recursion when executing strategies
+        if self._in_sub_execution:
+            logger.debug("Sub-execution detected - skipping reasoning, calling base AgentLoop.run()")
+            # Call parent AgentLoop.run() directly
+            return await super().run(query, callbacks=callbacks, use_streaming=use_streaming)
+
         # Human-in-the-Loop: Simple choice - execute directly or use reasoning
         use_reasoning = False
         initial_strategy = ExecutionStrategy.DIRECT  # Default
@@ -184,29 +196,49 @@ class AdaptiveReasoningLoop(AgentLoop):
             self.approval_manager
             and self.approval_manager.config.require_query_analysis_approval
         ):
-            logger.info("Requesting execution mode from user")
+            # Check if we already have a remembered decision for query analysis
+            # If yes, use it without asking again
+            if self.approval_manager._remembered_query_analysis is not None:
+                logger.info(
+                    f"Using remembered query analysis decision: "
+                    f"{'Reasoning mode' if self.approval_manager._remembered_query_analysis else 'Direct execution'}"
+                )
+                use_reasoning = self.approval_manager._remembered_query_analysis
+            else:
+                logger.info("Requesting execution mode from user")
 
-            # Build approval request details - simple binary choice
-            approval_details = {
-                "mode": "execution_choice",  # Signal this is a simple mode choice
-                "options": ["Execute Directly (fast)", "Analyze & Use Reasoning (automatic)"]
-            }
+                # Build approval request details - include query so user knows what they're approving
+                approval_details = {
+                    "mode": "execution_choice",  # Signal this is a simple mode choice
+                    "query": query,  # Include the actual query text
+                    "options": ["Execute Directly (fast)", "Analyze & Use Reasoning (automatic)"]
+                }
 
-            request = create_approval_request(
-                approval_type=ApprovalType.QUERY_ANALYSIS,
-                title="Choose Execution Mode",
-                details=approval_details,
-            )
+                request = create_approval_request(
+                    approval_type=ApprovalType.QUERY_ANALYSIS,
+                    title="Choose Execution Mode",
+                    details=approval_details,
+                )
 
-            response = await self.approval_manager.request_approval(request)
+                response = await self.approval_manager.request_approval(request)
 
-            if not response.approved:
-                logger.info("Execution mode selection cancelled by user")
-                return "Query cancelled by user."
+                if not response.approved:
+                    logger.info("Execution mode selection cancelled by user")
+                    return "Query cancelled by user."
 
-            # Check which mode user selected
-            use_reasoning = response.metadata.get("use_reasoning", False)
-            logger.info(f"User selected: {'Reasoning mode' if use_reasoning else 'Direct execution'}")
+                # Check which mode user selected
+                use_reasoning = response.metadata.get("use_reasoning", False)
+                
+                # Remember the decision if requested (or auto-remember to prevent repeated prompts)
+                # The approval overlay automatically sets remember_for_session=True for query analysis
+                if response.metadata.get("remember_for_session", True):
+                    self.approval_manager._remembered_query_analysis = use_reasoning
+                    logger.debug(
+                        f"Remembered query analysis decision: "
+                        f"{'Reasoning mode' if use_reasoning else 'Direct execution'}"
+                    )
+                
+                logger.info(f"User selected: {'Reasoning mode' if use_reasoning else 'Direct execution'}")
 
         # Phase 0: COMPLEXITY ANALYSIS (only if user selected reasoning mode or forced)
         if self.force_strategy:

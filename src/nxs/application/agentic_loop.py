@@ -299,6 +299,9 @@ class AgentLoop:
         Wrapper around base run() that intercepts tool executions
         and logs them to the tracker.
 
+        IMPORTANT: Calls parent AgentLoop.run() directly to avoid recursive
+        calls to AdaptiveReasoningLoop.run() which would trigger reasoning again.
+
         Args:
             query: User query to execute
             tracker: ResearchProgressTracker instance
@@ -311,12 +314,25 @@ class AgentLoop:
         # Set current tracker for tool execution interception
         self._current_tracker = tracker
 
+        # Set flag to indicate we're in a sub-execution (for AdaptiveReasoningLoop)
+        # This prevents recursive reasoning checks
+        was_in_sub_execution = False
+        if hasattr(self, '_in_sub_execution'):
+            was_in_sub_execution = self._in_sub_execution
+            self._in_sub_execution = True
+
         try:
+            # Call self.run() - if this is AdaptiveReasoningLoop, the _in_sub_execution
+            # flag will cause it to skip reasoning logic and call base AgentLoop.run()
+            # If this is AgentLoop, it just calls normally
             response = await self.run(query, callbacks=callbacks, use_streaming=use_streaming)
             return response
         finally:
             # Clear tracker reference after execution
             self._current_tracker = None
+            # Restore previous sub-execution flag
+            if hasattr(self, '_in_sub_execution'):
+                self._in_sub_execution = was_in_sub_execution
 
     async def _run_with_streaming(
         self,

@@ -163,11 +163,13 @@ class ApprovalManager:
         # Check for remembered decisions
         if request.type == ApprovalType.QUERY_ANALYSIS:
             if self._remembered_query_analysis is not None:
+                # For query analysis, _remembered_query_analysis is the use_reasoning value
+                use_reasoning = self._remembered_query_analysis
                 return ApprovalResponse(
                     request_id=request.id,
-                    approved=self._remembered_query_analysis,
-                    selected_option="Approve" if self._remembered_query_analysis else "Cancel",
-                    metadata={"remembered": True},
+                    approved=True,  # Always approved if remembered (user already decided)
+                    selected_option="Analyze & Use Reasoning" if use_reasoning else "Execute Directly",
+                    metadata={"remembered": True, "use_reasoning": use_reasoning},
                 )
         elif request.type == ApprovalType.TOOL_EXECUTION:
             tool_name = request.details.get("tool_name")

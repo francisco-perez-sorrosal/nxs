@@ -128,6 +128,11 @@ class ApprovalOverlay(ModalScreen[ApprovalResponse]):
         # Check if this is a simple execution mode choice
         mode = details.get("mode")
         if mode == "execution_choice":
+            # Include the query text so user knows what they're approving
+            query = details.get("query", "")
+            if query:
+                lines.append(f"[bold cyan]Query:[/] {query}\n")
+            
             lines.append(
                 "[bold]How would you like to execute this query?[/]\n\n"
                 "[dim]• [cyan]Execute Directly[/]: Fast, immediate execution (no analysis)[/]\n"
@@ -191,28 +196,30 @@ class ApprovalOverlay(ModalScreen[ApprovalResponse]):
         """Handle execute directly choice."""
         logger.info("User clicked Execute Directly")
 
+        # Auto-remember query analysis decisions to prevent repeated prompts
         response = ApprovalResponse(
             request_id=self.request.id,
             approved=True,
             selected_option="Execute Directly",
-            metadata={"use_reasoning": False},
+            metadata={"use_reasoning": False, "remember_for_session": True},
         )
 
-        logger.info(f"Dismissing with response: use_reasoning=False")
+        logger.info(f"Dismissing with response: use_reasoning=False, remember_for_session=True")
         self.dismiss(response)
 
     def _handle_use_reasoning(self) -> None:
         """Handle use reasoning choice."""
         logger.info("User clicked Analyze & Use Reasoning")
 
+        # Auto-remember query analysis decisions to prevent repeated prompts
         response = ApprovalResponse(
             request_id=self.request.id,
             approved=True,
             selected_option="Analyze & Use Reasoning",
-            metadata={"use_reasoning": True},
+            metadata={"use_reasoning": True, "remember_for_session": True},
         )
 
-        logger.info(f"Dismissing with response: use_reasoning=True")
+        logger.info(f"Dismissing with response: use_reasoning=True, remember_for_session=True")
         self.dismiss(response)
 
     def _handle_approve(self) -> None:
