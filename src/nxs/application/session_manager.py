@@ -636,9 +636,20 @@ class SessionManager:
 
         Persists all session states to their respective JSON files.
 
+        Phase 6: Also cleans up old trackers before saving.
+
         Example:
             >>> manager.save_all_sessions()
         """
+        # Phase 6: Cleanup old trackers in all sessions before saving
+        for session in self._sessions.values():
+            if hasattr(session, "cleanup_old_trackers"):
+                deleted_count = session.cleanup_old_trackers(max_age_days=30)
+                if deleted_count > 0:
+                    logger.info(
+                        f"Cleaned up {deleted_count} old tracker(s) in session {session.session_id}"
+                    )
+
         for session in self._sessions.values():
             self._save_session(session)
 

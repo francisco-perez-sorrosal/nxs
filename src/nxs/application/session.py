@@ -22,6 +22,7 @@ from typing import Any, Callable, Optional, Protocol, runtime_checkable
 from nxs.application.agentic_loop import AgentLoop
 from nxs.application.conversation import Conversation
 from nxs.application.cost_tracker import CostTracker
+from nxs.application.progress_tracker import ResearchProgressTracker
 from nxs.logger import get_logger
 
 logger = get_logger(__name__)
@@ -145,6 +146,8 @@ class Session:
         summarization_cost_tracker: Optional[CostTracker] = None,
         # Legacy support: if cost_tracker is provided, use it for conversation
         cost_tracker: Optional[CostTracker] = None,
+        # Phase 6: Tracker persistence
+        trackers: Optional[dict[str, ResearchProgressTracker]] = None,
     ):
         """Initialize a session.
 
@@ -156,6 +159,7 @@ class Session:
             reasoning_cost_tracker: Optional cost tracker for reasoning costs (created if None).
             summarization_cost_tracker: Optional cost tracker for summarization costs (created if None).
             cost_tracker: Legacy parameter - if provided, used for conversation_cost_tracker.
+            trackers: Phase 6: Optional dict of query_id -> ResearchProgressTracker for persistence.
         """
         self.metadata = metadata
         self.conversation = conversation
@@ -170,9 +174,13 @@ class Session:
         self.reasoning_cost_tracker = reasoning_cost_tracker or CostTracker()
         self.summarization_cost_tracker = summarization_cost_tracker or CostTracker()
 
+        # Phase 6: Tracker persistence - store trackers by query ID
+        self.trackers: dict[str, ResearchProgressTracker] = trackers or {}
+
         logger.debug(
             f"Session initialized: {metadata.session_id}, "
-            f"{conversation.get_message_count()} messages"
+            f"{conversation.get_message_count()} messages, "
+            f"{len(self.trackers)} tracker(s)"
         )
 
     async def run_query(
@@ -334,6 +342,8 @@ class Session:
     def to_dict(self) -> dict[str, Any]:
         """Serialize session to dictionary for persistence.
 
+        Phase 6: Now includes tracker persistence.
+
         Returns:
             Dictionary containing:
             - metadata: Session metadata
@@ -342,6 +352,7 @@ class Session:
             - reasoning_cost_tracker: Reasoning cost tracking data
             - summarization_cost_tracker: Summarization cost tracking data
             - cost_tracker: Legacy field (conversation costs) for backward compatibility
+            - trackers: Phase 6: Dict of query_id -> tracker state
             - Note: AgentLoop is NOT serialized (reconstructed on load)
 
         Example:
@@ -349,6 +360,11 @@ class Session:
             >>> with open("session.json", "w") as f:
             ...     json.dump(session_data, f, indent=2)
         """
+        # Phase 6: Serialize trackers
+        trackers_dict = {
+            query_id: tracker.to_dict() for query_id, tracker in self.trackers.items()
+        }
+
         return {
             "metadata": self.metadata.to_dict(),
             "conversation": self.conversation.to_dict(),
@@ -357,6 +373,8 @@ class Session:
             "summarization_cost_tracker": self.summarization_cost_tracker.to_dict(),
             # Legacy support: include cost_tracker for backward compatibility
             "cost_tracker": self.conversation_cost_tracker.to_dict(),
+            # Phase 6: Include trackers
+            "trackers": trackers_dict,
             # Note: AgentLoop is not serialized - it's reconstructed on load
             # with fresh LLM and tool registry instances
         }
@@ -424,6 +442,20 @@ class Session:
         if "summarization_cost_tracker" in data:
             summarization_cost_tracker = CostTracker.from_dict(data["summarization_cost_tracker"])
 
+        # Phase 6: Restore trackers
+        trackers: dict[str, ResearchProgressTracker] = {}
+        if "trackers" in data:
+            for query_id, tracker_data in data["trackers"].items():
+                try:
+                    tracker = ResearchProgressTracker.from_dict(tracker_data)
+                    trackers[query_id] = tracker
+                    logger.debug(f"Restored tracker for query: {query_id}")
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to restore tracker for query {query_id}: {e}",
+                        exc_info=True,
+                    )
+
         # Update agent_loop's conversation to use restored one
         agent_loop.conversation = conversation
 
@@ -434,16 +466,95 @@ class Session:
             conversation_cost_tracker=conversation_cost_tracker,
             reasoning_cost_tracker=reasoning_cost_tracker,
             summarization_cost_tracker=summarization_cost_tracker,
+            trackers=trackers,
         )
 
         total_cost = session.get_cost_summary()["total_cost"]
         logger.info(
             f"Session restored: {metadata.session_id}, "
             f"{conversation.get_message_count()} messages, "
+            f"{len(trackers)} tracker(s), "
             f"${total_cost:.6f} total cost"
         )
 
         return session
+
+    # Phase 6: Tracker management methods
+
+    def save_tracker(self, query_id: str, tracker: ResearchProgressTracker) -> None:
+        """Save a tracker for a query.
+
+        Args:
+            query_id: Unique identifier for the query (typically hash or UUID)
+            tracker: ResearchProgressTracker instance to save
+        """
+        self.trackers[query_id] = tracker
+        self.metadata.last_active_at = datetime.now()
+        logger.debug(f"Saved tracker for query: {query_id}")
+
+    def get_tracker(self, query_id: str) -> Optional[ResearchProgressTracker]:
+        """Get a tracker for a query.
+
+        Args:
+            query_id: Unique identifier for the query
+
+        Returns:
+            ResearchProgressTracker if found, None otherwise
+        """
+        return self.trackers.get(query_id)
+
+    def list_trackers(self) -> list[tuple[str, ResearchProgressTracker]]:
+        """List all trackers in this session.
+
+        Returns:
+            List of (query_id, tracker) tuples
+        """
+        return list(self.trackers.items())
+
+    def delete_tracker(self, query_id: str) -> bool:
+        """Delete a tracker for a query.
+
+        Args:
+            query_id: Unique identifier for the query
+
+        Returns:
+            True if tracker was deleted, False if not found
+        """
+        if query_id in self.trackers:
+            del self.trackers[query_id]
+            logger.debug(f"Deleted tracker for query: {query_id}")
+            return True
+        return False
+
+    def cleanup_old_trackers(self, max_age_days: int = 30) -> int:
+        """Phase 6: Cleanup old trackers based on age.
+
+        Args:
+            max_age_days: Maximum age in days (default: 30)
+
+        Returns:
+            Number of trackers deleted
+        """
+        from datetime import timedelta
+
+        cutoff_date = datetime.now() - timedelta(days=max_age_days)
+        deleted_count = 0
+
+        query_ids_to_delete = []
+        for query_id, tracker in self.trackers.items():
+            if tracker.created_at < cutoff_date:
+                query_ids_to_delete.append(query_id)
+
+        for query_id in query_ids_to_delete:
+            del self.trackers[query_id]
+            deleted_count += 1
+
+        if deleted_count > 0:
+            logger.info(
+                f"Cleaned up {deleted_count} old tracker(s) older than {max_age_days} days"
+            )
+
+        return deleted_count
 
     @property
     def session_id(self) -> str:

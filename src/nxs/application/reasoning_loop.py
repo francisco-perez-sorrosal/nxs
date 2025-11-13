@@ -371,6 +371,9 @@ class AdaptiveReasoningLoop(AgentLoop):
                     len(execution_attempts) > 1,  # escalated flag
                 )
 
+                # Phase 6: Notify tracker completion for persistence
+                await _call_callback(callbacks, "on_tracker_complete", tracker, query)
+
                 return result
 
             # Quality insufficient - escalate!
@@ -573,6 +576,11 @@ class AdaptiveReasoningLoop(AgentLoop):
             # NEW: Update step status (Phase 3)
             tracker.update_step_status(step.id, "in_progress")
 
+            # Phase 6: Notify step progress for real-time display
+            await _call_callback(
+                callbacks, "on_step_progress", step.id, "in_progress", step.description
+            )
+
             logger.debug(f"Light iteration {iteration + 1}/{max_iters}")
 
             await _call_callback(
@@ -600,6 +608,11 @@ class AdaptiveReasoningLoop(AgentLoop):
 
             # NEW: Mark step as completed with findings (Phase 3)
             tracker.update_step_status(step.id, "completed", findings=[result])
+
+            # Phase 6: Notify step completion for real-time display
+            await _call_callback(
+                callbacks, "on_step_progress", step.id, "completed", step.description
+            )
 
             plan.subtasks.pop(0) if plan.subtasks else None
 
@@ -721,6 +734,11 @@ class AdaptiveReasoningLoop(AgentLoop):
             step = pending_steps[0]
             tracker.update_step_status(step.id, "in_progress")
 
+            # Phase 6: Notify step progress for real-time display
+            await _call_callback(
+                callbacks, "on_step_progress", step.id, "in_progress", step.description
+            )
+
             subtask_query = step.description
             await _call_callback(
                 callbacks,
@@ -756,6 +774,11 @@ class AdaptiveReasoningLoop(AgentLoop):
 
             # NEW: Mark step as completed (Phase 3)
             tracker.update_step_status(step.id, "completed", findings=[result])
+
+            # Phase 6: Notify step completion for real-time display
+            await _call_callback(
+                callbacks, "on_step_progress", step.id, "completed", step.description
+            )
 
             # Phase 3: Evaluation
             logger.info("Phase 3: Evaluating completeness")

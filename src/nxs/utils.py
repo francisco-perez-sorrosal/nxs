@@ -85,3 +85,27 @@ def format_time_hhmmss(timestamp: float) -> str:
 
     dt = datetime.fromtimestamp(timestamp)
     return dt.strftime("%H:%M:%S")
+
+
+def generate_query_id(query: str) -> str:
+    """
+    Phase 6: Generate a unique query ID for tracking purposes.
+
+    Uses a hash of the query text to create a deterministic ID.
+    This ensures the same query gets the same ID, enabling
+    tracker persistence and resume functionality.
+
+    Args:
+        query: User query text
+
+    Returns:
+        Unique query ID (hex string)
+    """
+    import hashlib
+
+    # Create deterministic hash from query
+    query_hash = hashlib.sha256(query.encode("utf-8")).hexdigest()[:16]
+    
+    # Include timestamp for uniqueness if needed
+    # For now, just use hash - deterministic is better for persistence
+    return f"query_{query_hash}"

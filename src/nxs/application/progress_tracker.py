@@ -17,6 +17,7 @@ import json
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal, Optional
 
 from nxs.application.reasoning.types import (
@@ -176,6 +177,7 @@ class ResearchProgressTracker:
     - Maintain research plan skeleton with step progress
     - Preserve evaluation feedback and insights
     - Serialize state to context for LLM consumption
+    - Phase 6: Persistence and debugging support
     """
 
     def __init__(self, query: str, complexity: ComplexityAnalysis):
@@ -1042,6 +1044,8 @@ class ResearchProgressTracker:
     def to_dict(self) -> dict:
         """Serialize to dictionary for session persistence.
 
+        Phase 6: Enhanced persistence for session storage.
+
         Returns:
             Dictionary representation of tracker state
         """
@@ -1058,6 +1062,8 @@ class ResearchProgressTracker:
     @classmethod
     def from_dict(cls, data: dict) -> "ResearchProgressTracker":
         """Deserialize from dictionary.
+
+        Phase 6: Enhanced deserialization for session restoration.
 
         Args:
             data: Dictionary representation from to_dict()
@@ -1207,3 +1213,137 @@ class ResearchProgressTracker:
 
         return tracker
 
+    # === Phase 6: Debugging Tools ===
+
+    def export_to_json(self, file_path: Path | str) -> None:
+        """
+        Phase 6: Export tracker to JSON file for debugging.
+
+        Args:
+            file_path: Path to output JSON file
+        """
+        file_path = Path(file_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        tracker_dict = self.to_dict()
+
+        with open(file_path, "w") as f:
+            json.dump(tracker_dict, f, indent=2, ensure_ascii=False)
+
+        logger.info(f"Exported tracker to: {file_path}")
+
+    def generate_progress_report(self) -> str:
+        """
+        Phase 6: Generate a human-readable progress report.
+
+        Returns:
+            Formatted progress report as string
+        """
+        report_parts = []
+
+        # Header
+        report_parts.append("=" * 80)
+        report_parts.append("Research Progress Report")
+        report_parts.append("=" * 80)
+        report_parts.append("")
+
+        # Query and Complexity
+        report_parts.append(f"Query: {self.query}")
+        report_parts.append(f"Complexity: {self.complexity.complexity_level.value}")
+        report_parts.append(f"Created: {self.created_at.isoformat()}")
+        report_parts.append("")
+
+        # Execution Summary
+        report_parts.append("Execution Summary")
+        report_parts.append("-" * 80)
+        report_parts.append(f"Total Attempts: {len(self.attempts)}")
+        report_parts.append(f"Total Tool Executions: {len(self.tool_executions)}")
+        report_parts.append("")
+
+        # Attempts
+        if self.attempts:
+            report_parts.append("Execution Attempts:")
+            for i, attempt in enumerate(self.attempts, 1):
+                report_parts.append(f"  {i}. {attempt.strategy.value}")
+                report_parts.append(f"     Status: {attempt.status}")
+                report_parts.append(f"     Quality: {attempt.quality_score or 'N/A'}")
+                report_parts.append(f"     Outcome: {attempt.outcome}")
+                if attempt.evaluation:
+                    report_parts.append(f"     Evaluation: {attempt.evaluation.reasoning[:100]}...")
+                report_parts.append("")
+
+        # Plan Progress
+        if self.plan:
+            report_parts.append("Plan Progress")
+            report_parts.append("-" * 80)
+            completed = len(self.plan.get_completed_steps())
+            total = len(self.plan.steps)
+            report_parts.append(f"Steps: {completed}/{total} completed")
+            report_parts.append("")
+
+            if completed > 0:
+                report_parts.append("Completed Steps:")
+                for step in self.plan.get_completed_steps():
+                    report_parts.append(f"  ✓ {step.description}")
+                    if step.findings:
+                        report_parts.append(f"    Findings: {', '.join(step.findings[:3])}")
+                report_parts.append("")
+
+            pending = self.plan.get_pending_steps()
+            if pending:
+                report_parts.append("Pending Steps:")
+                for step in pending:
+                    report_parts.append(f"  ○ {step.description}")
+                report_parts.append("")
+
+        # Tool Executions
+        if self.tool_executions:
+            report_parts.append("Tool Executions")
+            report_parts.append("-" * 80)
+            successful = len([e for e in self.tool_executions if e.success])
+            failed = len([e for e in self.tool_executions if not e.success])
+            report_parts.append(f"Successful: {successful}, Failed: {failed}")
+            report_parts.append("")
+
+            # Group by tool
+            by_tool = defaultdict(list)
+            for e in self.tool_executions:
+                by_tool[e.tool_name].append(e)
+
+            for tool_name, executions in by_tool.items():
+                success_count = len([e for e in executions if e.success])
+                report_parts.append(f"  {tool_name}: {success_count}/{len(executions)} successful")
+            report_parts.append("")
+
+        # Knowledge Gaps
+        if self.insights.knowledge_gaps:
+            report_parts.append("Knowledge Gaps")
+            report_parts.append("-" * 80)
+            for gap in self.insights.knowledge_gaps:
+                report_parts.append(f"  - {gap}")
+            report_parts.append("")
+
+        return "\n".join(report_parts)
+
+    def get_statistics(self) -> dict[str, Any]:
+        """
+        Phase 6: Get tracker statistics for analysis.
+
+        Returns:
+            Dictionary with tracker statistics
+        """
+        return {
+            "query": self.query,
+            "created_at": self.created_at.isoformat(),
+            "total_attempts": len(self.attempts),
+            "total_tool_executions": len(self.tool_executions),
+            "successful_tool_executions": len([e for e in self.tool_executions if e.success]),
+            "failed_tool_executions": len([e for e in self.tool_executions if not e.success]),
+            "cached_tool_results": len(self._tool_result_cache),
+            "plan_steps_total": len(self.plan.steps) if self.plan else 0,
+            "plan_steps_completed": len(self.plan.get_completed_steps()) if self.plan else 0,
+            "plan_steps_pending": len(self.plan.get_pending_steps()) if self.plan else 0,
+            "knowledge_gaps_count": len(self.insights.knowledge_gaps),
+            "quality_feedback_count": len(self.insights.quality_feedback),
+            "recommended_improvements_count": len(self.insights.recommended_improvements),
+        }

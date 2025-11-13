@@ -256,6 +256,143 @@ class StatusPanel(RichLog):
         self.write("[bold yellow]Tool Execution Status[/]\n")
         self.add_divider()
 
+    # Phase 6: Tracker progress display methods
+
+    def add_progress_summary(self, tracker_data: dict):
+        """
+        Phase 6: Display research progress summary.
+
+        Args:
+            tracker_data: Dictionary with tracker information:
+                - attempts: List of attempt summaries
+                - plan_progress: Dict with completed/total steps
+                - tool_summary: Dict with successful/total tools
+                - knowledge_gaps: List of identified gaps
+        """
+        from rich.panel import Panel
+        from rich.text import Text
+
+        # Build summary text
+        summary_parts = []
+
+        # Attempts summary
+        if "attempts" in tracker_data:
+            attempts = tracker_data["attempts"]
+            summary_parts.append(f"[bold]Attempts:[/] {len(attempts)}")
+            for attempt in attempts:
+                strategy = attempt.get("strategy", "unknown")
+                quality = attempt.get("quality_score", "N/A")
+                summary_parts.append(f"  - {strategy}: Quality {quality}")
+
+        # Plan progress
+        if "plan_progress" in tracker_data:
+            progress = tracker_data["plan_progress"]
+            completed = progress.get("completed", 0)
+            total = progress.get("total", 0)
+            summary_parts.append(f"\n[bold]Plan Progress:[/] {completed}/{total} steps completed")
+
+        # Tool summary
+        if "tool_summary" in tracker_data:
+            tool_sum = tracker_data["tool_summary"]
+            successful = tool_sum.get("successful", 0)
+            total_tools = tool_sum.get("total", 0)
+            summary_parts.append(f"[bold]Tools:[/] {successful}/{total_tools} successful")
+
+        # Knowledge gaps
+        if "knowledge_gaps" in tracker_data:
+            gaps = tracker_data["knowledge_gaps"]
+            if gaps:
+                gaps_text = ", ".join(gaps[:3])
+                summary_parts.append(f"[bold]Knowledge Gaps:[/] {gaps_text}")
+
+        # Display summary
+        if summary_parts:
+            summary_text = "\n".join(summary_parts)
+            panel = Panel(
+                summary_text,
+                title="[bold cyan]📊 Research Progress[/]",
+                border_style="cyan",
+                expand=False,
+            )
+            self.write(panel)
+            self.write("\n")
+
+    def add_plan_progress(self, completed_steps: list, pending_steps: list):
+        """
+        Phase 6: Display plan progress with completed and pending steps.
+
+        Args:
+            completed_steps: List of completed step descriptions
+            pending_steps: List of pending step descriptions
+        """
+        from rich.table import Table
+
+        table = Table(title="Plan Progress", show_header=True, header_style="bold cyan")
+        table.add_column("Status", style="white")
+        table.add_column("Step", style="cyan")
+
+        # Add completed steps
+        for step in completed_steps[:10]:  # Limit to 10 for display
+            table.add_row("[green]✓[/]", step)
+
+        # Add pending steps
+        for step in pending_steps[:10]:  # Limit to 10 for display
+            table.add_row("[yellow]○[/]", step)
+
+        if len(completed_steps) + len(pending_steps) > 20:
+            table.add_row(
+                "[dim]...[/]",
+                f"[dim]{len(completed_steps) + len(pending_steps) - 20} more steps[/]",
+            )
+
+        self.write(table)
+        self.write("\n")
+
+    def add_tool_execution_log(self, tool_executions: list):
+        """
+        Phase 6: Display tool execution log.
+
+        Args:
+            tool_executions: List of tool execution dictionaries with:
+                - tool_name: Name of the tool
+                - success: Whether execution succeeded
+                - execution_time_ms: Execution time in milliseconds
+                - result: Tool result (truncated)
+        """
+        from rich.table import Table
+
+        table = Table(
+            title="Tool Execution Log", show_header=True, header_style="bold cyan"
+        )
+        table.add_column("Tool", style="cyan")
+        table.add_column("Status", style="white")
+        table.add_column("Time", style="dim")
+        table.add_column("Result", style="white", overflow="fold")
+
+        # Display recent executions (last 10)
+        for exec_data in tool_executions[-10:]:
+            tool_name = exec_data.get("tool_name", "unknown")
+            success = exec_data.get("success", False)
+            time_ms = exec_data.get("execution_time_ms", 0)
+            result = exec_data.get("result", "")
+
+            status_icon = "[green]✓[/]" if success else "[red]✗[/]"
+            time_str = f"{time_ms:.0f}ms" if time_ms > 0 else "N/A"
+            result_preview = result[:50] + "..." if len(result) > 50 else result
+
+            table.add_row(tool_name, status_icon, time_str, result_preview)
+
+        if len(tool_executions) > 10:
+            table.add_row(
+                "[dim]...[/]",
+                "",
+                "",
+                f"[dim]{len(tool_executions) - 10} more executions[/]",
+            )
+
+        self.write(table)
+        self.write("\n")
+
     # ------------------------------------------------------------------
     # Rendering helpers
     # ------------------------------------------------------------------

@@ -582,6 +582,12 @@ class NexusApp(App):
             "on_final_response": lambda strategy, attempts, quality, escalated: reasoning_panel.on_final_response(
                 strategy, attempts, quality, escalated
             ),
+            # Phase 6: Tracker completion for persistence
+            "on_tracker_complete": lambda tracker, query: self._on_tracker_complete(tracker, query),
+            # Phase 6: Real-time progress updates
+            "on_step_progress": lambda step_id, status, description: self._on_step_progress(
+                step_id, status, description
+            ),
         }
 
     def update_resources(self, resources: list[str]):
@@ -767,6 +773,140 @@ class NexusApp(App):
         await self._wait_for_summary_tasks()
         if self.session and self.session_manager:
             await self.session_manager.update_session_summary(self.session, force=False)
+
+    def _on_tracker_complete(self, tracker, query: str) -> None:
+        """
+        Phase 6: Handle tracker completion for persistence.
+
+        Saves the tracker to the session for persistence and displays
+        progress information in the status panel.
+
+        Args:
+            tracker: ResearchProgressTracker instance
+            query: Original user query
+        """
+        from nxs.utils import generate_query_id
+        from nxs.application.progress_tracker import ResearchProgressTracker
+
+        try:
+            # Generate query ID for tracking
+            query_id = generate_query_id(query)
+
+            # Save tracker to session if available
+            if self.session:
+                self.session.save_tracker(query_id, tracker)
+                logger.debug(f"Saved tracker for query: {query_id}")
+
+                # Auto-save session with tracker
+                if self.session_manager:
+                    self.session_manager.save_active_session()
+                    logger.debug("Auto-saved session with tracker")
+
+            # Phase 6: Display progress in status panel
+            status_queue = self.services.status_queue
+            if status_queue:
+                # Display progress summary
+                asyncio.create_task(
+                    self._display_tracker_progress(tracker, status_queue)
+                )
+
+        except Exception as e:
+            logger.error(f"Error saving tracker: {e}", exc_info=True)
+
+    async def _display_tracker_progress(self, tracker, status_queue) -> None:
+        """
+        Phase 6: Display tracker progress in status panel.
+
+        Args:
+            tracker: ResearchProgressTracker instance
+            status_queue: StatusQueue for status updates
+        """
+        try:
+            # Build tracker data for display (use Any to avoid type checking issues)
+            from typing import Any
+
+            tracker_data: dict[str, Any] = {
+                "attempts": [
+                    {
+                        "strategy": a.strategy.value,
+                        "quality_score": a.quality_score,
+                        "status": a.status,
+                    }
+                    for a in tracker.attempts
+                ],
+            }
+
+            # Add plan progress if available
+            if tracker.plan:
+                completed = len(tracker.plan.get_completed_steps())
+                total = len(tracker.plan.steps)
+                tracker_data["plan_progress"] = {
+                    "completed": completed,
+                    "total": total,
+                }
+                # Display plan progress with completed/pending steps
+                completed_steps = [s.description for s in tracker.plan.get_completed_steps()]
+                pending_steps = [s.description for s in tracker.plan.get_pending_steps()]
+                await status_queue.add_plan_progress(completed_steps, pending_steps)
+
+            # Add tool summary
+            if tracker.tool_executions:
+                successful = len([e for e in tracker.tool_executions if e.success])
+                total_tools = len(tracker.tool_executions)
+                tracker_data["tool_summary"] = {
+                    "successful": successful,
+                    "total": total_tools,
+                }
+                # Display tool execution log
+                tool_exec_data = [
+                    {
+                        "tool_name": e.tool_name,
+                        "success": e.success,
+                        "execution_time_ms": e.execution_time_ms,
+                        "result": (e.result[:100] + "..." if e.result and len(e.result) > 100 else e.result or ""),
+                    }
+                    for e in tracker.tool_executions
+                ]
+                await status_queue.add_tool_execution_log(tool_exec_data)
+
+            # Add knowledge gaps
+            if tracker.insights.knowledge_gaps:
+                tracker_data["knowledge_gaps"] = tracker.insights.knowledge_gaps
+
+            # Display progress summary
+            await status_queue.add_divider()
+            await status_queue.add_progress_summary(tracker_data)
+
+        except Exception as e:
+            logger.error(f"Error displaying tracker progress: {e}", exc_info=True)
+
+    def _on_step_progress(self, step_id: str, status: str, description: str) -> None:
+        """
+        Phase 6: Handle real-time step progress updates.
+
+        Args:
+            step_id: Step ID
+            status: Step status (pending, in_progress, completed, skipped, failed)
+            description: Step description
+        """
+        try:
+            status_queue = self.services.status_queue
+            if status_queue:
+                status_icon = {
+                    "pending": "[yellow]○[/]",
+                    "in_progress": "[cyan]⟳[/]",
+                    "completed": "[green]✓[/]",
+                    "skipped": "[dim]⊘[/]",
+                    "failed": "[red]✗[/]",
+                }.get(status, "○")
+
+                asyncio.create_task(
+                    status_queue.add_info_message(
+                        f"{status_icon} Step: {description[:50]}... [{status}]"
+                    )
+                )
+        except Exception as e:
+            logger.debug(f"Error displaying step progress: {e}")
 
     def _handle_approval_request(self, request: ApprovalRequest) -> None:
         """Handle approval request by posting a message to show the dialog.

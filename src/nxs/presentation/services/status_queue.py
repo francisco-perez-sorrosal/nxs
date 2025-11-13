@@ -112,6 +112,26 @@ class StatusQueue:
         """Queue a divider status update."""
         await self._processor.enqueue(StatusUpdate("add_divider", (), {}))
 
+    # Phase 6: Tracker progress display methods
+
+    async def add_progress_summary(self, tracker_data: dict) -> None:
+        """Phase 6: Queue a progress summary status update."""
+        await self._processor.enqueue(
+            StatusUpdate("add_progress_summary", (tracker_data,), {})
+        )
+
+    async def add_plan_progress(self, completed_steps: list, pending_steps: list) -> None:
+        """Phase 6: Queue a plan progress status update."""
+        await self._processor.enqueue(
+            StatusUpdate("add_plan_progress", (completed_steps, pending_steps), {})
+        )
+
+    async def add_tool_execution_log(self, tool_executions: list) -> None:
+        """Phase 6: Queue a tool execution log status update."""
+        await self._processor.enqueue(
+            StatusUpdate("add_tool_execution_log", (tool_executions,), {})
+        )
+
     @property
     def is_running(self) -> bool:
         """Check if the StatusQueue is running."""
