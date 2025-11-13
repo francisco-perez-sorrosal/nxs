@@ -1,0 +1,848 @@
+"""Research Progress Tracker - Context preservation across execution strategies.
+
+This module implements a comprehensive tracking system that preserves context,
+avoids redundant work, and enables intelligent escalation across query execution
+phases (DIRECT → LIGHT_PLANNING → DEEP_REASONING).
+
+Key Features:
+- Tracks execution history across all escalation phases
+- Records tool executions to avoid redundant calls
+- Preserves evaluation feedback to guide subsequent attempts
+- Maintains a plan skeleton showing completed/pending steps
+- Serializes to natural language context for LLM consumption
+"""
+
+import hashlib
+import json
+from collections import defaultdict
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from typing import Any, Literal, Optional
+
+from nxs.application.reasoning.types import (
+    ComplexityAnalysis,
+    EvaluationResult,
+    ExecutionStrategy,
+    ResearchPlan,
+)
+from nxs.logger import get_logger
+
+logger = get_logger("progress_tracker")
+
+
+@dataclass
+class ExecutionAttempt:
+    """Record of a single execution attempt at a specific strategy level."""
+
+    strategy: ExecutionStrategy
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+    status: Literal["in_progress", "completed", "failed", "escalated"] = "in_progress"
+
+    # What was produced
+    response: Optional[str] = None
+    accumulated_results: list[str] = field(default_factory=list)
+
+    # Quality assessment
+    evaluation: Optional[EvaluationResult] = None
+    quality_score: Optional[float] = None
+
+    # Why it ended
+    outcome: str = ""  # "Quality sufficient" | "Escalated due to low quality" | "Error occurred"
+
+
+@dataclass
+class ToolExecution:
+    """Record of a tool call and its result."""
+
+    tool_name: str
+    arguments: dict[str, Any]
+    executed_at: datetime
+    strategy: ExecutionStrategy  # Which strategy level called it
+
+    # Result tracking
+    success: bool
+    result: Optional[str] = None  # Tool output if successful
+    error: Optional[str] = None  # Error message if failed
+
+    # Metadata
+    execution_time_ms: float = 0.0
+    result_hash: str = ""  # Hash of arguments for deduplication
+
+
+@dataclass
+class PlanStep:
+    """A step in the research plan with execution status."""
+
+    id: str  # Unique identifier
+    description: str
+    status: Literal["pending", "in_progress", "completed", "skipped", "failed"] = "pending"
+
+    # Execution tracking
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+    # Results
+    findings: list[str] = field(default_factory=list)  # Key findings from this step
+    tools_used: list[str] = field(default_factory=list)  # Tool names used in this step
+
+    # Relationships
+    depends_on: list[str] = field(default_factory=list)  # IDs of prerequisite steps
+    spawned_from: Optional[str] = None  # ID of parent step if dynamically added
+
+
+@dataclass
+class ResearchPlanSkeleton:
+    """High-level plan structure tracking progress."""
+
+    created_at: datetime
+    created_by: ExecutionStrategy  # Which strategy created this plan
+
+    query: str
+    complexity_analysis: ComplexityAnalysis
+
+    steps: list[PlanStep] = field(default_factory=list)
+    current_step_id: Optional[str] = None
+
+    # Plan evolution
+    revision_count: int = 0  # Incremented when plan is refined
+    last_updated: datetime = field(default_factory=datetime.now)
+
+    def get_completed_steps(self) -> list[PlanStep]:
+        """Return all completed steps."""
+        return [s for s in self.steps if s.status == "completed"]
+
+    def get_pending_steps(self) -> list[PlanStep]:
+        """Return steps not yet started."""
+        return [s for s in self.steps if s.status == "pending"]
+
+    def add_dynamic_step(self, step: PlanStep, after_step_id: str):
+        """Insert a new step discovered during execution."""
+        # Find the index of the step to insert after
+        for i, existing_step in enumerate(self.steps):
+            if existing_step.id == after_step_id:
+                # Insert after this step
+                self.steps.insert(i + 1, step)
+                self.last_updated = datetime.now()
+                return
+
+        # If step not found, append to end
+        logger.warning(f"Step {after_step_id} not found, appending new step to end")
+        self.steps.append(step)
+        self.last_updated = datetime.now()
+
+
+@dataclass
+class AccumulatedInsights:
+    """Key insights gathered across all execution attempts."""
+
+    # Categorical storage
+    confirmed_facts: list[str] = field(default_factory=list)  # High-confidence findings
+    partial_findings: list[str] = field(default_factory=list)  # Low-confidence or incomplete findings
+    knowledge_gaps: list[str] = field(default_factory=list)  # Identified missing information
+
+    # From evaluations
+    quality_feedback: list[str] = field(default_factory=list)  # Reasons for quality issues
+    recommended_improvements: list[str] = field(default_factory=list)  # Suggestions from evaluator
+
+    # Tool-related
+    successful_tool_results: dict[str, str] = field(default_factory=dict)  # tool_name → best result
+    failed_tool_attempts: dict[str, str] = field(default_factory=dict)  # tool_name → error
+
+    def add_from_evaluation(self, evaluation: EvaluationResult):
+        """Extract insights from an evaluation result."""
+        self.knowledge_gaps.extend(evaluation.missing_aspects)
+        self.quality_feedback.append(evaluation.reasoning)
+        self.recommended_improvements.extend(evaluation.additional_queries)
+
+
+class ResearchProgressTracker:
+    """
+    Central tracker for research progress across execution strategies.
+
+    Responsibilities:
+    - Track execution history across all escalation phases
+    - Log tool executions to avoid redundant calls
+    - Maintain research plan skeleton with step progress
+    - Preserve evaluation feedback and insights
+    - Serialize state to context for LLM consumption
+    """
+
+    def __init__(self, query: str, complexity: ComplexityAnalysis):
+        """Initialize progress tracker.
+
+        Args:
+            query: Original user query
+            complexity: Initial complexity analysis
+        """
+        self.query = query
+        self.complexity = complexity
+        self.created_at = datetime.now()
+
+        # Execution tracking
+        self.attempts: list[ExecutionAttempt] = []
+        self.current_attempt: Optional[ExecutionAttempt] = None
+        self.current_strategy: Optional[ExecutionStrategy] = None
+
+        # Tool tracking
+        self.tool_executions: list[ToolExecution] = []
+        self._tool_result_cache: dict[str, str] = {}  # Hash → result
+
+        # Plan tracking
+        self.plan: Optional[ResearchPlanSkeleton] = None
+
+        # Insights accumulation
+        self.insights = AccumulatedInsights(
+            confirmed_facts=[],
+            partial_findings=[],
+            knowledge_gaps=[],
+            quality_feedback=[],
+            recommended_improvements=[],
+            successful_tool_results={},
+            failed_tool_attempts={},
+        )
+
+    # === Execution Management ===
+
+    def start_attempt(self, strategy: ExecutionStrategy):
+        """Begin a new execution attempt at specified strategy level.
+
+        Args:
+            strategy: Execution strategy for this attempt
+        """
+        self.current_strategy = strategy
+        self.current_attempt = ExecutionAttempt(
+            strategy=strategy,
+            started_at=datetime.now(),
+            completed_at=None,
+            status="in_progress",
+            response=None,
+            accumulated_results=[],
+            evaluation=None,
+            quality_score=None,
+            outcome="",
+        )
+        self.attempts.append(self.current_attempt)
+        logger.debug(f"Started execution attempt: {strategy.value}")
+
+    def end_attempt(
+        self,
+        outcome: str,
+        response: str | None = None,
+        evaluation: EvaluationResult | None = None,
+        quality_score: float | None = None,
+    ):
+        """Complete the current execution attempt.
+
+        Args:
+            outcome: Reason for ending (e.g., "Quality sufficient", "Escalated due to low quality")
+            response: Generated response text
+            evaluation: Evaluation result if available
+            quality_score: Quality score (0.0 to 1.0)
+        """
+        if not self.current_attempt:
+            logger.warning("end_attempt called but no current attempt exists")
+            return
+
+        self.current_attempt.completed_at = datetime.now()
+        self.current_attempt.status = "completed" if quality_score and quality_score >= 0.6 else "escalated"
+        self.current_attempt.response = response
+        self.current_attempt.evaluation = evaluation
+        self.current_attempt.quality_score = quality_score
+        self.current_attempt.outcome = outcome
+
+        # Extract insights from evaluation
+        if evaluation:
+            self.insights.add_from_evaluation(evaluation)
+
+        strategy_name = self.current_strategy.value if self.current_strategy else "unknown"
+        logger.debug(
+            f"Ended execution attempt: {strategy_name}, "
+            f"status={self.current_attempt.status}, quality={quality_score}"
+        )
+
+    # === Tool Tracking ===
+
+    def should_execute_tool(self, tool_name: str, arguments: dict) -> tuple[bool, Optional[str]]:
+        """
+        Check if tool should be executed or if we have cached result.
+
+        Args:
+            tool_name: Name of the tool
+            arguments: Tool arguments
+
+        Returns:
+            (should_execute, cached_result)
+            - (True, None): Execute the tool
+            - (False, result): Skip execution, use cached result
+        """
+        arg_hash = self._hash_arguments(tool_name, arguments)
+
+        # Check cache
+        if arg_hash in self._tool_result_cache:
+            logger.debug(f"Cache hit for {tool_name} with hash {arg_hash[:8]}")
+            return False, self._tool_result_cache[arg_hash]
+
+        # Check if same tool+args failed before
+        for exec_record in self.tool_executions:
+            if exec_record.tool_name == tool_name and exec_record.result_hash == arg_hash:
+                if not exec_record.success:
+                    # Failed before, but might be worth retrying in different context
+                    # Return True but log warning
+                    logger.debug(f"Tool {tool_name} failed before, but retrying")
+                    return True, None
+
+        return True, None
+
+    def log_tool_execution(
+        self,
+        tool_name: str,
+        arguments: dict,
+        success: bool,
+        result: str | None = None,
+        error: str | None = None,
+        execution_time_ms: float = 0.0,
+    ):
+        """Record a tool execution.
+
+        Args:
+            tool_name: Name of the tool executed
+            arguments: Tool arguments
+            success: Whether execution succeeded
+            result: Tool output if successful
+            error: Error message if failed
+            execution_time_ms: Execution time in milliseconds
+        """
+        arg_hash = self._hash_arguments(tool_name, arguments)
+
+        execution = ToolExecution(
+            tool_name=tool_name,
+            arguments=arguments,
+            executed_at=datetime.now(),
+            strategy=self.current_strategy or ExecutionStrategy.DIRECT,
+            success=success,
+            result=result,
+            error=error,
+            execution_time_ms=execution_time_ms,
+            result_hash=arg_hash,
+        )
+
+        self.tool_executions.append(execution)
+
+        # Cache successful results
+        if success and result:
+            self._tool_result_cache[arg_hash] = result
+            self.insights.successful_tool_results[tool_name] = result
+        elif not success and error:
+            self.insights.failed_tool_attempts[tool_name] = error
+
+        # Update current attempt
+        if self.current_attempt:
+            self.current_attempt.accumulated_results.append(result or f"Error: {error}")
+
+        logger.debug(
+            f"Logged tool execution: {tool_name}, success={success}, "
+            f"time={execution_time_ms:.2f}ms"
+        )
+
+    def _hash_arguments(self, tool_name: str, arguments: dict) -> str:
+        """Generate deterministic hash for tool+arguments.
+
+        Args:
+            tool_name: Name of the tool
+            arguments: Tool arguments
+
+        Returns:
+            MD5 hash as hex string
+        """
+        combined = f"{tool_name}:{json.dumps(arguments, sort_keys=True)}"
+        return hashlib.md5(combined.encode()).hexdigest()
+
+    # === Plan Management ===
+
+    def set_plan(self, plan: ResearchPlan, strategy: ExecutionStrategy):
+        """Initialize or update the research plan skeleton.
+
+        Args:
+            plan: ResearchPlan from planner
+            strategy: Strategy that created this plan
+        """
+        if self.plan is None:
+            # First plan - convert ResearchPlan to PlanSkeleton
+            self.plan = ResearchPlanSkeleton(
+                created_at=datetime.now(),
+                created_by=strategy,
+                query=plan.original_query,
+                complexity_analysis=plan.complexity_analysis or self.complexity,
+                steps=[
+                    PlanStep(
+                        id=f"step_{i}",
+                        description=subtask.query,
+                        status="pending",
+                        started_at=None,
+                        completed_at=None,
+                        findings=[],
+                        tools_used=[],
+                        depends_on=[],
+                        spawned_from=None,
+                    )
+                    for i, subtask in enumerate(plan.subtasks)
+                ],
+                current_step_id=None,
+                revision_count=0,
+                last_updated=datetime.now(),
+            )
+            logger.debug(f"Created new plan skeleton with {len(self.plan.steps)} steps")
+        else:
+            # Refine existing plan
+            self._refine_plan(plan, strategy)
+
+    def _refine_plan(self, new_plan: ResearchPlan, strategy: ExecutionStrategy):
+        """Merge new plan with existing plan skeleton.
+
+        Args:
+            new_plan: New plan from planner
+            strategy: Strategy that created this plan
+        """
+        if not self.plan:
+            return
+
+        completed_step_ids = {s.id for s in self.plan.get_completed_steps()}
+
+        # Add new steps not in original plan
+        existing_descriptions = {s.description for s in self.plan.steps}
+        new_steps = []
+
+        for i, subtask in enumerate(new_plan.subtasks):
+            if subtask.query not in existing_descriptions:
+                new_step = PlanStep(
+                    id=f"step_{len(self.plan.steps) + len(new_steps)}",
+                    description=subtask.query,
+                    status="pending",
+                    started_at=None,
+                    completed_at=None,
+                    findings=[],
+                    tools_used=[],
+                    depends_on=[],
+                    spawned_from=self.plan.current_step_id,  # Track origin
+                )
+                new_steps.append(new_step)
+
+        self.plan.steps.extend(new_steps)
+        self.plan.revision_count += 1
+        self.plan.last_updated = datetime.now()
+
+        logger.debug(
+            f"Refined plan: added {len(new_steps)} new steps, "
+            f"revision_count={self.plan.revision_count}"
+        )
+
+    def update_step_status(
+        self,
+        step_id: str,
+        status: Literal["pending", "in_progress", "completed", "skipped", "failed"],
+        findings: list[str] | None = None,
+    ):
+        """Update a plan step's status and findings.
+
+        Args:
+            step_id: ID of the step to update
+            status: New status ("pending", "in_progress", "completed", "skipped", "failed")
+            findings: Optional list of findings from this step
+        """
+        if not self.plan:
+            return
+
+        for step in self.plan.steps:
+            if step.id == step_id:
+                step.status = status
+                if status == "in_progress" and not step.started_at:
+                    step.started_at = datetime.now()
+                    self.plan.current_step_id = step_id
+                elif status == "completed":
+                    step.completed_at = datetime.now()
+                    if findings:
+                        step.findings.extend(findings)
+                break
+
+    # === Context Serialization ===
+
+    def to_context_text(self, strategy: ExecutionStrategy) -> str:
+        """
+        Serialize tracker state to natural language context for LLM.
+
+        This text is included in the system prompt or user message to inform
+        the LLM about what has already been tried and what remains.
+
+        Args:
+            strategy: Current execution strategy
+
+        Returns:
+            Formatted context text
+        """
+        sections = []
+
+        # 1. Query and Complexity Overview
+        sections.append("# Research Progress Context\n")
+        sections.append(f"**Query**: {self.query}\n")
+        sections.append(f"**Complexity**: {self.complexity.complexity_level.value}")
+        sections.append(f"**Current Execution Level**: {strategy.value}\n")
+
+        # 2. Execution History
+        if self.attempts:
+            sections.append("\n## Previous Execution Attempts\n")
+            for i, attempt in enumerate(self.attempts[:-1], 1):  # Exclude current
+                sections.append(f"\n### Attempt {i}: {attempt.strategy.value}")
+                sections.append(f"- **Status**: {attempt.status}")
+                sections.append(f"- **Quality Score**: {attempt.quality_score or 'N/A'}")
+
+                if attempt.evaluation:
+                    sections.append(f"- **Evaluation**: {attempt.evaluation.reasoning}")
+                    if attempt.evaluation.missing_aspects:
+                        sections.append(
+                            f"- **Missing Aspects**: {', '.join(attempt.evaluation.missing_aspects)}"
+                        )
+
+                sections.append(f"- **Outcome**: {attempt.outcome}\n")
+
+        # 3. Research Plan Progress
+        if self.plan:
+            sections.append("\n## Research Plan Progress\n")
+
+            completed = self.plan.get_completed_steps()
+            pending = self.plan.get_pending_steps()
+
+            sections.append(
+                f"**Plan Status**: {len(completed)}/{len(self.plan.steps)} steps completed\n"
+            )
+
+            if completed:
+                sections.append("\n### ✓ Completed Steps\n")
+                for step in completed:
+                    sections.append(f"- **{step.description}**")
+                    if step.findings:
+                        sections.append(f"  - Findings: {'; '.join(step.findings)}")
+                    if step.tools_used:
+                        sections.append(f"  - Tools used: {', '.join(step.tools_used)}")
+                sections.append("")
+
+            if pending:
+                sections.append("\n### ○ Pending Steps\n")
+                for step in pending:
+                    sections.append(f"- {step.description}")
+                sections.append("")
+
+        # 4. Tool Execution Summary
+        if self.tool_executions:
+            sections.append("\n## Tool Execution History\n")
+
+            successful_tools = [e for e in self.tool_executions if e.success]
+            failed_tools = [e for e in self.tool_executions if not e.success]
+
+            sections.append(
+                f"**Total tool calls**: {len(self.tool_executions)} "
+                f"({len(successful_tools)} successful, {len(failed_tools)} failed)\n"
+            )
+
+            if successful_tools:
+                sections.append("\n### Successful Tool Executions\n")
+                # Group by tool name
+                by_tool = defaultdict(list)
+                for e in successful_tools:
+                    by_tool[e.tool_name].append(e)
+
+                for tool_name, executions in by_tool.items():
+                    sections.append(f"- **{tool_name}**: {len(executions)} call(s)")
+                    # Show most recent result (truncated)
+                    latest = executions[-1]
+                    if latest.result:
+                        preview = (
+                            latest.result[:200] + "..."
+                            if len(latest.result) > 200
+                            else latest.result
+                        )
+                        sections.append(f"  - Latest result: {preview}")
+                sections.append("")
+
+            if failed_tools:
+                sections.append("\n### Failed Tool Executions\n")
+                for e in failed_tools:
+                    sections.append(f"- **{e.tool_name}**: {e.error}")
+                sections.append("")
+
+        # 5. Accumulated Insights
+        sections.append("\n## Accumulated Insights\n")
+
+        if self.insights.confirmed_facts:
+            sections.append("\n### Confirmed Facts\n")
+            for fact in self.insights.confirmed_facts:
+                sections.append(f"- {fact}")
+            sections.append("")
+
+        if self.insights.knowledge_gaps:
+            sections.append("\n### Identified Knowledge Gaps\n")
+            for gap in self.insights.knowledge_gaps:
+                sections.append(f"- {gap}")
+            sections.append("")
+
+        if self.insights.quality_feedback:
+            sections.append("\n### Quality Feedback from Previous Attempts\n")
+            for feedback in self.insights.quality_feedback[-3:]:  # Last 3
+                sections.append(f"- {feedback}")
+            sections.append("")
+
+        # 6. Guidance for Current Attempt
+        sections.append("\n## Guidance for Current Execution\n")
+
+        if strategy != ExecutionStrategy.DIRECT:
+            sections.append("**Building on previous work**:\n")
+            sections.append("- Review completed steps and their findings above")
+            sections.append("- Focus on identified knowledge gaps")
+            sections.append("- Avoid redundant tool calls (check execution history)")
+            sections.append("- Address quality feedback from previous evaluations")
+
+            if self.insights.recommended_improvements:
+                sections.append("\n**Recommended improvements**:\n")
+                for rec in self.insights.recommended_improvements[:5]:  # Top 5
+                    sections.append(f"- {rec}")
+
+        return "\n".join(sections)
+
+    def to_compact_context(self) -> str:
+        """
+        Compact version of context for token efficiency.
+
+        Use this when full context would be too verbose.
+
+        Returns:
+            Compact context summary
+        """
+        parts = []
+
+        # Summary line
+        completed_steps = len(self.plan.get_completed_steps()) if self.plan else 0
+        total_steps = len(self.plan.steps) if self.plan else 0
+        parts.append(
+            f"Progress: {len(self.attempts)} attempts, "
+            f"{len(self.tool_executions)} tool calls, "
+            f"{completed_steps}/{total_steps} steps done"
+        )
+
+        # Key gaps
+        if self.insights.knowledge_gaps:
+            parts.append(f"Gaps: {', '.join(self.insights.knowledge_gaps[:3])}")
+
+        # Available cached results
+        if self._tool_result_cache:
+            parts.append(f"Cached: {len(self._tool_result_cache)} results")
+
+        return " | ".join(parts)
+
+    # === Persistence ===
+
+    def _serialize_dataclass(self, obj: Any) -> Any:
+        """Recursively serialize dataclass, converting datetime to ISO format.
+
+        Args:
+            obj: Object to serialize (dataclass, dict, list, etc.)
+
+        Returns:
+            Serialized object with datetime as ISO strings
+        """
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        elif isinstance(obj, ExecutionStrategy):
+            return obj.value
+        elif isinstance(obj, ComplexityAnalysis):
+            # Handle special types that need custom serialization
+            result = {}
+            for key, value in asdict(obj).items():
+                result[key] = self._serialize_dataclass(value)
+            return result
+        elif isinstance(obj, EvaluationResult):
+            # Handle EvaluationResult separately
+            result = {}
+            for key, value in asdict(obj).items():
+                result[key] = self._serialize_dataclass(value)
+            return result
+        elif hasattr(obj, "__dataclass_fields__"):
+            # It's a dataclass
+            result = {}
+            for key, value in asdict(obj).items():
+                result[key] = self._serialize_dataclass(value)
+            return result
+        elif isinstance(obj, dict):
+            return {k: self._serialize_dataclass(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._serialize_dataclass(item) for item in obj]
+        else:
+            return obj
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary for session persistence.
+
+        Returns:
+            Dictionary representation of tracker state
+        """
+        return {
+            "query": self.query,
+            "complexity": self._serialize_dataclass(self.complexity),
+            "created_at": self.created_at.isoformat(),
+            "attempts": [self._serialize_dataclass(a) for a in self.attempts],
+            "tool_executions": [self._serialize_dataclass(t) for t in self.tool_executions],
+            "plan": self._serialize_dataclass(self.plan) if self.plan else None,
+            "insights": self._serialize_dataclass(self.insights),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ResearchProgressTracker":
+        """Deserialize from dictionary.
+
+        Args:
+            data: Dictionary representation from to_dict()
+
+        Returns:
+            Reconstructed ResearchProgressTracker instance
+        """
+        # Reconstruct complexity
+        from nxs.application.reasoning.types import ComplexityLevel
+
+        complexity_data = data["complexity"]
+        complexity = ComplexityAnalysis(
+            complexity_level=ComplexityLevel(complexity_data["complexity_level"]),
+            reasoning_required=complexity_data["reasoning_required"],
+            recommended_strategy=ExecutionStrategy(complexity_data["recommended_strategy"]),
+            rationale=complexity_data["rationale"],
+            estimated_iterations=complexity_data.get("estimated_iterations", 1),
+            confidence=complexity_data.get("confidence", 0.0),
+            requires_research=complexity_data.get("requires_research", False),
+            requires_synthesis=complexity_data.get("requires_synthesis", False),
+            multi_part_query=complexity_data.get("multi_part_query", False),
+            tool_count_estimate=complexity_data.get("tool_count_estimate", 0),
+        )
+
+        # Create tracker
+        tracker = cls(data["query"], complexity)
+        tracker.created_at = datetime.fromisoformat(data["created_at"])
+
+        # Reconstruct attempts
+        for attempt_data in data.get("attempts", []):
+            # Handle strategy - could be enum value or string
+            strategy_value = attempt_data["strategy"]
+            if isinstance(strategy_value, str):
+                strategy = ExecutionStrategy(strategy_value)
+            else:
+                strategy = ExecutionStrategy(strategy_value)
+
+            # Reconstruct evaluation if present
+            evaluation = None
+            if attempt_data.get("evaluation"):
+                eval_data = attempt_data["evaluation"]
+                evaluation = EvaluationResult(
+                    is_complete=eval_data.get("is_complete", False),
+                    confidence=eval_data.get("confidence", 0.0),
+                    reasoning=eval_data.get("reasoning", ""),
+                    additional_queries=eval_data.get("additional_queries", []),
+                    missing_aspects=eval_data.get("missing_aspects", []),
+                )
+
+            attempt = ExecutionAttempt(
+                strategy=strategy,
+                started_at=datetime.fromisoformat(attempt_data["started_at"]),
+                completed_at=(
+                    datetime.fromisoformat(attempt_data["completed_at"])
+                    if attempt_data.get("completed_at")
+                    else None
+                ),
+                status=attempt_data["status"],
+                response=attempt_data.get("response"),
+                accumulated_results=attempt_data.get("accumulated_results", []),
+                evaluation=evaluation,
+                quality_score=attempt_data.get("quality_score"),
+                outcome=attempt_data.get("outcome", ""),
+            )
+            tracker.attempts.append(attempt)
+
+        # Reconstruct tool executions
+        for tool_data in data.get("tool_executions", []):
+            # Handle strategy - could be enum value or string
+            strategy_value = tool_data["strategy"]
+            if isinstance(strategy_value, str):
+                strategy = ExecutionStrategy(strategy_value)
+            else:
+                strategy = ExecutionStrategy(strategy_value)
+
+            tool_exec = ToolExecution(
+                tool_name=tool_data["tool_name"],
+                arguments=tool_data["arguments"],
+                executed_at=datetime.fromisoformat(tool_data["executed_at"]),
+                strategy=strategy,
+                success=tool_data["success"],
+                result=tool_data.get("result"),
+                error=tool_data.get("error"),
+                execution_time_ms=tool_data.get("execution_time_ms", 0.0),
+                result_hash=tool_data.get("result_hash", ""),
+            )
+            tracker.tool_executions.append(tool_exec)
+            # Rebuild cache
+            if tool_exec.success and tool_exec.result:
+                tracker._tool_result_cache[tool_exec.result_hash] = tool_exec.result
+
+        # Reconstruct plan
+        if data.get("plan"):
+            plan_data = data["plan"]
+            plan_steps = []
+            for step_data in plan_data.get("steps", []):
+                step = PlanStep(
+                    id=step_data["id"],
+                    description=step_data["description"],
+                    status=step_data["status"],
+                    started_at=(
+                        datetime.fromisoformat(step_data["started_at"])
+                        if step_data.get("started_at")
+                        else None
+                    ),
+                    completed_at=(
+                        datetime.fromisoformat(step_data["completed_at"])
+                        if step_data.get("completed_at")
+                        else None
+                    ),
+                    findings=step_data.get("findings", []),
+                    tools_used=step_data.get("tools_used", []),
+                    depends_on=step_data.get("depends_on", []),
+                    spawned_from=step_data.get("spawned_from"),
+                )
+                plan_steps.append(step)
+
+            # Handle strategy - could be enum value or string
+            created_by_value = plan_data["created_by"]
+            if isinstance(created_by_value, str):
+                created_by = ExecutionStrategy(created_by_value)
+            else:
+                created_by = ExecutionStrategy(created_by_value)
+
+            tracker.plan = ResearchPlanSkeleton(
+                created_at=datetime.fromisoformat(plan_data["created_at"]),
+                created_by=created_by,
+                query=plan_data["query"],
+                complexity_analysis=complexity,  # Reuse reconstructed complexity
+                steps=plan_steps,
+                current_step_id=plan_data.get("current_step_id"),
+                revision_count=plan_data.get("revision_count", 0),
+                last_updated=datetime.fromisoformat(plan_data["last_updated"]),
+            )
+
+        # Reconstruct insights
+        insights_data = data.get("insights", {})
+        tracker.insights = AccumulatedInsights(
+            confirmed_facts=insights_data.get("confirmed_facts", []),
+            partial_findings=insights_data.get("partial_findings", []),
+            knowledge_gaps=insights_data.get("knowledge_gaps", []),
+            quality_feedback=insights_data.get("quality_feedback", []),
+            recommended_improvements=insights_data.get("recommended_improvements", []),
+            successful_tool_results=insights_data.get("successful_tool_results", {}),
+            failed_tool_attempts=insights_data.get("failed_tool_attempts", {}),
+        )
+
+        return tracker
+
