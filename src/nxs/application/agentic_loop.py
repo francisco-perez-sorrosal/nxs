@@ -15,6 +15,7 @@ The refactored design separates concerns:
 """
 
 import asyncio
+import time
 from collections.abc import Mapping
 from typing import Any, Callable, Optional
 
@@ -129,6 +130,9 @@ class AgentLoop:
         self.conversation = conversation
         self.tool_registry = tool_registry
         self.cost_calculator = CostCalculator()
+
+        # Progress tracker integration (Phase 2)
+        self._current_tracker: Optional[Any] = None  # ResearchProgressTracker
 
         logger.debug(
             f"AgentLoop initialized: {conversation.get_message_count()} "
@@ -282,6 +286,38 @@ class AgentLoop:
 
         return final_text_response
 
+    async def _execute_with_tool_tracking(
+        self,
+        query: str,
+        tracker: Any,  # ResearchProgressTracker
+        use_streaming: bool = False,
+        callbacks: Optional[dict[str, Callable]] = None,
+    ) -> str:
+        """
+        Execute query with tool call tracking.
+
+        Wrapper around base run() that intercepts tool executions
+        and logs them to the tracker.
+
+        Args:
+            query: User query to execute
+            tracker: ResearchProgressTracker instance
+            use_streaming: Whether to use streaming (default False for buffered execution)
+            callbacks: Optional callbacks override
+
+        Returns:
+            Final text response from Claude
+        """
+        # Set current tracker for tool execution interception
+        self._current_tracker = tracker
+
+        try:
+            response = await self.run(query, callbacks=callbacks, use_streaming=use_streaming)
+            return response
+        finally:
+            # Clear tracker reference after execution
+            self._current_tracker = None
+
     async def _run_with_streaming(
         self,
         messages: list,
@@ -410,6 +446,11 @@ class AgentLoop:
     ) -> None:
         """Execute tool requests and add results to conversation.
 
+        Modified to integrate with ResearchProgressTracker (Phase 2):
+        - Checks tracker cache before executing tools
+        - Logs tool executions to tracker with timing
+        - Tracks success/failure metadata
+
         Args:
             tool_blocks: List of ToolUseBlock from Claude's response.
             callbacks: Callbacks dictionary.
@@ -423,6 +464,42 @@ class AgentLoop:
             tool_input = tool_block.input
 
             logger.debug(f"Executing tool: {tool_name}")
+
+            # NEW: Check tracker for cached result (Phase 2)
+            cached_result = None
+            should_execute = True
+
+            # Convert tool_input to dict[str, Any] for tracker and execution
+            # ToolUseBlock.input is typed as object but is actually a dict
+            tool_args: dict[str, Any] = {}
+            if isinstance(tool_input, dict):
+                tool_args = {str(k): v for k, v in tool_input.items()}
+            elif hasattr(tool_input, "__dict__"):
+                tool_args = {str(k): v for k, v in tool_input.__dict__.items()}
+
+            if self._current_tracker:
+                should_execute, cached_result = self._current_tracker.should_execute_tool(
+                    tool_name, tool_args
+                )
+
+                if not should_execute and cached_result:
+                    logger.info(f"Using cached result for {tool_name}")
+                    results.append(cached_result)
+
+                    # Notify tool result (cached)
+                    if "on_tool_result" in callbacks:
+                        await callbacks["on_tool_result"](tool_name, cached_result, True)
+
+                    # Log cached execution to tracker
+                    self._current_tracker.log_tool_execution(
+                        tool_name=tool_name,
+                        arguments=tool_args,
+                        success=True,
+                        result=cached_result,
+                        execution_time_ms=0.0,  # Cached, no execution time
+                    )
+
+                    continue
 
             # Notify tool call
             if "on_tool_call" in callbacks:
@@ -475,13 +552,28 @@ class AgentLoop:
                     if "on_tool_result" in callbacks:
                         await callbacks["on_tool_result"](tool_name, error_msg, False)
 
+                    # NEW: Log denied execution to tracker (Phase 2)
+                    if self._current_tracker:
+                        self._current_tracker.log_tool_execution(
+                            tool_name=tool_name,
+                            arguments=tool_args,
+                            success=False,
+                            error=error_msg,
+                            execution_time_ms=0.0,
+                        )
+
                     continue
 
                 logger.info(f"Tool execution approved: {tool_name}")
 
+            # NEW: Track execution time (Phase 2)
+            start_time = time.time()
+            execution_time_ms = 0.0
+
             try:
-                # Execute via ToolRegistry
-                result = await self.tool_registry.execute_tool(tool_name, tool_input)
+                # Execute via ToolRegistry (tool_args already converted above)
+                result = await self.tool_registry.execute_tool(tool_name, tool_args)
+                execution_time_ms = (time.time() - start_time) * 1000
                 results.append(result)
 
                 # Notify tool result
@@ -490,7 +582,18 @@ class AgentLoop:
 
                 logger.debug(f"Tool '{tool_name}' succeeded: {len(result)} chars")
 
+                # NEW: Log successful execution to tracker (Phase 2)
+                if self._current_tracker:
+                    self._current_tracker.log_tool_execution(
+                        tool_name=tool_name,
+                        arguments=tool_args,
+                        success=True,
+                        result=result,
+                        execution_time_ms=execution_time_ms,
+                    )
+
             except Exception as e:
+                execution_time_ms = (time.time() - start_time) * 1000
                 error_msg = f"Error executing tool '{tool_name}': {e}"
                 logger.error(error_msg, exc_info=True)
 
@@ -499,6 +602,16 @@ class AgentLoop:
                 # Notify tool error
                 if "on_tool_result" in callbacks:
                     await callbacks["on_tool_result"](tool_name, error_msg, False)
+
+                # NEW: Log failed execution to tracker (Phase 2)
+                if self._current_tracker:
+                    self._current_tracker.log_tool_execution(
+                        tool_name=tool_name,
+                        arguments=tool_args,
+                        success=False,
+                        error=error_msg,
+                        execution_time_ms=execution_time_ms,
+                    )
 
         # Add all tool results to conversation
         self.conversation.add_tool_results(tool_blocks, results)
