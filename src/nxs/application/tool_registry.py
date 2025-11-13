@@ -351,6 +351,45 @@ class ToolRegistry:
         """
         return list(self._tool_to_provider.keys())
 
+    async def get_tool_schema(self, tool_name: str) -> dict[str, Any] | None:
+        """Get the schema/definition for a specific tool.
+
+        Args:
+            tool_name: Name of the tool to get schema for.
+
+        Returns:
+            Tool definition dictionary with name, description, and input_schema,
+            or None if tool not found.
+
+        Example:
+            >>> schema = await registry.get_tool_schema("search")
+            >>> print(schema["description"])
+            "Search for information"
+        """
+        # Refresh tool definitions if cache is dirty
+        if self._cache_dirty:
+            await self.get_tool_definitions_for_api()
+
+        # Check if tool exists
+        provider_name = self._tool_to_provider.get(tool_name)
+        if provider_name is None:
+            logger.warning(f"Tool '{tool_name}' not found in registry")
+            return None
+
+        # Get tool definition from provider
+        provider = self._providers[provider_name]
+        try:
+            tool_defs = await provider.get_tool_definitions()
+            for tool_def in tool_defs:
+                if tool_def["name"] == tool_name:
+                    return tool_def
+        except Exception as e:
+            logger.error(f"Error getting tool schema for '{tool_name}': {e}", exc_info=True)
+            return None
+
+        logger.warning(f"Tool '{tool_name}' found in registry but not in provider")
+        return None
+
     async def refresh_tools(self) -> None:
         """Force a refresh of tool definitions from all providers.
 

@@ -20,6 +20,7 @@ from typing import Any, Callable, Optional
 
 from anthropic.types import ContentBlockDeltaEvent, Message, MessageStopEvent, ToolUseBlock
 
+from nxs.application.approval import ApprovalManager, ApprovalType, create_approval_request
 from nxs.application.claude import Claude
 from nxs.application.conversation import Conversation
 from nxs.application.tool_registry import ToolRegistry
@@ -64,6 +65,7 @@ class AgentLoop:
         conversation: Optional[Conversation] = None,
         tool_registry: Optional[ToolRegistry] = None,
         callbacks: Optional[dict[str, Callable]] = None,
+        approval_manager: Optional[ApprovalManager] = None,
         # Legacy parameter for backward compatibility
         clients: Optional[Mapping[str, Any]] = None,
     ):
@@ -78,6 +80,7 @@ class AgentLoop:
             conversation: Conversation instance (optional for legacy mode).
             tool_registry: ToolRegistry instance (optional for legacy mode).
             callbacks: Optional callbacks for streaming, tool execution, etc.
+            approval_manager: Optional ApprovalManager for tool execution approval.
             clients: Legacy parameter - Mapping[str, MCPClient] (deprecated).
 
         Example (new mode):
@@ -90,6 +93,7 @@ class AgentLoop:
         """
         self.llm = llm
         self.callbacks = callbacks or {}
+        self.approval_manager = approval_manager
 
         # Backward compatibility: If clients provided, create Conversation and ToolRegistry
         if clients is not None and (conversation is None or tool_registry is None):
@@ -411,6 +415,8 @@ class AgentLoop:
             callbacks: Callbacks dictionary.
         """
         results: list[str] = []
+        approve_all = False
+        deny_all = False
 
         for tool_block in tool_blocks:
             tool_name = tool_block.name
@@ -421,6 +427,57 @@ class AgentLoop:
             # Notify tool call
             if "on_tool_call" in callbacks:
                 await callbacks["on_tool_call"](tool_name, tool_input)
+
+            # Human-in-the-Loop: Request approval if enabled
+            if (
+                self.approval_manager
+                and self.approval_manager.config.require_tool_approval
+                and tool_name not in self.approval_manager.config.tool_whitelist
+                and not approve_all
+            ):
+                logger.info(f"Requesting approval for tool: {tool_name}")
+
+                # Get tool schema for description
+                tool_schema = await self.tool_registry.get_tool_schema(tool_name)
+                description = ""
+                if tool_schema:
+                    description = tool_schema.get("description", "")
+
+                # Build approval request details
+                approval_details = {
+                    "tool_name": tool_name,
+                    "description": description,
+                    "input": tool_input,
+                }
+
+                request = create_approval_request(
+                    approval_type=ApprovalType.TOOL_EXECUTION,
+                    title=f"Execute Tool: {tool_name}",
+                    details=approval_details,
+                )
+
+                response = await self.approval_manager.request_approval(request)
+
+                # Handle approval response
+                if response.metadata.get("approve_all"):
+                    approve_all = True
+                    logger.info("Approve All selected - auto-approving remaining tools")
+                elif response.metadata.get("deny_all"):
+                    deny_all = True
+                    logger.info("Deny All selected - denying remaining tools")
+
+                if not response.approved or deny_all:
+                    logger.info(f"Tool execution denied: {tool_name}")
+                    error_msg = f"Tool '{tool_name}' execution denied by user"
+                    results.append(error_msg)
+
+                    # Notify tool result
+                    if "on_tool_result" in callbacks:
+                        await callbacks["on_tool_result"](tool_name, error_msg, False)
+
+                    continue
+
+                logger.info(f"Tool execution approved: {tool_name}")
 
             try:
                 # Execute via ToolRegistry

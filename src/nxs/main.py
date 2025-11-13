@@ -7,6 +7,7 @@ import typer
 
 # Import logger setup first to ensure logging is configured
 from nxs.logger import get_logger, setup_logger
+from nxs.application.approval import ApprovalConfig, ApprovalManager
 from nxs.application.claude import Claude
 from nxs.application.command_control import CommandControlAgent
 from nxs.application.artifact_manager import ArtifactManager
@@ -32,6 +33,27 @@ anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
 
 assert claude_model, "Error: CLAUDE_MODEL cannot be empty. Update .env"
 assert anthropic_api_key, "Error: ANTHROPIC_API_KEY cannot be empty. Update .env"
+
+
+# Approval Config (Human-in-the-Loop)
+def load_approval_config() -> ApprovalConfig:
+    """Load approval configuration from environment variables."""
+    enabled = os.getenv("APPROVAL_ENABLED", "true").lower() == "true"
+    require_query_analysis = os.getenv("APPROVAL_REQUIRE_QUERY_ANALYSIS", "false").lower() == "true"
+    require_tools = os.getenv("APPROVAL_REQUIRE_TOOLS", "false").lower() == "true"
+    auto_approve_simple = os.getenv("APPROVAL_AUTO_APPROVE_SIMPLE", "true").lower() == "true"
+
+    # Parse tool whitelist (comma-separated)
+    whitelist_str = os.getenv("APPROVAL_TOOL_WHITELIST", "")
+    tool_whitelist = set(t.strip() for t in whitelist_str.split(",") if t.strip())
+
+    return ApprovalConfig(
+        enabled=enabled,
+        require_query_analysis_approval=require_query_analysis,
+        require_tool_approval=require_tools,
+        tool_whitelist=tool_whitelist,
+        auto_approve_simple_queries=auto_approve_simple,
+    )
 
 cli = typer.Typer(
     name="nxs",
@@ -59,14 +81,24 @@ async def main(
     # Create core services
     claude_service = Claude(model=claude_model)
     artifact_manager = ArtifactManager()
-    
+
     # Create SummarizationService - callback will be set after SessionManager is created
     # We'll create a placeholder callback that will be updated with session access
     summarization_service = SummarizationService(llm=claude_service)
 
+    # Create approval system configuration
+    approval_config = load_approval_config()
+    approval_manager = ApprovalManager(config=approval_config)
+
+    logger.info(
+        f"Approval config: enabled={approval_config.enabled}, "
+        f"query_analysis={approval_config.require_query_analysis_approval}, "
+        f"tools={approval_config.require_tool_approval}"
+    )
+
     # Create reasoning configuration (can be customized via env vars)
     reasoning_config = ReasoningConfig()
-    
+
     logger.info(f"Reasoning config: max_iterations={reasoning_config.max_iterations}, "
                 f"direct_threshold={reasoning_config.min_quality_direct}")
 
@@ -111,16 +143,17 @@ async def main(
             evaluator=evaluator,
             synthesizer=synthesizer,
             config=reasoning_config,
+            approval_manager=approval_manager,
         )
-        
-        logger.debug("AdaptiveReasoningLoop initialized with session-managed conversation")
-        
+
+        logger.debug("AdaptiveReasoningLoop initialized with session-managed conversation and approval manager")
+
         # Create CommandControlAgent with composition (no inheritance!)
         agent = CommandControlAgent(
             artifact_manager=artifact_manager,
             reasoning_loop=reasoning_loop,
         )
-        
+
         logger.debug("CommandControlAgent created with AdaptiveReasoningLoop composition")
         return agent
 
@@ -153,11 +186,12 @@ async def main(
     app = NexusApp(
         agent_loop=session.agent_loop,
         artifact_manager=artifact_manager,
+        approval_manager=approval_manager,
         session_name=session.session_id,
         session=session,
         session_manager=session_manager,
     )
-    
+
     logger.info(f"NexusApp initialized with session '{session.session_id}' (using AdaptiveReasoningLoop)")
     
     try:

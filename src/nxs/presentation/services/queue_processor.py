@@ -216,7 +216,11 @@ class AsyncQueueProcessor(Generic[T]):
                         # Type checked: we know this is a regular function
                         self._processor(queue_item.payload)
                 except Exception as e:
-                    logger.error(f"Error in {self._name} processor: {e}", exc_info=True)
+                    import traceback
+                    logger.error(f"Error in {self._name} processor: {e}")
+                    logger.error(f"Payload type: {type(queue_item.payload)}")
+                    logger.error(f"Payload value: {queue_item.payload}")
+                    logger.error(f"Full traceback:\n{traceback.format_exc()}")
                     # Continue processing other items even if one fails
 
                 # Mark the item as done

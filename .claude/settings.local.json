@@ -40,7 +40,12 @@
       "Bash(for f in /Users/fperez/dev/nxs/src/nxs/presentation/services/*.py)",
       "Bash(done)",
       "Bash(for f in /Users/fperez/dev/nxs/src/nxs/presentation/handlers/*.py)",
-      "Bash(timeout 10 pixi run:*)"
+      "Bash(timeout 10 pixi run:*)",
+      "Bash(pkill:*)",
+      "Bash(nexus.log)",
+      "Bash(timeout 30 pixi run start:*)",
+      "Bash(timeout 60 pixi run start:*)",
+      "Bash(sed:*)"
     ],
     "deny": [],
     "ask": []

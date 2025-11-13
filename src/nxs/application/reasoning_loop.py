@@ -11,6 +11,7 @@ This module implements the core self-correcting reasoning system that:
 from typing import Callable, Optional
 
 from nxs.application.agentic_loop import AgentLoop
+from nxs.application.approval import ApprovalManager, ApprovalType, create_approval_request
 from nxs.application.claude import Claude
 from nxs.application.conversation import Conversation
 from nxs.application.reasoning.analyzer import QueryComplexityAnalyzer
@@ -94,6 +95,7 @@ class AdaptiveReasoningLoop(AgentLoop):
         config: Optional[ReasoningConfig] = None,
         callbacks: Optional[dict] = None,
         force_strategy: Optional[ExecutionStrategy] = None,
+        approval_manager: Optional[ApprovalManager] = None,
     ):
         """Initialize adaptive reasoning loop.
 
@@ -109,6 +111,7 @@ class AdaptiveReasoningLoop(AgentLoop):
             config: ReasoningConfig for thresholds and settings
             callbacks: Optional callbacks for TUI integration
             force_strategy: Override strategy for testing/debugging (None = auto)
+            approval_manager: Optional ApprovalManager for query analysis approval
         """
         super().__init__(llm, conversation, tool_registry, callbacks)
 
@@ -119,6 +122,7 @@ class AdaptiveReasoningLoop(AgentLoop):
         self.max_iterations = max_iterations
         self.config = config or ReasoningConfig()
         self.force_strategy = force_strategy
+        self.approval_manager = approval_manager
 
         logger.info(
             f"AdaptiveReasoningLoop initialized: max_iterations={max_iterations}, "
@@ -170,14 +174,40 @@ class AdaptiveReasoningLoop(AgentLoop):
         """
         callbacks = callbacks or self.callbacks
 
-        # Phase 0: COMPLEXITY ANALYSIS
-        logger.info("Phase 0: Analyzing query complexity")
-        await _call_callback(callbacks, "on_analysis_start")
+        # Human-in-the-Loop: Simple choice - execute directly or use reasoning
+        use_reasoning = False
+        initial_strategy = ExecutionStrategy.DIRECT  # Default
+        complexity = None
 
-        # Get available tools for analysis
-        tool_names = self.tool_registry.get_tool_names()
+        if (
+            self.approval_manager
+            and self.approval_manager.config.require_query_analysis_approval
+        ):
+            logger.info("Requesting execution mode from user")
 
-        # Analyze complexity (can be overridden for testing)
+            # Build approval request details - simple binary choice
+            approval_details = {
+                "mode": "execution_choice",  # Signal this is a simple mode choice
+                "options": ["Execute Directly (fast)", "Analyze & Use Reasoning (automatic)"]
+            }
+
+            request = create_approval_request(
+                approval_type=ApprovalType.QUERY_ANALYSIS,
+                title="Choose Execution Mode",
+                details=approval_details,
+            )
+
+            response = await self.approval_manager.request_approval(request)
+
+            if not response.approved:
+                logger.info("Execution mode selection cancelled by user")
+                return "Query cancelled by user."
+
+            # Check which mode user selected
+            use_reasoning = response.metadata.get("use_reasoning", False)
+            logger.info(f"User selected: {'Reasoning mode' if use_reasoning else 'Direct execution'}")
+
+        # Phase 0: COMPLEXITY ANALYSIS (only if user selected reasoning mode or forced)
         if self.force_strategy:
             logger.warning(f"Forcing strategy: {self.force_strategy.value}")
             initial_strategy = self.force_strategy
@@ -189,21 +219,42 @@ class AdaptiveReasoningLoop(AgentLoop):
                 estimated_iterations=self.max_iterations,
                 confidence=1.0,
             )
-        else:
+        elif use_reasoning:
+            # User wants reasoning - run analyzer to determine complexity and strategy
+            logger.info("Running complexity analysis for reasoning mode")
+            await _call_callback(callbacks, "on_analysis_start")
+
+            # Get available tools for analysis
+            tool_names = self.tool_registry.get_tool_names()
+
             complexity = await self.analyzer.analyze(
                 query=query,
                 available_tools=tool_names,
                 conversation_context={},  # Could pass recent messages
             )
+
+            # Analyzer chooses between LIGHT_PLANNING and DEEP_REASONING
             initial_strategy = complexity.recommended_strategy
 
-        logger.info(
-            f"Complexity Analysis: level={complexity.complexity_level.value}, "
-            f"strategy={initial_strategy.value}, "
-            f"iterations={complexity.estimated_iterations}"
-        )
+            logger.info(
+                f"Complexity Analysis: level={complexity.complexity_level.value}, "
+                f"recommended_strategy={initial_strategy.value}, "
+                f"iterations={complexity.estimated_iterations}"
+            )
 
-        await _call_callback(callbacks, "on_analysis_complete", complexity)
+            await _call_callback(callbacks, "on_analysis_complete", complexity)
+        else:
+            # Direct execution - skip analyzer
+            logger.info("Using DIRECT execution - skipping complexity analysis")
+            initial_strategy = ExecutionStrategy.DIRECT
+            complexity = ComplexityAnalysis(
+                complexity_level=ComplexityLevel.SIMPLE,
+                reasoning_required=False,
+                recommended_strategy=ExecutionStrategy.DIRECT,
+                rationale="User selected direct execution",
+                estimated_iterations=1,
+                confidence=1.0,
+            )
 
         # Phase 1: ADAPTIVE EXECUTION WITH SELF-CORRECTION
         # Try execution strategies in order: DIRECT → LIGHT → DEEP
@@ -214,6 +265,7 @@ class AdaptiveReasoningLoop(AgentLoop):
 
         while True:
             logger.info(f"Attempting strategy: {current_strategy.value}")
+            logger.info(f"DEBUG: current_strategy type: {type(current_strategy)}, value: {current_strategy}")  # DEBUG
 
             await _call_callback(
                 callbacks,
@@ -224,16 +276,19 @@ class AdaptiveReasoningLoop(AgentLoop):
 
             # Execute with current strategy (buffered, not streamed to user yet)
             if current_strategy == ExecutionStrategy.DIRECT:
+                logger.info("DEBUG: Executing DIRECT strategy")  # DEBUG
                 result = await self._execute_direct(query, complexity, callbacks)
                 execution_attempts.append(("DIRECT", result, 0.0))
 
             elif current_strategy == ExecutionStrategy.LIGHT_PLANNING:
+                logger.info("DEBUG: Executing LIGHT_PLANNING strategy")  # DEBUG
                 result = await self._execute_light_planning(
                     query, complexity, callbacks
                 )
                 execution_attempts.append(("LIGHT", result, 0.0))
 
             else:  # DEEP_REASONING
+                logger.info("DEBUG: Executing DEEP_REASONING strategy")  # DEBUG
                 result = await self._execute_deep_reasoning(
                     query, complexity, callbacks
                 )

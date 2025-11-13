@@ -113,13 +113,31 @@ class QueryHandler:
             logger.info(f"Query processing completed successfully (query_id={query_id})")
 
         except Exception as e:
-            logger.error(f"Error processing query (query_id={query_id}): {e}", exc_info=True)
-            chat = self.chat_panel_getter()
-            chat.add_panel(
-                f"[bold red]Error:[/] {str(e)}",
-                title="Error",
-                style="red",
-            )
+            # Check if this is a BadRequestError about incomplete tool exchanges
+            error_msg = str(e)
+            if "tool_use" in error_msg and "tool_result" in error_msg:
+                logger.error(f"Detected corrupt conversation state: {error_msg}")
+                logger.info("Clearing conversation to recover from corrupt state")
+
+                # Clear the conversation
+                if hasattr(self.agent_loop, 'conversation'):
+                    self.agent_loop.conversation.clear_history()
+
+                chat = self.chat_panel_getter()
+                chat.add_panel(
+                    "[bold red]Conversation state was corrupted (incomplete tool exchange).[/]\n"
+                    "[yellow]Conversation has been cleared. Please try your query again.[/]",
+                    title="Error - Conversation Cleared",
+                    style="red",
+                )
+            else:
+                logger.error(f"Error processing query (query_id={query_id}): {error_msg}", exc_info=True)
+                chat = self.chat_panel_getter()
+                chat.add_panel(
+                    f"[bold red]Error:[/] {error_msg}",
+                    title="Error",
+                    style="red",
+                )
         finally:
             logger.debug(f"Cleaning up after query processing (query_id={query_id})")
 

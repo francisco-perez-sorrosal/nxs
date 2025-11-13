@@ -5,6 +5,7 @@ NexusApp - Main Textual application for the Nexus TUI.
 import asyncio
 from typing import Callable, Optional, Sequence
 from textual.app import App, ComposeResult
+from textual.message import Message
 from textual.widgets import Header, Footer
 from textual.containers import Container, Vertical, Horizontal
 from textual.binding import Binding
@@ -19,8 +20,10 @@ from nxs.presentation.widgets.status_panel import StatusPanel
 from nxs.presentation.widgets.reasoning_trace_panel import ReasoningTracePanel
 from nxs.presentation.widgets.input_field import NexusInput
 from nxs.presentation.widgets.mcp_panel import MCPPanel
+from nxs.presentation.widgets.approval_overlay import ApprovalOverlay
 from nxs.presentation.services import ServiceContainer
 from nxs.application.artifact_manager import ArtifactManager
+from nxs.application.approval import ApprovalManager, ApprovalRequest
 from nxs.application.session import Session
 from nxs.application.session_manager import SessionManager
 from nxs.application.summarization import SummarizationService
@@ -29,6 +32,14 @@ from nxs.domain.protocols import Cache
 from nxs.logger import get_logger
 
 logger = get_logger("nexus_tui")
+
+
+class ShowApprovalRequest(Message):
+    """Message to show an approval request dialog."""
+
+    def __init__(self, request: ApprovalRequest) -> None:
+        super().__init__()
+        self.request = request
 
 
 class NexusApp(App):
@@ -74,6 +85,7 @@ class NexusApp(App):
         self,
         agent_loop,
         artifact_manager: ArtifactManager,
+        approval_manager: ApprovalManager | None = None,
         event_bus: EventBus | None = None,
         prompt_info_cache: Cache[str, str | None] | None = None,
         prompt_schema_cache: Cache[str, tuple] | None = None,
@@ -87,6 +99,8 @@ class NexusApp(App):
         Args:
             agent_loop: The agent loop instance (core.chat.AgentLoop)
             artifact_manager: The ArtifactManager instance for accessing resources and commands
+            approval_manager: Optional ApprovalManager for human-in-the-loop approvals.
+                            If None, a new ApprovalManager will be created.
             event_bus: Optional EventBus instance. If None, a new EventBus will be created.
                       The EventBus is used for decoupled event-driven communication between
                       the core layer (ArtifactManager) and the UI layer (NexusApp).
@@ -101,6 +115,7 @@ class NexusApp(App):
         super().__init__()
         self.agent_loop = agent_loop
         self.artifact_manager = artifact_manager
+        self.approval_manager = approval_manager or ApprovalManager()
         self.resources: list[str] = []
         self.commands: list[str] = []
         self._mcp_initialized = False  # Track MCP initialization status
@@ -110,6 +125,9 @@ class NexusApp(App):
         self._last_displayed_summary: tuple[str, int] | None = None
         self._session_info_displayed = False
         self.session_manager = session_manager
+
+        # Register approval callback
+        self.approval_manager.set_callback(self._handle_approval_request)
 
         summarization_service = (
             session_manager.summarizer
@@ -749,3 +767,66 @@ class NexusApp(App):
         await self._wait_for_summary_tasks()
         if self.session and self.session_manager:
             await self.session_manager.update_session_summary(self.session, force=False)
+
+    def _handle_approval_request(self, request: ApprovalRequest) -> None:
+        """Handle approval request by posting a message to show the dialog.
+
+        This callback is invoked by ApprovalManager when approval is requested.
+        It posts a message to the app to show the modal in the proper event loop context.
+
+        Args:
+            request: The approval request to handle
+        """
+        logger.info(f"=== APPROVAL CALLBACK TRIGGERED ===")
+        logger.info(f"Posting ShowApprovalRequest message for: {request.id} - {request.title}")
+
+        # Post a message to the app to handle in the main event loop
+        self.post_message(ShowApprovalRequest(request))
+
+    async def on_show_approval_request(self, message: ShowApprovalRequest) -> None:
+        """Handle the ShowApprovalRequest message by displaying the unified approval dialog.
+
+        This runs in the main Textual event loop. Since push_screen_wait requires a worker
+        context, we spawn a worker to handle the modal dialog.
+
+        Args:
+            message: The approval request message
+        """
+        request = message.request
+
+        logger.info(f"=== HANDLING APPROVAL REQUEST IN MAIN LOOP ===")
+        logger.info(f"Request: {request.id} - {request.title}")
+        logger.info(f"Request type: {request.type}")
+
+        # Define worker function to show dialog and wait for response
+        async def show_approval_worker() -> None:
+            """Worker function to show approval dialog and handle response."""
+            logger.info("Worker: Showing unified ApprovalOverlay...")
+
+            try:
+                response = await self.push_screen_wait(ApprovalOverlay(request))
+                logger.info(f"=== DIALOG RETURNED ===")
+                logger.info(f"Response approved: {response.approved}")
+                logger.info(f"Response selected_option: {response.selected_option}")
+                logger.info(f"Response metadata: {response.metadata}")
+
+            except Exception as e:
+                logger.error(f"Exception in push_screen_wait: {e}", exc_info=True)
+                # Create a cancelled response
+                from nxs.application.approval import ApprovalResponse
+
+                response = ApprovalResponse(
+                    request_id=request.id,
+                    approved=False,
+                    selected_option="Cancel",
+                    metadata={"error": str(e)},
+                )
+
+            # Submit the response back to the approval manager
+            logger.info(f"Worker: Submitting response to approval manager")
+            self.approval_manager.submit_response(response)
+            logger.info("Worker: Response submitted successfully")
+
+        # Run the approval dialog in a worker (allows push_screen_wait to work)
+        logger.info("Spawning worker to show approval dialog...")
+        self.run_worker(show_approval_worker(), exclusive=True)
