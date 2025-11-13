@@ -24,6 +24,7 @@ from nxs.application.reasoning.types import (
     EvaluationResult,
     ExecutionStrategy,
     ResearchPlan,
+    SubTask,
 )
 from nxs.logger import get_logger
 
@@ -400,6 +401,12 @@ class ResearchProgressTracker:
     def _refine_plan(self, new_plan: ResearchPlan, strategy: ExecutionStrategy):
         """Merge new plan with existing plan skeleton.
 
+        Phase 4: Enhanced refinement with:
+        - Smart merging of old and new plans
+        - Step deduplication using similarity detection
+        - Dependency tracking
+        - Preserving completed steps
+
         Args:
             new_plan: New plan from planner
             strategy: Strategy that created this plan
@@ -407,35 +414,195 @@ class ResearchProgressTracker:
         if not self.plan:
             return
 
+        # Phase 4: Get completed and in-progress steps (preserve these)
         completed_step_ids = {s.id for s in self.plan.get_completed_steps()}
+        in_progress_step_ids = {
+            s.id for s in self.plan.steps if s.status == "in_progress"
+        }
+        preserved_step_ids = completed_step_ids | in_progress_step_ids
 
-        # Add new steps not in original plan
-        existing_descriptions = {s.description for s in self.plan.steps}
+        # Phase 4: Build mapping of existing steps by description (normalized)
+        existing_steps_by_desc = {
+            self._normalize_step_description(s.description): s
+            for s in self.plan.steps
+        }
+
+        # Phase 4: Track which new subtasks match existing steps
+        matched_steps = []
         new_steps = []
+        skipped_steps = []
 
-        for i, subtask in enumerate(new_plan.subtasks):
-            if subtask.query not in existing_descriptions:
-                new_step = PlanStep(
-                    id=f"step_{len(self.plan.steps) + len(new_steps)}",
-                    description=subtask.query,
-                    status="pending",
-                    started_at=None,
-                    completed_at=None,
-                    findings=[],
-                    tools_used=[],
-                    depends_on=[],
-                    spawned_from=self.plan.current_step_id,  # Track origin
+        for subtask in new_plan.subtasks:
+            normalized_desc = self._normalize_step_description(subtask.query)
+
+            # Check for exact match
+            if normalized_desc in existing_steps_by_desc:
+                existing_step = existing_steps_by_desc[normalized_desc]
+                matched_steps.append(existing_step)
+                # If step is pending and new plan suggests it, keep it
+                # If step is completed, we'll skip it in execution
+                continue
+
+            # Phase 4: Check for similar steps (fuzzy matching)
+            similar_step = self._find_similar_step(subtask.query, self.plan.steps)
+            if similar_step:
+                # Found similar step - update description if needed, but preserve status
+                if similar_step.status in ["pending", "failed"]:
+                    # Update description to match new plan's wording
+                    similar_step.description = subtask.query
+                    matched_steps.append(similar_step)
+                else:
+                    # Step is completed/in_progress - skip adding duplicate
+                    skipped_steps.append(similar_step)
+                continue
+
+            # Phase 4: New step - add it
+            new_step = PlanStep(
+                id=f"step_{len(self.plan.steps) + len(new_steps)}",
+                description=subtask.query,
+                status="pending",
+                started_at=None,
+                completed_at=None,
+                findings=[],
+                tools_used=[],
+                depends_on=self._extract_dependencies(subtask, matched_steps),
+                spawned_from=self.plan.current_step_id,  # Track origin
+            )
+            new_steps.append(new_step)
+
+        # Phase 4: Mark orphaned pending steps as skipped (if they're not in new plan)
+        # Only skip if they're truly not needed (not completed/in_progress)
+        orphaned_steps = []
+        new_descriptions = {
+            self._normalize_step_description(s.query) for s in new_plan.subtasks
+        }
+        for step in self.plan.steps:
+            if (
+                step.status == "pending"
+                and step.id not in preserved_step_ids
+                and self._normalize_step_description(step.description) not in new_descriptions
+            ):
+                # Check if it's similar to any new step
+                is_similar = any(
+                    self._are_steps_similar(step.description, s.query)
+                    for s in new_plan.subtasks
                 )
-                new_steps.append(new_step)
+                if not is_similar:
+                    orphaned_steps.append(step)
 
+        # Mark orphaned steps as skipped (but don't remove them - they might be needed later)
+        for step in orphaned_steps:
+            if step.status == "pending":
+                step.status = "skipped"
+                logger.debug(f"Marked orphaned step as skipped: {step.description}")
+
+        # Phase 4: Add new steps to plan
         self.plan.steps.extend(new_steps)
         self.plan.revision_count += 1
         self.plan.last_updated = datetime.now()
 
-        logger.debug(
-            f"Refined plan: added {len(new_steps)} new steps, "
+        logger.info(
+            f"Refined plan: matched {len(matched_steps)} existing steps, "
+            f"added {len(new_steps)} new steps, "
+            f"skipped {len(skipped_steps)} duplicates, "
+            f"marked {len(orphaned_steps)} as skipped, "
             f"revision_count={self.plan.revision_count}"
         )
+
+    def _normalize_step_description(self, description: str) -> str:
+        """Normalize step description for comparison.
+
+        Args:
+            description: Step description text
+
+        Returns:
+            Normalized description (lowercase, stripped, basic cleanup)
+        """
+        # Basic normalization: lowercase, strip, remove extra whitespace
+        normalized = " ".join(description.lower().strip().split())
+        # Remove common prefixes that don't affect meaning
+        prefixes = ["step", "task", "subtask", "1.", "2.", "3.", "4.", "5."]
+        for prefix in prefixes:
+            if normalized.startswith(prefix):
+                normalized = normalized[len(prefix) :].strip()
+        return normalized
+
+    def _find_similar_step(
+        self, description: str, existing_steps: list[PlanStep]
+    ) -> Optional[PlanStep]:
+        """Find a similar step in existing steps using fuzzy matching.
+
+        Args:
+            description: New step description
+            existing_steps: List of existing plan steps
+
+        Returns:
+            Similar step if found, None otherwise
+        """
+        normalized_new = self._normalize_step_description(description)
+
+        for step in existing_steps:
+            if self._are_steps_similar(description, step.description):
+                return step
+
+        return None
+
+    def _are_steps_similar(self, desc1: str, desc2: str, threshold: float = 0.7) -> bool:
+        """Check if two step descriptions are similar.
+
+        Uses simple word overlap ratio for similarity detection.
+
+        Args:
+            desc1: First description
+            desc2: Second description
+            threshold: Similarity threshold (0.0 to 1.0)
+
+        Returns:
+            True if descriptions are similar enough
+        """
+        # Normalize both descriptions
+        words1 = set(self._normalize_step_description(desc1).split())
+        words2 = set(self._normalize_step_description(desc2).split())
+
+        if not words1 or not words2:
+            return False
+
+        # Calculate Jaccard similarity (intersection over union)
+        intersection = len(words1 & words2)
+        union = len(words1 | words2)
+
+        if union == 0:
+            return False
+
+        similarity = intersection / union
+        return similarity >= threshold
+
+    def _extract_dependencies(
+        self, subtask: SubTask, matched_steps: list[PlanStep]
+    ) -> list[str]:
+        """Extract dependency IDs for a subtask.
+
+        Args:
+            subtask: SubTask from new plan
+            matched_steps: List of matched existing steps
+
+        Returns:
+            List of step IDs this subtask depends on
+        """
+        # Use subtask.dependencies if available
+        if subtask.dependencies:
+            # Map dependency descriptions to step IDs
+            dep_ids = []
+            for dep_desc in subtask.dependencies:
+                for step in matched_steps:
+                    if self._are_steps_similar(dep_desc, step.description):
+                        dep_ids.append(step.id)
+            return dep_ids
+
+        # If no explicit dependencies, infer from order
+        # (later steps might depend on earlier ones)
+        # For now, return empty - can be enhanced later
+        return []
 
     def update_step_status(
         self,

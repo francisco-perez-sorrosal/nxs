@@ -52,6 +52,11 @@ class Planner:
         Args:
             query: User's question or goal
             context: Optional context (resources, history, complexity info, mode)
+                    Phase 4: Now supports tracker context:
+                    - previous_attempts: List of previous attempt summaries
+                    - knowledge_gaps: Identified gaps from evaluations
+                    - completed_steps: Steps already done in previous attempts
+                    - available_tools: Tool names available
 
         Returns:
             ResearchPlan with ordered subtasks/queries
@@ -61,15 +66,51 @@ class Planner:
         # Extract context info
         context = context or {}
         mode = context.get("mode", "deep")  # "light" or "deep"
-        available_tools = context.get("tools", [])
+        available_tools = context.get("tools", []) or context.get("available_tools", [])
         complexity_info = context.get("complexity")
+
+        # Phase 4: Extract tracker context
+        previous_attempts = context.get("previous_attempts", [])
+        knowledge_gaps = context.get("knowledge_gaps", [])
+        completed_steps = context.get("completed_steps", [])
 
         # Adjust max subtasks based on mode
         max_subtasks = 2 if mode == "light" else self.config.max_subtasks
 
+        # Phase 4: Build enhanced context string with tracker information
+        context_parts = [f"Mode: {mode}"]
+        if complexity_info:
+            context_parts.append(f"Complexity: {complexity_info}")
+
+        # Add previous attempts context
+        if previous_attempts:
+            context_parts.append("\n## Previous Execution Attempts")
+            for attempt in previous_attempts:
+                strategy = attempt.get("strategy", "unknown")
+                quality = attempt.get("quality", "N/A")
+                evaluation = attempt.get("evaluation", "")
+                context_parts.append(
+                    f"- {strategy}: Quality {quality}"
+                    + (f", Evaluation: {evaluation}" if evaluation else "")
+                )
+
+        # Add completed steps context
+        if completed_steps:
+            context_parts.append("\n## Already Completed Steps")
+            context_parts.append("Build upon these completed steps:")
+            for step_desc in completed_steps:
+                context_parts.append(f"- {step_desc}")
+
+        # Add knowledge gaps context
+        if knowledge_gaps:
+            context_parts.append("\n## Knowledge Gaps to Address")
+            for gap in knowledge_gaps:
+                context_parts.append(f"- {gap}")
+
+        context_str = "\n".join(context_parts)
+
         # Format prompt
         tools_str = ", ".join(available_tools) if available_tools else "Available tools not specified"
-        context_str = f"Mode: {mode}, Complexity: {complexity_info}" if complexity_info else f"Mode: {mode}"
 
         prompt = format_prompt(
             self.prompt_template,

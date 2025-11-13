@@ -28,6 +28,20 @@ ${tools}
 
 ${context}
 
+# Important Notes
+
+If the context above includes "Previous Execution Attempts", "Already Completed Steps", or "Knowledge Gaps to Address", this means you are refining an existing plan:
+
+1. **Build upon completed work**: Do NOT recreate subtasks that are already completed. Focus on new areas or gaps.
+
+2. **Address knowledge gaps**: If knowledge gaps are listed, prioritize creating subtasks that specifically address these gaps.
+
+3. **Avoid redundancy**: Review completed steps and ensure your new subtasks don't duplicate work that's already been done.
+
+4. **Progressive refinement**: If previous attempts had low quality, create subtasks that address the specific issues mentioned in the evaluation.
+
+5. **Smart merging**: If a subtask is similar to a completed step but needs refinement, you can create a more specific version, but acknowledge the existing work.
+
 # Output Format
 
 Provide your plan as a structured list:
@@ -41,5 +55,5 @@ Provide your plan as a structured list:
 3. [LOW PRIORITY] Third subtask description
    Tools: tool4
 
-Then provide an overall strategy summary explaining your approach.
+Then provide an overall strategy summary explaining your approach. If refining an existing plan, explain how your new subtasks build upon or address gaps from previous attempts.
 

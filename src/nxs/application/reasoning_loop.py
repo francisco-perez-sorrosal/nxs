@@ -496,26 +496,38 @@ class AdaptiveReasoningLoop(AgentLoop):
         logger.info("Light planning execution")
         await _call_callback(callbacks, "on_light_planning")
 
-        # NEW: Generate or refine plan with tracker context (Phase 3)
-        if tracker.plan is None:
-            # First planning attempt
-            plan = await self.planner.generate_plan(
-                query, context={"complexity": complexity, "mode": "light"}
-            )
-            tracker.set_plan(plan, ExecutionStrategy.LIGHT_PLANNING)
-        else:
-            # Refine existing plan based on gaps
-            plan_context = {
-                "mode": "light",
-                "complexity": complexity,
-                "previous_attempts": len(tracker.attempts),
-                "knowledge_gaps": tracker.insights.knowledge_gaps,
-                "completed_steps": [
+        # Phase 4: Generate or refine plan with full tracker context
+        plan_context = {
+            "mode": "light",
+            "complexity": complexity,
+            "available_tools": self.tool_registry.get_tool_names(),
+        }
+
+        # Phase 4: Add tracker context if this is a refinement (plan exists or has previous attempts)
+        if tracker.plan is not None or len(tracker.attempts) > 1:
+            # Include previous attempts for context
+            if len(tracker.attempts) > 1:
+                plan_context["previous_attempts"] = [
+                    {
+                        "strategy": a.strategy.value,
+                        "quality": a.quality_score,
+                        "evaluation": a.evaluation.reasoning if a.evaluation else None,
+                    }
+                    for a in tracker.attempts[:-1]  # Exclude current
+                ]
+
+            # Include knowledge gaps
+            if tracker.insights.knowledge_gaps:
+                plan_context["knowledge_gaps"] = tracker.insights.knowledge_gaps
+
+            # Include completed steps if plan exists
+            if tracker.plan:
+                plan_context["completed_steps"] = [
                     s.description for s in tracker.plan.get_completed_steps()
-                ],
-            }
-            plan = await self.planner.generate_plan(query, context=plan_context)
-            tracker.set_plan(plan, ExecutionStrategy.LIGHT_PLANNING)
+                ]
+
+        plan = await self.planner.generate_plan(query, context=plan_context)
+        tracker.set_plan(plan, ExecutionStrategy.LIGHT_PLANNING)
 
         await _call_callback(callbacks, "on_planning_complete", len(plan.subtasks), "light")
 
@@ -644,29 +656,35 @@ class AdaptiveReasoningLoop(AgentLoop):
         logger.info(f"Phase 1: Planning for query: {query[:100]}")
         await _call_callback(callbacks, "on_planning")
 
-        # NEW: Generate comprehensive plan with tracker context (Phase 3)
+        # Phase 4: Generate comprehensive plan with full tracker context
         plan_context = {
             "mode": "deep",
             "complexity": complexity,
             "available_tools": self.tool_registry.get_tool_names(),
         }
 
-        # NEW: Add previous attempt context if escalated (Phase 3)
-        if len(tracker.attempts) > 1:
-            plan_context["previous_attempts"] = [
-                {
-                    "strategy": a.strategy.value,
-                    "quality": a.quality_score,
-                    "evaluation": a.evaluation.reasoning if a.evaluation else None,
-                }
-                for a in tracker.attempts[:-1]  # Exclude current
-            ]
-            plan_context["knowledge_gaps"] = tracker.insights.knowledge_gaps
-            plan_context["completed_steps"] = (
-                [s.description for s in tracker.plan.get_completed_steps()]
-                if tracker.plan
-                else []
-            )
+        # Phase 4: Add tracker context if this is a refinement (plan exists or has previous attempts)
+        if tracker.plan is not None or len(tracker.attempts) > 1:
+            # Include previous attempts for context
+            if len(tracker.attempts) > 1:
+                plan_context["previous_attempts"] = [
+                    {
+                        "strategy": a.strategy.value,
+                        "quality": a.quality_score,
+                        "evaluation": a.evaluation.reasoning if a.evaluation else None,
+                    }
+                    for a in tracker.attempts[:-1]  # Exclude current
+                ]
+
+            # Include knowledge gaps
+            if tracker.insights.knowledge_gaps:
+                plan_context["knowledge_gaps"] = tracker.insights.knowledge_gaps
+
+            # Include completed steps if plan exists
+            if tracker.plan:
+                plan_context["completed_steps"] = [
+                    s.description for s in tracker.plan.get_completed_steps()
+                ]
 
         plan = await self.planner.generate_plan(query, context=plan_context)
         plan.complexity_analysis = complexity
