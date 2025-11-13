@@ -124,16 +124,37 @@ class ReasoningTracePanel(RichLog):
         """Display planning start message."""
         self.write("[dim]📋 Starting task planning...[/]\n")
 
-    def on_planning_complete(self, subtask_count: int, mode: str):
+    def on_planning_complete(self, plan, mode: str):
         """
-        Display planning completion.
+        Display planning completion with full plan details.
 
         Args:
-            subtask_count: Number of subtasks generated
+            plan: ResearchPlan object with subtasks
             mode: Planning mode (light or deep)
         """
         mode_color = "yellow" if mode == "light" else "red"
+        subtask_count = len(plan.subtasks) if plan and plan.subtasks else 0
+
+        # Show header
         self.write(f"[{mode_color}]✓ Planning complete ({mode} mode): {subtask_count} subtasks[/]\n\n")
+
+        # Show the actual plan steps
+        if plan and plan.subtasks:
+            plan_table = Table(
+                title="Research Plan",
+                show_header=True,
+                border_style=mode_color,
+                expand=False,
+            )
+            plan_table.add_column("Step", style="cyan", width=4, justify="right")
+            plan_table.add_column("Task", style="white", overflow="fold")
+
+            for i, subtask in enumerate(plan.subtasks, 1):
+                plan_table.add_row(f"{i}.", subtask.query)
+
+            panel = Panel(plan_table, border_style=mode_color, expand=False)
+            self.write(panel)
+            self.write("\n")
 
     # ====================================================================
     # Quality Evaluation Events

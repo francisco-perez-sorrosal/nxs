@@ -32,6 +32,35 @@ from nxs.logger import get_logger
 logger = get_logger("progress_tracker")
 
 
+# Tool Caching Policy (Phase 7.1 - Edge Cases)
+# Defines which tools should bypass caching due to non-deterministic behavior
+# or time-sensitive data requirements
+TOOL_CACHING_POLICY = {
+    # Time-sensitive tools - always execute fresh
+    "get_current_time": "no-cache",
+    "get_date": "no-cache",
+    "get_datetime": "no-cache",
+
+    # Real-time data tools - may return stale data if cached
+    "web_search": "cache",  # Search results are generally stable for short periods
+    "fetch_url": "no-cache",  # URLs may update frequently
+    "get_weather": "no-cache",  # Weather changes frequently
+
+    # Random/non-deterministic tools
+    "random_sample": "no-cache",
+    "generate_random": "no-cache",
+
+    # Default: cache all other tools
+    # Tools not listed here will be cached by default
+}
+
+
+# Maximum size for individual tool results (in characters)
+# Results larger than this will be truncated to prevent context explosion
+# With 50 max tool executions, this caps tool results at ~500KB total
+MAX_TOOL_RESULT_SIZE = 10_000  # 10KB per result (~2,500 tokens)
+
+
 class ContextVerbosity:
     """Phase 5: Context verbosity levels for token optimization."""
 
@@ -279,6 +308,9 @@ class ResearchProgressTracker:
         """
         Check if tool should be executed or if we have cached result.
 
+        Applies tool caching policy to prevent stale data from time-sensitive
+        or non-deterministic tools.
+
         Args:
             tool_name: Name of the tool
             arguments: Tool arguments
@@ -288,9 +320,17 @@ class ResearchProgressTracker:
             - (True, None): Execute the tool
             - (False, result): Skip execution, use cached result
         """
+        # Check tool caching policy
+        policy = TOOL_CACHING_POLICY.get(tool_name, "cache")
+
+        if policy == "no-cache":
+            # Tool should always execute fresh (time-sensitive or non-deterministic)
+            logger.debug(f"Tool {tool_name} has no-cache policy, always executing")
+            return True, None
+
         arg_hash = self._hash_arguments(tool_name, arguments)
 
-        # Check cache
+        # Check cache (only for tools with cache policy)
         if arg_hash in self._tool_result_cache:
             logger.debug(f"Cache hit for {tool_name} with hash {arg_hash[:8]}")
             return False, self._tool_result_cache[arg_hash]
@@ -317,6 +357,9 @@ class ResearchProgressTracker:
     ):
         """Record a tool execution.
 
+        Truncates large results to prevent context explosion while preserving
+        the essential information.
+
         Args:
             tool_name: Name of the tool executed
             arguments: Tool arguments
@@ -327,13 +370,26 @@ class ResearchProgressTracker:
         """
         arg_hash = self._hash_arguments(tool_name, arguments)
 
+        # Truncate large results to prevent context explosion
+        truncated_result = result
+        was_truncated = False
+        if result and len(result) > MAX_TOOL_RESULT_SIZE:
+            original_size = len(result)
+            truncated_result = result[:MAX_TOOL_RESULT_SIZE]
+            truncated_result += f"\n\n[... Result truncated: {original_size - MAX_TOOL_RESULT_SIZE:,} characters omitted ({original_size:,} total)]"
+            was_truncated = True
+            logger.debug(
+                f"Truncated {tool_name} result from {original_size:,} to "
+                f"{len(truncated_result):,} chars"
+            )
+
         execution = ToolExecution(
             tool_name=tool_name,
             arguments=arguments,
             executed_at=datetime.now(),
             strategy=self.current_strategy or ExecutionStrategy.DIRECT,
             success=success,
-            result=result,
+            result=truncated_result,
             error=error,
             execution_time_ms=execution_time_ms,
             result_hash=arg_hash,
@@ -341,20 +397,21 @@ class ResearchProgressTracker:
 
         self.tool_executions.append(execution)
 
-        # Cache successful results
-        if success and result:
-            self._tool_result_cache[arg_hash] = result
-            self.insights.successful_tool_results[tool_name] = result
+        # Cache successful results (use truncated version to save memory)
+        if success and truncated_result:
+            self._tool_result_cache[arg_hash] = truncated_result
+            self.insights.successful_tool_results[tool_name] = truncated_result
         elif not success and error:
             self.insights.failed_tool_attempts[tool_name] = error
 
         # Update current attempt
         if self.current_attempt:
-            self.current_attempt.accumulated_results.append(result or f"Error: {error}")
+            result_to_add = truncated_result or f"Error: {error}"
+            self.current_attempt.accumulated_results.append(result_to_add)
 
         logger.debug(
             f"Logged tool execution: {tool_name}, success={success}, "
-            f"time={execution_time_ms:.2f}ms"
+            f"time={execution_time_ms:.2f}ms, truncated={was_truncated}"
         )
 
     def _hash_arguments(self, tool_name: str, arguments: dict) -> str:
@@ -409,7 +466,7 @@ class ResearchProgressTracker:
             # Refine existing plan
             self._refine_plan(plan, strategy)
 
-    def _refine_plan(self, new_plan: ResearchPlan, strategy: ExecutionStrategy):
+    def _refine_plan(self, new_plan: ResearchPlan, _strategy: ExecutionStrategy):
         """Merge new plan with existing plan skeleton.
 
         Phase 4: Enhanced refinement with:
@@ -420,7 +477,7 @@ class ResearchProgressTracker:
 
         Args:
             new_plan: New plan from planner
-            strategy: Strategy that created this plan
+            _strategy: Strategy that created this plan (reserved for future use)
         """
         if not self.plan:
             return
@@ -550,8 +607,7 @@ class ResearchProgressTracker:
         Returns:
             Similar step if found, None otherwise
         """
-        normalized_new = self._normalize_step_description(description)
-
+        # Check similarity using word overlap
         for step in existing_steps:
             if self._are_steps_similar(description, step.description):
                 return step
@@ -755,12 +811,17 @@ class ResearchProgressTracker:
 
                 for step in steps_to_show:
                     sections.append(f"- **{step.description}**")
-                    if step.findings and verbosity == ContextVerbosity.FULL:
-                        # Phase 5: Truncate findings in medium verbosity
-                        findings = step.findings
-                        if verbosity == ContextVerbosity.MEDIUM:
-                            findings = findings[-2:]  # Last 2 findings
-                        sections.append(f"  - Findings: {'; '.join(findings)}")
+                    if step.findings:
+                        # Phase 5: Show findings based on verbosity
+                        if verbosity == ContextVerbosity.FULL:
+                            findings = step.findings
+                        elif verbosity == ContextVerbosity.MEDIUM:
+                            findings = step.findings[-2:]  # Last 2 findings only
+                        else:
+                            findings = []  # Skip findings in other verbosity levels
+
+                        if findings:
+                            sections.append(f"  - Findings: {'; '.join(findings)}")
                     if step.tools_used:
                         sections.append(f"  - Tools used: {', '.join(step.tools_used)}")
                 sections.append("")

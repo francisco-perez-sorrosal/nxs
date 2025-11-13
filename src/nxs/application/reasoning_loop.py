@@ -124,10 +124,25 @@ class AdaptiveReasoningLoop(AgentLoop):
         self.config = config or ReasoningConfig()
         self.force_strategy = force_strategy
         self.approval_manager = approval_manager
-        
-        # Flag to prevent recursive reasoning during sub-executions
-        # When _execute_with_tool_tracking calls run(), we skip reasoning logic
-        self._in_sub_execution = False
+
+        # Recursion prevention flag for tool tracking integration
+        #
+        # ARCHITECTURAL NOTE:
+        # This flag prevents infinite recursion in the following call chain:
+        #   1. AdaptiveReasoningLoop.run() -> executes strategy
+        #   2. strategy method -> calls _execute_with_tool_tracking()
+        #   3. _execute_with_tool_tracking() -> calls self.run() for tool tracking
+        #   4. self.run() is AdaptiveReasoningLoop.run() (polymorphism)
+        #   5. WITHOUT THIS FLAG: Would trigger reasoning logic again -> infinite loop
+        #   6. WITH THIS FLAG: Skips reasoning, calls parent AgentLoop.run() directly
+        #
+        # When True: Skip complexity analysis, strategy selection, and quality evaluation.
+        #            Just execute the query directly via parent AgentLoop.
+        # When False: Normal reasoning flow (analyze, execute, evaluate, escalate)
+        #
+        # This is set by _execute_with_tool_tracking() before calling run(),
+        # then restored after execution completes.
+        self._skip_reasoning = False
 
         logger.info(
             f"AdaptiveReasoningLoop initialized: max_iterations={max_iterations}, "
@@ -179,12 +194,14 @@ class AdaptiveReasoningLoop(AgentLoop):
         """
         callbacks = callbacks or self.callbacks
 
-        # If we're in a sub-execution (called from _execute_with_tool_tracking),
-        # skip all reasoning logic and just call the base AgentLoop.run()
-        # This prevents infinite recursion when executing strategies
-        if self._in_sub_execution:
-            logger.debug("Sub-execution detected - skipping reasoning, calling base AgentLoop.run()")
-            # Call parent AgentLoop.run() directly
+        # Recursion prevention: Skip reasoning logic during sub-executions
+        # This happens when _execute_with_tool_tracking() calls run() for tool interception
+        if self._skip_reasoning:
+            logger.debug(
+                "Recursion prevention: Skipping reasoning logic, delegating to AgentLoop.run()"
+            )
+            # Bypass all reasoning (complexity analysis, strategy selection, evaluation)
+            # and execute directly via parent AgentLoop for tool tracking
             return await super().run(query, callbacks=callbacks, use_streaming=use_streaming)
 
         # Human-in-the-Loop: Simple choice - execute directly or use reasoning
@@ -447,7 +464,7 @@ class AdaptiveReasoningLoop(AgentLoop):
     async def _execute_direct(
         self,
         query: str,
-        complexity: ComplexityAnalysis,
+        complexity: ComplexityAnalysis,  # Not used directly, kept for API consistency
         tracker: ResearchProgressTracker,
         callbacks: dict,
     ) -> str:
@@ -564,7 +581,7 @@ class AdaptiveReasoningLoop(AgentLoop):
         plan = await self.planner.generate_plan(query, context=plan_context)
         tracker.set_plan(plan, ExecutionStrategy.LIGHT_PLANNING)
 
-        await _call_callback(callbacks, "on_planning_complete", len(plan.subtasks), "light")
+        await _call_callback(callbacks, "on_planning_complete", plan, "light")
 
         # If no subtasks were generated, fall back to direct execution
         if not plan.subtasks or len(plan.subtasks) == 0:
@@ -742,7 +759,7 @@ class AdaptiveReasoningLoop(AgentLoop):
             # Refine existing plan
             tracker.set_plan(plan, ExecutionStrategy.DEEP_REASONING)
 
-        await _call_callback(callbacks, "on_planning_complete", len(plan.subtasks), "deep")
+        await _call_callback(callbacks, "on_planning_complete", plan, "deep")
 
         # Phase 2: Iterative execution and evaluation
         accumulated_results = []
@@ -1006,103 +1023,17 @@ Avoid redundant tool calls - check the tool execution history above.
 
         return subtask_query
 
-    def _get_context_for_strategy(
-        self, tracker: ResearchProgressTracker, strategy: ExecutionStrategy
-    ) -> str:
-        """Phase 5: Get appropriate context verbosity for strategy.
-
-        Args:
-            tracker: ResearchProgressTracker instance
-            strategy: Current execution strategy
-
-        Returns:
-            Context text appropriate for the strategy level
-        """
-        from nxs.application.progress_tracker import ContextVerbosity
-
-        if len(tracker.attempts) == 1:
-            # First attempt - minimal context
-            return tracker.to_minimal_context()
-
-        if strategy == ExecutionStrategy.DIRECT:
-            return tracker.to_compact_context()
-        elif strategy == ExecutionStrategy.LIGHT_PLANNING:
-            return tracker.to_medium_context()  # Phase 5: Use medium verbosity
-        else:  # DEEP_REASONING
-            return tracker.to_context_text(
-                strategy, verbosity=ContextVerbosity.FULL
-            )  # Full detail
-
-    def _build_tracker_context_with_cache(
-        self, tracker: ResearchProgressTracker, strategy: ExecutionStrategy
-    ) -> list[dict]:
-        """
-        Phase 5: Build tracker context as cached system message blocks.
-
-        Returns tracker context formatted for Anthropic API with cache_control
-        markers to enable prompt caching (90% cost reduction on cached content).
-
-        Args:
-            tracker: ResearchProgressTracker instance
-            strategy: Current execution strategy
-
-        Returns:
-            List of TextBlockParam dicts with cache_control for system message
-        """
-        from anthropic.types import TextBlockParam
-
-        context_text = self._get_context_for_strategy(tracker, strategy)
-
-        # Phase 5: Format as cached system message block
-        # This enables Anthropic's prompt caching for 90% cost reduction
-        return [
-            {
-                "type": "text",
-                "text": context_text,
-                "cache_control": {"type": "ephemeral"},  # Cache this context
-            }
-        ]
-
-    def _build_messages_with_tracker_context(
-        self,
-        query: str,
-        tracker: ResearchProgressTracker,
-        strategy: ExecutionStrategy,
-    ) -> tuple[list, list[dict] | None]:
-        """
-        Phase 5: Build message list with tracker context and cache control.
-
-        This method prepares messages for the Anthropic API with:
-        - Tracker context as cached system message (reused across calls)
-        - User query as non-cached message (changes each time)
-
-        Args:
-            query: User query
-            tracker: ResearchProgressTracker instance
-            strategy: Current execution strategy
-
-        Returns:
-            Tuple of (messages list, system message blocks with cache_control)
-        """
-        from anthropic.types import MessageParam
-
-        messages: list[MessageParam] = []
-
-        # Phase 5: Build cached tracker context as system message
-        system_blocks = self._build_tracker_context_with_cache(tracker, strategy)
-
-        # User query (NOT cached - changes each time)
-        user_message: MessageParam = {
-            "role": "user",
-            "content": query,
-        }
-        messages.append(user_message)
-
-        logger.debug(
-            f"Built messages with tracker context: "
-            f"strategy={strategy.value}, "
-            f"context_tokens≈{tracker.get_context_token_count(strategy)}"
-        )
-
-        return messages, system_blocks
+    # Note: Prompt caching for tracker context is handled by the Conversation class
+    #
+    # The Conversation class (application/conversation.py) automatically applies
+    # cache_control markers to system messages, tools, and recent message pairs.
+    # This provides 90% cost reduction on cached content without requiring
+    # special integration here.
+    #
+    # Tracker context is injected into queries (see _build_subtask_query_with_full_context)
+    # where it becomes part of the user messages, which are cached by the Conversation class.
+    #
+    # Original design (from RESEARCH_PROGRESS_TRACKING_PLAN.md) proposed explicit
+    # cache control via custom message builders, but the simpler approach of using
+    # Conversation's built-in caching is more maintainable and works transparently.
 

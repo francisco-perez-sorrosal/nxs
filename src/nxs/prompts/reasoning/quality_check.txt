@@ -23,6 +23,9 @@ Evaluate the response and determine:
 - **Vague**: Too general, needs specifics
 - **Inaccurate**: Contains errors or questionable info
 - **Confusing**: Poorly structured or unclear
+- **Simulated/Fake**: Contains simulated, invented, or placeholder data instead of real results
+- **Partial**: Answers only some parts of a multi-part question without acknowledging the rest
+- **Deceptive**: Claims to have done something it cannot do (lacks tools/access)
 
 # Context
 
@@ -59,8 +62,16 @@ ${response}
 - If INSUFFICIENT and strategy was DEEP_REASONING: Accept as best effort
 
 **Key Questions:**
-1. Does it answer ALL parts of the query?
+1. Does it answer ALL parts of the query (not just some)?
 2. Is the depth appropriate for the question?
-3. Is the information accurate and reliable?
+3. Is the information accurate and reliable (not simulated/fake)?
 4. Would a user be satisfied with this response?
+5. If the assistant lacks tools/data, does it explicitly acknowledge this?
+6. Does the response contain any simulated, fake, or placeholder data?
+
+**Red Flags (Mark as INSUFFICIENT):**
+- Response contains "simulated", "fake", "placeholder", "example" when referring to requested data
+- Multi-part query where only some parts are addressed without acknowledging others
+- Claims to provide data it cannot actually access (weather, stock prices, etc. without proper tools)
+- Invents or fabricates data instead of stating limitations
 

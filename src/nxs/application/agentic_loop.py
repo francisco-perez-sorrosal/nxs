@@ -314,25 +314,26 @@ class AgentLoop:
         # Set current tracker for tool execution interception
         self._current_tracker = tracker
 
-        # Set flag to indicate we're in a sub-execution (for AdaptiveReasoningLoop)
-        # This prevents recursive reasoning checks
-        was_in_sub_execution = False
-        if hasattr(self, '_in_sub_execution'):
-            was_in_sub_execution = self._in_sub_execution
-            self._in_sub_execution = True
+        # Set recursion prevention flag (for AdaptiveReasoningLoop)
+        # If self is AdaptiveReasoningLoop, this tells run() to skip reasoning logic
+        # and delegate directly to AgentLoop for simple query execution with tool tracking
+        previous_skip_reasoning = False
+        if hasattr(self, '_skip_reasoning'):
+            previous_skip_reasoning = self._skip_reasoning
+            self._skip_reasoning = True
 
         try:
-            # Call self.run() - if this is AdaptiveReasoningLoop, the _in_sub_execution
-            # flag will cause it to skip reasoning logic and call base AgentLoop.run()
-            # If this is AgentLoop, it just calls normally
+            # Call self.run():
+            # - If self is AdaptiveReasoningLoop: _skip_reasoning flag causes it to
+            #   bypass reasoning and call parent AgentLoop.run() directly
+            # - If self is just AgentLoop: flag is ignored, executes normally
             response = await self.run(query, callbacks=callbacks, use_streaming=use_streaming)
             return response
         finally:
-            # Clear tracker reference after execution
+            # Clean up: restore original state
             self._current_tracker = None
-            # Restore previous sub-execution flag
-            if hasattr(self, '_in_sub_execution'):
-                self._in_sub_execution = was_in_sub_execution
+            if hasattr(self, '_skip_reasoning'):
+                self._skip_reasoning = previous_skip_reasoning
 
     async def _run_with_streaming(
         self,
