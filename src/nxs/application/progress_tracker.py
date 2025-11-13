@@ -31,6 +31,15 @@ from nxs.logger import get_logger
 logger = get_logger("progress_tracker")
 
 
+class ContextVerbosity:
+    """Phase 5: Context verbosity levels for token optimization."""
+
+    MINIMAL = "minimal"  # First attempt: query + complexity only
+    COMPACT = "compact"  # DIRECT escalation: summary + top gaps
+    MEDIUM = "medium"  # LIGHT_PLANNING: plan + gaps + tool summary
+    FULL = "full"  # DEEP_REASONING: complete history + all details
+
+
 @dataclass
 class ExecutionAttempt:
     """Record of a single execution attempt at a specific strategy level."""
@@ -634,46 +643,94 @@ class ResearchProgressTracker:
 
     # === Context Serialization ===
 
-    def to_context_text(self, strategy: ExecutionStrategy) -> str:
+    def to_context_text(
+        self,
+        strategy: ExecutionStrategy,
+        verbosity: str | None = None,
+        max_attempts: int | None = None,
+        max_tool_executions: int | None = None,
+    ) -> str:
         """
         Serialize tracker state to natural language context for LLM.
 
-        This text is included in the system prompt or user message to inform
-        the LLM about what has already been tried and what remains.
+        Phase 5: Enhanced with verbosity levels and truncation strategies.
 
         Args:
             strategy: Current execution strategy
+            verbosity: Verbosity level (MINIMAL, COMPACT, MEDIUM, FULL)
+                      If None, auto-selects based on strategy
+            max_attempts: Maximum number of attempts to include (truncation)
+            max_tool_executions: Maximum tool executions to include (truncation)
 
         Returns:
             Formatted context text
         """
+        # Phase 5: Auto-select verbosity based on strategy if not specified
+        if verbosity is None:
+            if len(self.attempts) == 1:
+                verbosity = ContextVerbosity.MINIMAL
+            elif strategy == ExecutionStrategy.DIRECT:
+                verbosity = ContextVerbosity.COMPACT
+            elif strategy == ExecutionStrategy.LIGHT_PLANNING:
+                verbosity = ContextVerbosity.MEDIUM
+            else:  # DEEP_REASONING
+                verbosity = ContextVerbosity.FULL
+
+        # Phase 5: Apply truncation limits
+        max_attempts = max_attempts or (3 if verbosity == ContextVerbosity.FULL else 2)
+        max_tool_executions = max_tool_executions or (
+            50 if verbosity == ContextVerbosity.FULL else 20
+        )
+
         sections = []
 
-        # 1. Query and Complexity Overview
+        # 1. Query and Complexity Overview (always included)
         sections.append("# Research Progress Context\n")
         sections.append(f"**Query**: {self.query}\n")
         sections.append(f"**Complexity**: {self.complexity.complexity_level.value}")
         sections.append(f"**Current Execution Level**: {strategy.value}\n")
 
-        # 2. Execution History
-        if self.attempts:
+        # 2. Execution History (truncated based on verbosity)
+        if self.attempts and verbosity != ContextVerbosity.MINIMAL:
             sections.append("\n## Previous Execution Attempts\n")
-            for i, attempt in enumerate(self.attempts[:-1], 1):  # Exclude current
+
+            # Phase 5: Limit history depth
+            attempts_to_show = self.attempts[:-1][-max_attempts:]  # Last N attempts
+
+            # Phase 5: Summarize old attempts if needed
+            if len(self.attempts[:-1]) > max_attempts:
+                old_count = len(self.attempts[:-1]) - max_attempts
+                sections.append(
+                    f"*({old_count} earlier attempt(s) summarized below)*\n"
+                )
+
+            for i, attempt in enumerate(attempts_to_show, 1):
                 sections.append(f"\n### Attempt {i}: {attempt.strategy.value}")
                 sections.append(f"- **Status**: {attempt.status}")
                 sections.append(f"- **Quality Score**: {attempt.quality_score or 'N/A'}")
 
                 if attempt.evaluation:
-                    sections.append(f"- **Evaluation**: {attempt.evaluation.reasoning}")
+                    # Phase 5: Truncate evaluation reasoning if too long
+                    eval_reasoning = attempt.evaluation.reasoning
+                    if len(eval_reasoning) > 200 and verbosity != ContextVerbosity.FULL:
+                        eval_reasoning = eval_reasoning[:200] + "..."
+                    sections.append(f"- **Evaluation**: {eval_reasoning}")
                     if attempt.evaluation.missing_aspects:
+                        missing = attempt.evaluation.missing_aspects
+                        # Phase 5: Limit missing aspects based on verbosity
+                        if verbosity != ContextVerbosity.FULL:
+                            missing = missing[:3]
                         sections.append(
-                            f"- **Missing Aspects**: {', '.join(attempt.evaluation.missing_aspects)}"
+                            f"- **Missing Aspects**: {', '.join(missing)}"
                         )
 
                 sections.append(f"- **Outcome**: {attempt.outcome}\n")
 
-        # 3. Research Plan Progress
-        if self.plan:
+        # 3. Research Plan Progress (verbosity-dependent)
+        if self.plan and verbosity in [
+            ContextVerbosity.MEDIUM,
+            ContextVerbosity.FULL,
+        ]:
             sections.append("\n## Research Plan Progress\n")
 
             completed = self.plan.get_completed_steps()
@@ -685,22 +742,44 @@ class ResearchProgressTracker:
 
             if completed:
                 sections.append("\n### ✓ Completed Steps\n")
-                for step in completed:
+                # Phase 5: Limit completed steps shown based on verbosity
+                steps_to_show = (
+                    completed if verbosity == ContextVerbosity.FULL else completed[-5:]
+                )
+                if len(completed) > len(steps_to_show):
+                    sections.append(
+                        f"*Showing last {len(steps_to_show)} of {len(completed)} completed steps*\n"
+                    )
+
+                for step in steps_to_show:
                     sections.append(f"- **{step.description}**")
-                    if step.findings:
-                        sections.append(f"  - Findings: {'; '.join(step.findings)}")
+                    if step.findings and verbosity == ContextVerbosity.FULL:
+                        # Phase 5: Truncate findings in medium verbosity
+                        findings = step.findings
+                        if verbosity == ContextVerbosity.MEDIUM:
+                            findings = findings[-2:]  # Last 2 findings
+                        sections.append(f"  - Findings: {'; '.join(findings)}")
                     if step.tools_used:
                         sections.append(f"  - Tools used: {', '.join(step.tools_used)}")
                 sections.append("")
 
             if pending:
                 sections.append("\n### ○ Pending Steps\n")
-                for step in pending:
+                # Phase 5: Limit pending steps shown
+                pending_to_show = (
+                    pending if verbosity == ContextVerbosity.FULL else pending[:10]
+                )
+                for step in pending_to_show:
                     sections.append(f"- {step.description}")
+                if len(pending) > len(pending_to_show):
+                    sections.append(f"*... and {len(pending) - len(pending_to_show)} more*")
                 sections.append("")
 
-        # 4. Tool Execution Summary
-        if self.tool_executions:
+        # 4. Tool Execution Summary (verbosity-dependent, truncated)
+        if self.tool_executions and verbosity in [
+            ContextVerbosity.MEDIUM,
+            ContextVerbosity.FULL,
+        ]:
             sections.append("\n## Tool Execution History\n")
 
             successful_tools = [e for e in self.tool_executions if e.success]
@@ -715,17 +794,25 @@ class ResearchProgressTracker:
                 sections.append("\n### Successful Tool Executions\n")
                 # Group by tool name
                 by_tool = defaultdict(list)
-                for e in successful_tools:
+                # Phase 5: Limit tool executions shown
+                recent_tools = successful_tools[-max_tool_executions:]
+                for e in recent_tools:
                     by_tool[e.tool_name].append(e)
+
+                if len(successful_tools) > max_tool_executions:
+                    sections.append(
+                        f"*Showing last {max_tool_executions} of {len(successful_tools)} tool calls*\n"
+                    )
 
                 for tool_name, executions in by_tool.items():
                     sections.append(f"- **{tool_name}**: {len(executions)} call(s)")
-                    # Show most recent result (truncated)
+                    # Show most recent result (truncated based on verbosity)
                     latest = executions[-1]
                     if latest.result:
+                        max_result_len = 200 if verbosity == ContextVerbosity.FULL else 100
                         preview = (
-                            latest.result[:200] + "..."
-                            if len(latest.result) > 200
+                            latest.result[:max_result_len] + "..."
+                            if len(latest.result) > max_result_len
                             else latest.result
                         )
                         sections.append(f"  - Latest result: {preview}")
@@ -733,53 +820,112 @@ class ResearchProgressTracker:
 
             if failed_tools:
                 sections.append("\n### Failed Tool Executions\n")
-                for e in failed_tools:
+                # Phase 5: Limit failed tools shown
+                failed_to_show = (
+                    failed_tools
+                    if verbosity == ContextVerbosity.FULL
+                    else failed_tools[-5:]
+                )
+                for e in failed_to_show:
                     sections.append(f"- **{e.tool_name}**: {e.error}")
+                if len(failed_tools) > len(failed_to_show):
+                    sections.append(f"*... and {len(failed_tools) - len(failed_to_show)} more failures*")
                 sections.append("")
 
-        # 5. Accumulated Insights
-        sections.append("\n## Accumulated Insights\n")
+        # 5. Accumulated Insights (verbosity-dependent)
+        if verbosity in [ContextVerbosity.MEDIUM, ContextVerbosity.FULL]:
+            sections.append("\n## Accumulated Insights\n")
 
-        if self.insights.confirmed_facts:
-            sections.append("\n### Confirmed Facts\n")
-            for fact in self.insights.confirmed_facts:
-                sections.append(f"- {fact}")
-            sections.append("")
+            if self.insights.confirmed_facts and verbosity == ContextVerbosity.FULL:
+                sections.append("\n### Confirmed Facts\n")
+                # Phase 5: Limit facts shown
+                facts_to_show = self.insights.confirmed_facts[:10]
+                for fact in facts_to_show:
+                    sections.append(f"- {fact}")
+                if len(self.insights.confirmed_facts) > 10:
+                    sections.append(f"*... and {len(self.insights.confirmed_facts) - 10} more*")
+                sections.append("")
 
-        if self.insights.knowledge_gaps:
-            sections.append("\n### Identified Knowledge Gaps\n")
-            for gap in self.insights.knowledge_gaps:
-                sections.append(f"- {gap}")
-            sections.append("")
+            if self.insights.knowledge_gaps:
+                sections.append("\n### Identified Knowledge Gaps\n")
+                # Phase 5: Limit gaps shown based on verbosity
+                gaps_to_show = (
+                    self.insights.knowledge_gaps
+                    if verbosity == ContextVerbosity.FULL
+                    else self.insights.knowledge_gaps[:5]
+                )
+                for gap in gaps_to_show:
+                    sections.append(f"- {gap}")
+                if len(self.insights.knowledge_gaps) > len(gaps_to_show):
+                    sections.append(
+                        f"*... and {len(self.insights.knowledge_gaps) - len(gaps_to_show)} more gaps*"
+                    )
+                sections.append("")
 
-        if self.insights.quality_feedback:
-            sections.append("\n### Quality Feedback from Previous Attempts\n")
-            for feedback in self.insights.quality_feedback[-3:]:  # Last 3
-                sections.append(f"- {feedback}")
-            sections.append("")
+            if self.insights.quality_feedback:
+                sections.append("\n### Quality Feedback from Previous Attempts\n")
+                # Phase 5: Limit feedback shown
+                feedback_to_show = (
+                    self.insights.quality_feedback
+                    if verbosity == ContextVerbosity.FULL
+                    else self.insights.quality_feedback[-3:]
+                )
+                for feedback in feedback_to_show:
+                    # Phase 5: Truncate long feedback
+                    if len(feedback) > 150 and verbosity != ContextVerbosity.FULL:
+                        feedback = feedback[:150] + "..."
+                    sections.append(f"- {feedback}")
+                sections.append("")
 
-        # 6. Guidance for Current Attempt
-        sections.append("\n## Guidance for Current Execution\n")
+        # 6. Guidance for Current Attempt (verbosity-dependent)
+        if verbosity in [ContextVerbosity.MEDIUM, ContextVerbosity.FULL]:
+            sections.append("\n## Guidance for Current Execution\n")
 
-        if strategy != ExecutionStrategy.DIRECT:
-            sections.append("**Building on previous work**:\n")
-            sections.append("- Review completed steps and their findings above")
-            sections.append("- Focus on identified knowledge gaps")
-            sections.append("- Avoid redundant tool calls (check execution history)")
-            sections.append("- Address quality feedback from previous evaluations")
+            if strategy != ExecutionStrategy.DIRECT:
+                sections.append("**Building on previous work**:\n")
+                sections.append("- Review completed steps and their findings above")
+                sections.append("- Focus on identified knowledge gaps")
+                sections.append("- Avoid redundant tool calls (check execution history)")
+                sections.append("- Address quality feedback from previous evaluations")
 
-            if self.insights.recommended_improvements:
-                sections.append("\n**Recommended improvements**:\n")
-                for rec in self.insights.recommended_improvements[:5]:  # Top 5
-                    sections.append(f"- {rec}")
+                if self.insights.recommended_improvements:
+                    sections.append("\n**Recommended improvements**:\n")
+                    # Phase 5: Limit recommendations based on verbosity
+                    recs_to_show = (
+                        self.insights.recommended_improvements[:10]
+                        if verbosity == ContextVerbosity.FULL
+                        else self.insights.recommended_improvements[:5]
+                    )
+                    for rec in recs_to_show:
+                        sections.append(f"- {rec}")
 
         return "\n".join(sections)
 
+    def to_medium_context(self) -> str:
+        """
+        Phase 5: Medium verbosity context for LIGHT_PLANNING strategy.
+
+        Includes:
+        - Completed steps with findings
+        - Pending steps
+        - Tool execution summary (grouped by tool name)
+        - Knowledge gaps
+
+        Returns:
+            Medium verbosity context text
+        """
+        return self.to_context_text(
+            ExecutionStrategy.LIGHT_PLANNING, verbosity=ContextVerbosity.MEDIUM
+        )
+
     def to_compact_context(self) -> str:
         """
-        Compact version of context for token efficiency.
+        Phase 5: Compact version of context for DIRECT escalation.
 
-        Use this when full context would be too verbose.
+        Includes:
+        - Summary line: "Progress: X attempts, Y tool calls, Z/W steps"
+        - Top 3 knowledge gaps
+        - Available cached tool results
 
         Returns:
             Compact context summary
@@ -795,7 +941,7 @@ class ResearchProgressTracker:
             f"{completed_steps}/{total_steps} steps done"
         )
 
-        # Key gaps
+        # Key gaps (top 3)
         if self.insights.knowledge_gaps:
             parts.append(f"Gaps: {', '.join(self.insights.knowledge_gaps[:3])}")
 
@@ -804,6 +950,54 @@ class ResearchProgressTracker:
             parts.append(f"Cached: {len(self._tool_result_cache)} results")
 
         return " | ".join(parts)
+
+    def to_minimal_context(self) -> str:
+        """
+        Phase 5: Minimal context for first attempt.
+
+        Includes only:
+        - Query
+        - Complexity analysis
+
+        Returns:
+            Minimal context text
+        """
+        return (
+            f"Query: {self.query}\n"
+            f"Complexity: {self.complexity.complexity_level.value}"
+        )
+
+    def estimate_token_count(self, text: str) -> int:
+        """
+        Phase 5: Estimate token count for context text.
+
+        Uses simple approximation: ~4 characters per token (conservative estimate).
+
+        Args:
+            text: Text to estimate tokens for
+
+        Returns:
+            Estimated token count
+        """
+        # Simple approximation: ~4 chars per token
+        # This is conservative - actual tokenization varies
+        return len(text) // 4
+
+    def get_context_token_count(
+        self, strategy: ExecutionStrategy, verbosity: str | None = None
+    ) -> int:
+        """
+        Phase 5: Get estimated token count for context at given verbosity.
+
+        Args:
+            strategy: Execution strategy
+            verbosity: Verbosity level (None = auto-select)
+
+        Returns:
+            Estimated token count
+        """
+        context_text = self.to_context_text(strategy, verbosity=verbosity)
+        return self.estimate_token_count(context_text)
 
     # === Persistence ===
 

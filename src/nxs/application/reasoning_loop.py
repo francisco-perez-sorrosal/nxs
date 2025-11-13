@@ -954,7 +954,7 @@ Avoid redundant tool calls - check the tool execution history above.
     def _get_context_for_strategy(
         self, tracker: ResearchProgressTracker, strategy: ExecutionStrategy
     ) -> str:
-        """Get appropriate context verbosity for strategy.
+        """Phase 5: Get appropriate context verbosity for strategy.
 
         Args:
             tracker: ResearchProgressTracker instance
@@ -963,17 +963,91 @@ Avoid redundant tool calls - check the tool execution history above.
         Returns:
             Context text appropriate for the strategy level
         """
+        from nxs.application.progress_tracker import ContextVerbosity
+
         if len(tracker.attempts) == 1:
             # First attempt - minimal context
-            return (
-                f"Query: {tracker.query}\n"
-                f"Complexity: {tracker.complexity.complexity_level.value}"
-            )
+            return tracker.to_minimal_context()
 
         if strategy == ExecutionStrategy.DIRECT:
             return tracker.to_compact_context()
         elif strategy == ExecutionStrategy.LIGHT_PLANNING:
-            return tracker.to_context_text(strategy)  # Medium detail
+            return tracker.to_medium_context()  # Phase 5: Use medium verbosity
         else:  # DEEP_REASONING
-            return tracker.to_context_text(strategy)  # Full detail
+            return tracker.to_context_text(
+                strategy, verbosity=ContextVerbosity.FULL
+            )  # Full detail
+
+    def _build_tracker_context_with_cache(
+        self, tracker: ResearchProgressTracker, strategy: ExecutionStrategy
+    ) -> list[dict]:
+        """
+        Phase 5: Build tracker context as cached system message blocks.
+
+        Returns tracker context formatted for Anthropic API with cache_control
+        markers to enable prompt caching (90% cost reduction on cached content).
+
+        Args:
+            tracker: ResearchProgressTracker instance
+            strategy: Current execution strategy
+
+        Returns:
+            List of TextBlockParam dicts with cache_control for system message
+        """
+        from anthropic.types import TextBlockParam
+
+        context_text = self._get_context_for_strategy(tracker, strategy)
+
+        # Phase 5: Format as cached system message block
+        # This enables Anthropic's prompt caching for 90% cost reduction
+        return [
+            {
+                "type": "text",
+                "text": context_text,
+                "cache_control": {"type": "ephemeral"},  # Cache this context
+            }
+        ]
+
+    def _build_messages_with_tracker_context(
+        self,
+        query: str,
+        tracker: ResearchProgressTracker,
+        strategy: ExecutionStrategy,
+    ) -> tuple[list, list[dict] | None]:
+        """
+        Phase 5: Build message list with tracker context and cache control.
+
+        This method prepares messages for the Anthropic API with:
+        - Tracker context as cached system message (reused across calls)
+        - User query as non-cached message (changes each time)
+
+        Args:
+            query: User query
+            tracker: ResearchProgressTracker instance
+            strategy: Current execution strategy
+
+        Returns:
+            Tuple of (messages list, system message blocks with cache_control)
+        """
+        from anthropic.types import MessageParam
+
+        messages: list[MessageParam] = []
+
+        # Phase 5: Build cached tracker context as system message
+        system_blocks = self._build_tracker_context_with_cache(tracker, strategy)
+
+        # User query (NOT cached - changes each time)
+        user_message: MessageParam = {
+            "role": "user",
+            "content": query,
+        }
+        messages.append(user_message)
+
+        logger.debug(
+            f"Built messages with tracker context: "
+            f"strategy={strategy.value}, "
+            f"context_tokens≈{tracker.get_context_token_count(strategy)}"
+        )
+
+        return messages, system_blocks
 
