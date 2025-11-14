@@ -13,7 +13,7 @@ Evaluate the response and determine:
 ## SUFFICIENT Response (No Escalation)
 - Directly answers the query
 - Appropriate depth for the question
-- Accurate and reliable information
+- Accurate and reliable information (acknowledge that certain trusted information comes from forecasting sources in future periods that are not always exact or predictable, as for example weather, or stock futures)
 - Well-structured and clear
 - No significant gaps or errors
 
