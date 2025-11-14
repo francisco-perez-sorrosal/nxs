@@ -153,9 +153,27 @@ class ServiceContainer:
     def mcp_refresher(self) -> RefreshService:
         """Get RefreshService, creating it on first access."""
         if self._mcp_refresher is None:
+            # Create ArtifactService for unified artifact access
+            from nxs.application.artifact_service import ArtifactService
+
+            tool_registry = None
+            tool_state_manager = None
+            try:
+                tool_registry = self.agent_loop.reasoning_loop.tool_registry
+                tool_state_manager = getattr(self.app, "tool_state_manager", None)
+            except AttributeError:
+                pass
+
+            artifact_service = ArtifactService(
+                artifact_manager=self.artifact_manager,
+                tool_registry=tool_registry,
+                tool_state_manager=tool_state_manager,
+            )
+
             self._mcp_refresher = RefreshService(
                 artifact_manager=self.artifact_manager,
                 mcp_panel_getter=self._get_mcp_panel,
+                artifact_service=artifact_service,
             )
         return self._mcp_refresher
 

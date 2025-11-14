@@ -19,7 +19,7 @@ from nxs.presentation.widgets.chat_panel import ChatPanel
 from nxs.presentation.widgets.status_panel import StatusPanel
 from nxs.presentation.widgets.reasoning_trace_panel import ReasoningTracePanel
 from nxs.presentation.widgets.input_field import NexusInput
-from nxs.presentation.widgets.mcp_panel import MCPPanel
+from nxs.presentation.widgets.artifact_panel import ArtifactPanel
 from nxs.presentation.widgets.approval_overlay import ApprovalOverlay
 from nxs.presentation.widgets.custom_footer import CustomFooter
 from nxs.presentation.services import ServiceContainer
@@ -87,6 +87,7 @@ class NexusApp(App):
         agent_loop,
         artifact_manager: ArtifactManager,
         approval_manager: ApprovalManager | None = None,
+        tool_state_manager = None,  # ToolStateManager, avoiding import
         event_bus: EventBus | None = None,
         prompt_info_cache: Cache[str, str | None] | None = None,
         prompt_schema_cache: Cache[str, tuple] | None = None,
@@ -102,6 +103,8 @@ class NexusApp(App):
             artifact_manager: The ArtifactManager instance for accessing resources and commands
             approval_manager: Optional ApprovalManager for human-in-the-loop approvals.
                             If None, a new ApprovalManager will be created.
+            tool_state_manager: Optional ToolStateManager for managing tool enabled/disabled state.
+                              If None, all tools will be enabled.
             event_bus: Optional EventBus instance. If None, a new EventBus will be created.
                       The EventBus is used for decoupled event-driven communication between
                       the core layer (ArtifactManager) and the UI layer (NexusApp).
@@ -117,6 +120,7 @@ class NexusApp(App):
         self.agent_loop = agent_loop
         self.artifact_manager = artifact_manager
         self.approval_manager = approval_manager or ApprovalManager()
+        self.tool_state_manager = tool_state_manager
         self.resources: list[str] = []
         self.commands: list[str] = []
         self._mcp_initialized = False  # Track MCP initialization status
@@ -192,7 +196,7 @@ class NexusApp(App):
                     )
 
                 # MCP servers panel on the right
-                yield MCPPanel(id="mcp-panel")
+                yield ArtifactPanel(id="mcp-panel")
 
         yield CustomFooter(id="custom-footer")
 
@@ -345,9 +349,9 @@ class NexusApp(App):
         """Helper to get the status panel widget."""
         return self.query_one("#status", StatusPanel)
 
-    def _get_mcp_panel(self) -> MCPPanel:
+    def _get_mcp_panel(self) -> ArtifactPanel:
         """Helper to get the MCP panel widget."""
-        return self.query_one("#mcp-panel", MCPPanel)
+        return self.query_one("#mcp-panel", ArtifactPanel)
 
     def _get_chat_panel(self) -> ChatPanel:
         """Helper to get the chat panel widget."""
@@ -1009,3 +1013,41 @@ class NexusApp(App):
         # Run the approval dialog in a worker (allows push_screen_wait to work)
         logger.info("Spawning worker to show approval dialog...")
         self.run_worker(show_approval_worker(), exclusive=True)
+
+    def on_artifact_item_tool_toggled(self, event: "ArtifactItem.ToolToggled") -> None:  # type: ignore
+        """Handle tool enable/disable toggle from artifacts panel.
+
+        When a tool checkbox is clicked in the artifacts panel, this handler
+        updates the ToolStateManager and refreshes the tool registry to make
+        the change effective immediately.
+
+        Args:
+            event: ToolToggled event from ArtifactItem
+        """
+        if not self.tool_state_manager:
+            logger.warning(f"Tool toggle requested for '{event.tool_name}' but no ToolStateManager configured")
+            return
+
+        # Update tool state
+        if event.enabled:
+            self.tool_state_manager.enable_tool(event.tool_name)
+            logger.info(f"Tool enabled: {event.tool_name}")
+        else:
+            self.tool_state_manager.disable_tool(event.tool_name)
+            logger.info(f"Tool disabled: {event.tool_name}")
+
+        # Mark tool registry as dirty to refresh tools on next query
+        # The ToolRegistry will automatically filter enabled tools
+        try:
+            tool_registry = self.agent_loop.reasoning_loop.tool_registry
+            tool_registry._cache_dirty = True
+            logger.debug("Tool registry marked for refresh")
+        except Exception as e:
+            logger.debug(f"Could not access tool registry for refresh: {e}")
+
+        # Trigger panel refresh to update checkbox states
+        try:
+            self.services.mcp_refresher.schedule_refresh()
+            logger.debug("Panel refresh scheduled after tool toggle")
+        except Exception as e:
+            logger.debug(f"Could not schedule panel refresh: {e}")

@@ -87,11 +87,24 @@ def format_server_header_text(
     status: ConnectionStatus,
     reconnect_info: dict[str, Any] | None,
     error_message: str | None,
+    show_connection_status: bool = True,
 ) -> Text:
-    """Return the Rich Text header for the server widget."""
-    status_line = format_status_line_markup(status, reconnect_info, error_message)
-    status_icon = get_status_icon(status)
-    header_text = f"[bold yellow]📡 {server_name}[/] {status_icon} {status_line}"
+    """Return the Rich Text header for the server widget.
+
+    Args:
+        server_name: Name of the server/provider
+        status: Connection status
+        reconnect_info: Reconnection information
+        error_message: Error message if any
+        show_connection_status: Whether to show connection status icon and text
+    """
+    if show_connection_status:
+        status_line = format_status_line_markup(status, reconnect_info, error_message)
+        status_icon = get_status_icon(status)
+        header_text = f"[bold yellow]📡 {server_name}[/] {status_icon} {status_line}"
+    else:
+        # For local tools, just show the name without connection status
+        header_text = f"[bold yellow]📦 {server_name}[/]"
     return Text.from_markup(header_text)
 
 

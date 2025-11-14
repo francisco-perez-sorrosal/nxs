@@ -224,7 +224,7 @@ Vertical {
 /* Artifact item styling - clickable artifacts */
 ArtifactItem {
     background: $surface;
-    color: $text;
+    color: $text;  /* Base text color */
 }
 
 ArtifactItem:hover {
@@ -233,7 +233,7 @@ ArtifactItem:hover {
 
 /* Artifact description overlay styling */
 #artifact-description-overlay {
-    /* Normal child of MCPPanel - no layer, no dock - just appears at top in vertical layout */
+    /* Normal child of ArtifactPanel - no layer, no dock - just appears at top in vertical layout */
     width: 1fr;
     height: 40;  /* Increased from 25 to 40 for more vertical space */
     border: solid $accent;

@@ -7,6 +7,7 @@ Key features:
 - ToolProvider protocol for extensible tool sources
 - Tool registration and discovery from multiple providers
 - Tool execution routing to appropriate provider
+- Tool enable/disable state management via ToolStateManager
 - Cache control support for tool definitions
 - Separation of tool concerns from agent orchestration
 
@@ -19,11 +20,14 @@ Architecture:
 """
 
 import asyncio
-from typing import Any, Protocol
+from typing import Any, Protocol, TYPE_CHECKING
 
 from anthropic.types import ToolParam
 
 from nxs.logger import get_logger
+
+if TYPE_CHECKING:
+    from nxs.application.tool_state import ToolStateManager
 
 logger = get_logger(__name__)
 
@@ -129,20 +133,31 @@ class ToolRegistry:
         >>> result = await registry.execute_tool("search", {"query": "test"})
     """
 
-    def __init__(self, enable_caching: bool = True):
+    def __init__(
+        self,
+        enable_caching: bool = True,
+        tool_state_manager: "ToolStateManager | None" = None,
+    ):
         """Initialize the tool registry.
 
         Args:
             enable_caching: Whether to apply cache_control markers to
                 tool definitions. Enables 90% cost reduction on tool
                 definitions which are stable across conversation.
+            tool_state_manager: Optional ToolStateManager for controlling
+                which tools are enabled/disabled. If None, all tools are
+                enabled by default.
         """
         self._providers: dict[str, ToolProvider] = {}
         self._tool_to_provider: dict[str, str] = {}  # tool_name -> provider_name
         self._enable_caching = enable_caching
         self._cache_dirty = True  # Track if tool cache needs refresh
+        self._tool_state_manager = tool_state_manager
 
-        logger.debug(f"ToolRegistry initialized: caching={enable_caching}")
+        logger.debug(
+            f"ToolRegistry initialized: caching={enable_caching}, "
+            f"state_manager={'enabled' if tool_state_manager else 'disabled'}"
+        )
 
     def register_provider(self, provider: ToolProvider) -> None:
         """Register a tool provider.
@@ -197,13 +212,13 @@ class ToolRegistry:
     async def get_tool_definitions_for_api(self) -> list[ToolParam]:
         """Get all tool definitions formatted for Anthropic API.
 
-        Aggregates tools from all registered providers and applies
-        cache control if enabled.
+        Aggregates tools from all registered providers, filters out disabled tools,
+        and applies cache control if enabled.
 
         Returns:
             List of ToolParam dictionaries ready for Anthropic API,
             with cache_control markers applied to the last tool if
-            caching is enabled.
+            caching is enabled. Only enabled tools are included.
 
         Example:
             >>> tools = await registry.get_tool_definitions_for_api()
@@ -246,6 +261,13 @@ class ToolRegistry:
                     )
                     continue
 
+                # Check if tool is enabled (if state manager is configured)
+                if self._tool_state_manager and not self._tool_state_manager.is_enabled(tool_name):
+                    logger.debug(f"Skipping disabled tool: {tool_name}")
+                    # Still track the provider mapping for potential re-enabling
+                    self._tool_to_provider[tool_name] = provider_name
+                    continue
+
                 all_tools.append(tool)
                 self._tool_to_provider[tool_name] = provider_name
 
@@ -260,7 +282,12 @@ class ToolRegistry:
             )
 
         self._cache_dirty = False
-        logger.debug(f"Retrieved {len(all_tools)} tools from {len(self._providers)} providers")
+        total_tools = len(self._tool_to_provider)
+        enabled_tools = len(all_tools)
+        logger.debug(
+            f"Retrieved {enabled_tools}/{total_tools} tools from {len(self._providers)} providers "
+            f"({total_tools - enabled_tools} disabled)"
+        )
 
         # Type cast: all_tools are properly formatted ToolParam dicts
         return all_tools  # type: ignore[return-value]
@@ -279,6 +306,7 @@ class ToolRegistry:
 
         Raises:
             KeyError: If tool_name is not found in any provider.
+            RuntimeError: If tool is disabled.
             Exception: If tool execution fails.
 
         Example:
@@ -297,6 +325,13 @@ class ToolRegistry:
             raise KeyError(
                 f"Tool '{tool_name}' not found in any registered provider. "
                 f"Available tools: {list(self._tool_to_provider.keys())}"
+            )
+
+        # Check if tool is enabled
+        if self._tool_state_manager and not self._tool_state_manager.is_enabled(tool_name):
+            raise RuntimeError(
+                f"Tool '{tool_name}' is currently disabled. "
+                f"Enable it in the artifacts panel to use it."
             )
 
         provider = self._providers[provider_name]
@@ -398,3 +433,22 @@ class ToolRegistry:
         self._cache_dirty = True
         await self.get_tool_definitions_for_api()
         logger.info("Tool definitions refreshed from all providers")
+
+    @property
+    def tool_state_manager(self) -> "ToolStateManager | None":
+        """Get the tool state manager if configured.
+
+        Returns:
+            ToolStateManager instance or None if not configured
+        """
+        return self._tool_state_manager
+
+    def set_tool_state_manager(self, manager: "ToolStateManager") -> None:
+        """Set or update the tool state manager.
+
+        Args:
+            manager: ToolStateManager instance to use
+        """
+        self._tool_state_manager = manager
+        self._cache_dirty = True  # Force refresh on next get
+        logger.info("Tool state manager updated")

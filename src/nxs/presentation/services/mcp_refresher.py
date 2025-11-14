@@ -16,7 +16,7 @@ from nxs.domain.types import ConnectionStatus
 from nxs.logger import get_logger
 
 if TYPE_CHECKING:
-    from ..widgets.mcp_panel import MCPPanel
+    from ..widgets.artifact_panel import ArtifactPanel
 
 logger = get_logger("refresh_service")
 
@@ -41,7 +41,8 @@ class RefreshService:
     def __init__(
         self,
         artifact_manager: ArtifactManager,
-        mcp_panel_getter: Callable[[], "MCPPanel"],
+        mcp_panel_getter: Callable[[], "ArtifactPanel"],
+        artifact_service=None,  # ArtifactService, avoiding import
         reconnect_progress_debounce_interval: float = 1.0,
     ):
         """
@@ -50,10 +51,12 @@ class RefreshService:
         Args:
             artifact_manager: The ArtifactManager instance
             mcp_panel_getter: Function to get the MCP panel widget
+            artifact_service: Optional ArtifactService for unified artifact access
             reconnect_progress_debounce_interval: Minimum seconds between reconnect progress updates
         """
         self.artifact_manager = artifact_manager
         self.mcp_panel_getter = mcp_panel_getter
+        self.artifact_service = artifact_service
 
         # Task management
         self._refresh_tasks: set[asyncio.Task] = set()
@@ -212,22 +215,33 @@ class RefreshService:
         logger.debug(f"Refreshed MCP panel with {len(servers_data)} server(s)")
 
     async def _update_panel_display(
-        self, mcp_panel: "MCPPanel", servers_data: dict[str, dict[str, list[dict[str, str | None]]]]
+        self, mcp_panel: "ArtifactPanel", servers_data: dict[str, dict[str, list[dict[str, str | None | bool]]]]
     ) -> None:
         """
-        Update the MCP panel display with server data and statuses.
+        Update the MCP panel display with all artifacts (MCP + local).
 
         Args:
             mcp_panel: The MCP panel widget
-            servers_data: Dictionary mapping server names to their artifacts
+            servers_data: Dictionary mapping server names to their artifacts (from MCP)
         """
+        # Use ArtifactService if available to get unified artifact data
+        if self.artifact_service:
+            try:
+                # Get all artifacts through the service (includes MCP + local)
+                all_artifacts = await self.artifact_service.get_display_data()
+                servers_data = all_artifacts
+                logger.debug(f"Got {len(servers_data)} artifact sources from ArtifactService")
+            except Exception as e:
+                logger.error(f"Error getting artifacts from ArtifactService: {e}", exc_info=True)
+                # Fall back to MCP-only data if service fails
+
         # Get server statuses and last check times
         server_statuses = self.artifact_manager.get_server_statuses()
 
         server_names = set(servers_data.keys()) if servers_data else set(server_statuses.keys())
         server_last_check = {server_name: self.get_server_last_check(server_name) for server_name in server_names}
 
-        logger.debug(f"Updating panel: {len(servers_data)} servers in data, " f"{len(server_statuses)} in statuses")
+        logger.debug(f"Updating panel: {len(servers_data)} providers in data, {len(server_statuses)} in statuses")
         mcp_panel.update_servers(servers_data, server_statuses, server_last_check)
 
     async def _clear_fetch_status_after_delay(self, server_name: str, delay: float) -> None:

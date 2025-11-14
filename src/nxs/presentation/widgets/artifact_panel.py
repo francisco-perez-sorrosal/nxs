@@ -1,5 +1,8 @@
 """
-MCPPanel - Scrollable overview of MCP servers and their artifacts.
+ArtifactPanel - Scrollable overview of artifact providers (MCP servers and local tools).
+
+This panel displays all available artifacts from both MCP servers and local tool
+providers, allowing users to view and manage tools, prompts, and resources.
 """
 
 from __future__ import annotations
@@ -18,13 +21,17 @@ from nxs.presentation.widgets.artifact_overlay import ArtifactDescriptionOverlay
 from nxs.presentation.widgets.server_widget import ServerWidget
 from nxs.presentation.widgets.static_no_margin import StaticNoMargin
 
-logger = get_logger("mcp_panel")
+logger = get_logger("artifact_panel")
 
 
-class MCPPanel(Vertical):
-    """Panel displaying MCP servers and associated artifacts."""
+class ArtifactPanel(Vertical):
+    """Panel displaying artifact providers (MCP servers and local tools) and their artifacts.
 
-    BORDER_TITLE = "MCP Servers"
+    This panel shows all available tools, prompts, and resources from both MCP servers
+    and local tool providers.
+    """
+
+    BORDER_TITLE = "Artifacts"
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -44,7 +51,7 @@ class MCPPanel(Vertical):
         self._artifact_overlay = overlay
         yield overlay
 
-        header = Static("[bold cyan]MCP Servers & Artifacts[/]", id="mcp-header")
+        header = Static("[bold cyan]Artifact Providers & Tools[/]", id="mcp-header")
         yield header
 
         yield Static("[dim]" + "─" * 30 + "[/]", id="mcp-divider-top")
@@ -56,7 +63,7 @@ class MCPPanel(Vertical):
             servers_container.styles.margin = 0
             self._scroll_container = servers_container
             empty_message = StaticNoMargin(
-                "[dim]No MCP servers connected[/]",
+                "[dim]No artifact providers available[/]",
                 id="mcp-empty-message",
             )
             self._empty_message = empty_message
@@ -70,7 +77,7 @@ class MCPPanel(Vertical):
         server_name: str,
         connection_status: ConnectionStatus | None = None,
         operational_status: str | None = None,
-        artifacts: dict[str, list[dict[str, str | None]]] | None = None,
+        artifacts: dict[str, list[dict[str, str | None | bool]]] | None = None,
         last_check_time: float | None = None,
         reconnect_info: dict[str, Any] | None = None,
         error_message: str | None = None,
@@ -134,7 +141,7 @@ class MCPPanel(Vertical):
 
         if not self._server_widgets and self._empty_message is None:
             container = self._ensure_scroll_container()
-            empty_message = StaticNoMargin("[dim]No MCP servers connected[/]", id="mcp-empty-message")
+            empty_message = StaticNoMargin("[dim]No artifact providers available[/]", id="mcp-empty-message")
             if container.children:
                 container.mount(empty_message, before=container.children[0])
             else:
@@ -143,7 +150,7 @@ class MCPPanel(Vertical):
 
     def update_all_servers(
         self,
-        servers_data: dict[str, dict[str, list[dict[str, str | None]]]],
+        servers_data: dict[str, dict[str, list[dict[str, str | None | bool]]]],
         server_statuses: dict[str, ConnectionStatus] | None = None,
         server_last_check: dict[str, float] | None = None,
     ) -> None:
@@ -180,7 +187,7 @@ class MCPPanel(Vertical):
 
     def update_servers(
         self,
-        servers_data: dict[str, dict[str, list[dict[str, str | None]]]],
+        servers_data: dict[str, dict[str, list[dict[str, str | None | bool]]]],
         server_statuses: dict[str, ConnectionStatus] | None = None,
         server_last_check: dict[str, float] | None = None,
     ) -> None:
@@ -219,3 +226,4 @@ class MCPPanel(Vertical):
                 logger.error("Failed to show artifact overlay: %s", exc, exc_info=True)
 
         self.app.call_after_refresh(_show_overlay)
+

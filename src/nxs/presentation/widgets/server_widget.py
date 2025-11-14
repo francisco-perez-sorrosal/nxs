@@ -42,12 +42,12 @@ class ServerWidget(Vertical):
         self.styles.width = "100%"
         self.styles.margin = 0
         self.styles.padding = 0
-        self.styles.gap = 0
+        self.styles.gap = 0  # type: ignore[attr-defined]
         self._connection_status: ConnectionStatus = ConnectionStatus.DISCONNECTED
         self._operational_status: str = ""
         self._reconnect_info: dict[str, Any] = {}
         self._error_message: str | None = None
-        self._artifacts: dict[str, list[dict[str, str | None]]] = {
+        self._artifacts: dict[str, list[dict[str, str | None | bool]]] = {
             "tools": [],
             "prompts": [],
             "resources": [],
@@ -74,7 +74,7 @@ class ServerWidget(Vertical):
             id=f"server-count-{safe_server_name}",
         )
         self._artifacts_container = Vertical(id=f"server-artifacts-{safe_server_name}")
-        self._artifacts_container.styles.gap = 0
+        self._artifacts_container.styles.gap = 0  # type: ignore[attr-defined]
         self._artifacts_container.styles.margin = 0
         self._artifacts_container.styles.padding = 0
         self._artifacts_container.styles.height = "auto"
@@ -104,7 +104,7 @@ class ServerWidget(Vertical):
         self,
         connection_status: ConnectionStatus | None = None,
         operational_status: str | None = None,
-        artifacts: dict[str, list[dict[str, str | None]]] | None = None,
+        artifacts: dict[str, list[dict[str, str | None | bool]]] | None = None,
         last_check_time: float | None = None,
         reconnect_info: dict[str, Any] | None = None,
         error_message: str | None = None,
@@ -149,11 +149,14 @@ class ServerWidget(Vertical):
             )
 
     def _render_header(self) -> None:
+        # Don't show connection status for local tools (they don't have connections)
+        show_connection_status = self.server_name != "Local Tools"
         header = format_server_header_text(
             self.server_name,
             self._connection_status,
             self._reconnect_info,
             self._error_message,
+            show_connection_status=show_connection_status,
         )
         self._header_text = header
         self._header.update(header)
@@ -166,7 +169,12 @@ class ServerWidget(Vertical):
             self._operational.display = False
 
     def _render_last_check(self) -> None:
-        self._last_check.update(format_last_check_text(self._last_check_time))
+        # Don't show last check time for local tools
+        if self.server_name == "Local Tools":
+            self._last_check.display = False
+        else:
+            self._last_check.update(format_last_check_text(self._last_check_time))
+            self._last_check.display = True
 
     def _render_counts(self) -> None:
         tools_count = len(self._artifacts.get("tools", []))
@@ -184,7 +192,7 @@ class ServerWidget(Vertical):
     def _iterate_artifacts(self) -> Iterable[ArtifactItem]:
         for key, code in self._ARTIFACT_MAPPINGS:
             for artifact in self._artifacts.get(key, []):
-                name, description = self._extract_artifact_info(artifact, key)
+                name, description, enabled = self._extract_artifact_info(artifact, key)
                 if not name:
                     continue
                 artifact_id = f"artifact-{sanitize_widget_id(self.server_name)}-{code}-" f"{sanitize_widget_id(name)}"
@@ -192,28 +200,56 @@ class ServerWidget(Vertical):
                     artifact_name=name,
                     artifact_type=code,
                     description=description,
+                    enabled=enabled,
                     id=artifact_id,
                 )
 
     def _extract_artifact_info(
         self,
-        artifact: dict[str, str | None] | str | None,
+        artifact: dict[str, str | None | bool] | str | None,
         artifact_type: str,
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | None, bool]:
         if artifact is None:
-            return "", None
+            logger.debug(f"Artifact is None for type {artifact_type}")
+            return "", None, True
 
         if isinstance(artifact, dict):
-            raw_name = artifact.get("name") or ""
-            description = artifact.get("description")
+            # Extract name - ensure it's a string
+            name_value = artifact.get("name")
+            if isinstance(name_value, str):
+                raw_name = name_value
+            elif name_value is None:
+                raw_name = ""
+            else:
+                raw_name = str(name_value)
+            
+            # Extract description - ensure it's a string or None
+            desc_value = artifact.get("description")
+            if isinstance(desc_value, str):
+                description = desc_value
+            else:
+                description = None
+            
+            # Extract enabled state (default to True for backward compatibility)
+            enabled = artifact.get("enabled", True)
+            if not isinstance(enabled, bool):
+                enabled = True
+            
+            logger.debug(
+                f"Extracted artifact info: name={raw_name!r}, type={artifact_type}, "
+                f"has_description={description is not None}, enabled={enabled}"
+            )
         else:
             raw_name = str(artifact)
             description = None
+            enabled = True
+            logger.debug(f"Artifact is string: {raw_name!r}")
 
-        if artifact_type == "resources" and "://" in raw_name:
+        if artifact_type == "resources" and isinstance(raw_name, str) and "://" in raw_name:
             parts = raw_name.split("/")
             display = parts[-1] if parts else raw_name
         else:
             display = raw_name
 
-        return display, description
+        logger.debug(f"Final display name for {artifact_type}: {display!r}")
+        return display, description, enabled

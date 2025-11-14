@@ -23,6 +23,7 @@ from nxs.application.reasoning.planner import Planner
 from nxs.application.reasoning.evaluator import Evaluator
 from nxs.application.reasoning.synthesizer import Synthesizer
 from nxs.application.summarization import SummarizationService
+from nxs.application.tool_state import ToolStateManager
 from nxs.presentation.tui import NexusApp
 from nxs.tools.weather import get_weather
 from nxs.tools.location import get_current_location
@@ -107,39 +108,43 @@ async def main(
     logger.info(f"Reasoning config: max_iterations={reasoning_config.max_iterations}, "
                 f"direct_threshold={reasoning_config.min_quality_direct}")
 
+    # Create shared ToolStateManager for dynamic tool enable/disable
+    tool_state_manager = ToolStateManager()
+    logger.info("ToolStateManager initialized (all tools enabled by default)")
+
     # Create agent factory that produces CommandControlAgent instances
     # This uses composition: CommandControlAgent -> AdaptiveReasoningLoop -> AgentLoop
     def create_command_control_agent(conversation):
         """Factory to create CommandControlAgent with session-managed conversation.
-        
+
         Uses composition architecture:
         - CommandControlAgent: High-level command/resource processing
         - AdaptiveReasoningLoop: Adaptive reasoning with quality guarantees
         - AgentLoop: Core conversation loop with tools
-        
+
         Args:
             conversation: The Conversation instance managed by SessionManager
-            
+
         Returns:
             CommandControlAgent instance that uses AdaptiveReasoningLoop
         """
-        # Create ToolRegistry and register MCP tools
-        tool_registry = ToolRegistry()
+        # Create ToolRegistry with ToolStateManager for dynamic tool control
+        tool_registry = ToolRegistry(tool_state_manager=tool_state_manager)
         local_provider = LocalToolProvider([get_weather, get_current_location, get_local_datetime])
         mcp_provider = MCPToolProvider(artifact_manager.clients)
         tool_registry.register_provider(local_provider)
         tool_registry.register_provider(mcp_provider)
-        
+
         logger.debug(f"ToolRegistry initialized with {len(artifact_manager.clients)} MCP clients")
-        
+
         # Create reasoning components
         analyzer = QueryComplexityAnalyzer(claude_service, reasoning_config)
         planner = Planner(claude_service, reasoning_config)
         evaluator = Evaluator(claude_service, reasoning_config)
         synthesizer = Synthesizer(claude_service, reasoning_config)
-        
+
         logger.debug("Reasoning components initialized (Analyzer, Planner, Evaluator, Synthesizer)")
-        
+
         # Create AdaptiveReasoningLoop with reasoning components
         reasoning_loop = AdaptiveReasoningLoop(
             llm=claude_service,
@@ -242,6 +247,7 @@ Be concise, efficient, and transparent. Use tools purposefully, not performative
         agent_loop=session.agent_loop,
         artifact_manager=artifact_manager,
         approval_manager=approval_manager,
+        tool_state_manager=tool_state_manager,
         session_name=session.session_id,
         session=session,
         session_manager=session_manager,

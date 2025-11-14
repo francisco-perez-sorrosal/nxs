@@ -7,7 +7,7 @@ from .status_panel import StatusPanel
 from .reasoning_trace_panel import ReasoningTracePanel
 from .input_field import NexusInput
 from .autocomplete import NexusAutoComplete
-from .mcp_panel import MCPPanel
+from .artifact_panel import ArtifactPanel
 
 __all__ = [
     "ChatPanel",
@@ -15,5 +15,5 @@ __all__ = [
     "ReasoningTracePanel",
     "NexusInput",
     "NexusAutoComplete",
-    "MCPPanel",
+    "ArtifactPanel",
 ]
