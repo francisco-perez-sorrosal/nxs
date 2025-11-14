@@ -71,14 +71,14 @@ class ApprovalConfig:
 
     Attributes:
         enabled: Global enable/disable for all approvals
-        require_query_analysis_approval: Request approval for query complexity analysis
         require_tool_approval: Request approval for tool execution
         tool_whitelist: Set of tool names that never require approval
         auto_approve_simple_queries: Auto-approve SIMPLE complexity queries
+
+    Note: Query analysis approval (reasoning mode) is now controlled via footer checkbox.
     """
 
     enabled: bool = True
-    require_query_analysis_approval: bool = False
     require_tool_approval: bool = False
     tool_whitelist: set[str] = field(default_factory=set)
     auto_approve_simple_queries: bool = True
@@ -119,7 +119,6 @@ class ApprovalManager:
 
         # Session-level memory for remembered decisions
         self._remembered_tools: dict[str, bool] = {}  # tool_name -> approved
-        self._remembered_query_analysis: Optional[bool] = None
 
     def set_callback(
         self,
@@ -161,17 +160,7 @@ class ApprovalManager:
             )
 
         # Check for remembered decisions
-        if request.type == ApprovalType.QUERY_ANALYSIS:
-            if self._remembered_query_analysis is not None:
-                # For query analysis, _remembered_query_analysis is the use_reasoning value
-                use_reasoning = self._remembered_query_analysis
-                return ApprovalResponse(
-                    request_id=request.id,
-                    approved=True,  # Always approved if remembered (user already decided)
-                    selected_option="Analyze & Use Reasoning" if use_reasoning else "Execute Directly",
-                    metadata={"remembered": True, "use_reasoning": use_reasoning},
-                )
-        elif request.type == ApprovalType.TOOL_EXECUTION:
+        if request.type == ApprovalType.TOOL_EXECUTION:
             tool_name = request.details.get("tool_name")
             if tool_name and tool_name in self._remembered_tools:
                 approved = self._remembered_tools[tool_name]
@@ -225,9 +214,7 @@ class ApprovalManager:
 
         # Store remembered decisions if requested
         if response.metadata.get("remember_for_session"):
-            if request.type == ApprovalType.QUERY_ANALYSIS:
-                self._remembered_query_analysis = response.approved
-            elif request.type == ApprovalType.TOOL_EXECUTION:
+            if request.type == ApprovalType.TOOL_EXECUTION:
                 tool_name = request.details.get("tool_name")
                 if tool_name:
                     self._remembered_tools[tool_name] = response.approved
@@ -275,7 +262,6 @@ class ApprovalManager:
         This resets the session-level memory, useful when starting a new query.
         """
         self._remembered_tools.clear()
-        self._remembered_query_analysis = None
 
     def get_remembered_tools(self) -> dict[str, bool]:
         """Get all remembered tool decisions.

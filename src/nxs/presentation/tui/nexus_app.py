@@ -6,7 +6,7 @@ import asyncio
 from typing import Callable, Optional, Sequence
 from textual.app import App, ComposeResult
 from textual.message import Message
-from textual.widgets import Header, Footer
+from textual.widgets import Header
 from textual.containers import Container, Vertical, Horizontal
 from textual.binding import Binding
 
@@ -21,6 +21,7 @@ from nxs.presentation.widgets.reasoning_trace_panel import ReasoningTracePanel
 from nxs.presentation.widgets.input_field import NexusInput
 from nxs.presentation.widgets.mcp_panel import MCPPanel
 from nxs.presentation.widgets.approval_overlay import ApprovalOverlay
+from nxs.presentation.widgets.custom_footer import CustomFooter
 from nxs.presentation.services import ServiceContainer
 from nxs.application.artifact_manager import ArtifactManager
 from nxs.application.approval import ApprovalManager, ApprovalRequest
@@ -193,7 +194,7 @@ class NexusApp(App):
                 # MCP servers panel on the right
                 yield MCPPanel(id="mcp-panel")
 
-        yield Footer()
+        yield CustomFooter(id="custom-footer")
 
     async def on_mount(self) -> None:
         """Called when the app is mounted."""
@@ -202,6 +203,9 @@ class NexusApp(App):
         # Start all services (QueryQueue, StatusQueue)
         # Services are created lazily on first access via properties
         await self.services.start()
+
+        # Set up reasoning enabled callback (checkbox state -> reasoning loop)
+        self._setup_reasoning_enabled_callback()
 
         # Set up summarization cost tracking callback
         # This connects summarization costs to the session and reasoning trace panel
@@ -365,6 +369,19 @@ class NexusApp(App):
             pass
         return None
 
+    def get_reasoning_enabled(self) -> bool:
+        """Get the current reasoning enabled state from the footer checkbox.
+
+        Returns:
+            True if reasoning checkbox is checked, False otherwise
+        """
+        try:
+            custom_footer = self.query_one("#custom-footer", CustomFooter)
+            return custom_footer.get_reasoning_enabled()
+        except Exception as e:
+            logger.warning(f"Could not get reasoning enabled state: {e}")
+            return False  # Default to disabled
+
     async def on_input_submitted(self, event) -> None:
         """
         Handle input submission (Enter key pressed).
@@ -452,7 +469,29 @@ class NexusApp(App):
     def _get_reasoning_trace_panel(self) -> ReasoningTracePanel:
         """Helper to get the reasoning trace panel widget."""
         return self.query_one("#reasoning-trace", ReasoningTracePanel)
-    
+
+    def _setup_reasoning_enabled_callback(self) -> None:
+        """Set up callback to provide reasoning enabled state to the reasoning loop.
+
+        This connects the footer checkbox state to the reasoning loop so it can
+        check if reasoning mode is enabled without needing modal dialogs.
+        """
+        # Check if agent_loop is a CommandControlAgent with a reasoning_loop
+        if not hasattr(self.agent_loop, "reasoning_loop"):
+            logger.debug("Agent loop does not have reasoning_loop attribute")
+            return
+
+        reasoning_loop = self.agent_loop.reasoning_loop
+
+        # Check if reasoning_loop is AdaptiveReasoningLoop
+        if not hasattr(reasoning_loop, "get_reasoning_enabled"):
+            logger.debug("Reasoning loop does not support reasoning enabled callback")
+            return
+
+        # Set the callback to get reasoning enabled state from footer checkbox
+        reasoning_loop.get_reasoning_enabled = self.get_reasoning_enabled
+        logger.debug("Reasoning enabled callback configured")
+
     def _setup_reasoning_cost_tracking(self) -> None:
         """Set up callback to track reasoning costs in session and chat panel.
         

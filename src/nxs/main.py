@@ -37,9 +37,12 @@ assert anthropic_api_key, "Error: ANTHROPIC_API_KEY cannot be empty. Update .env
 
 # Approval Config (Human-in-the-Loop)
 def load_approval_config() -> ApprovalConfig:
-    """Load approval configuration from environment variables."""
+    """Load approval configuration from environment variables.
+
+    Note: Query analysis approval (reasoning mode) is now controlled via footer checkbox,
+    not via environment variables.
+    """
     enabled = os.getenv("APPROVAL_ENABLED", "true").lower() == "true"
-    require_query_analysis = os.getenv("APPROVAL_REQUIRE_QUERY_ANALYSIS", "false").lower() == "true"
     require_tools = os.getenv("APPROVAL_REQUIRE_TOOLS", "false").lower() == "true"
     auto_approve_simple = os.getenv("APPROVAL_AUTO_APPROVE_SIMPLE", "true").lower() == "true"
 
@@ -49,7 +52,6 @@ def load_approval_config() -> ApprovalConfig:
 
     return ApprovalConfig(
         enabled=enabled,
-        require_query_analysis_approval=require_query_analysis,
         require_tool_approval=require_tools,
         tool_whitelist=tool_whitelist,
         auto_approve_simple_queries=auto_approve_simple,
@@ -92,7 +94,6 @@ async def main(
 
     logger.info(
         f"Approval config: enabled={approval_config.enabled}, "
-        f"query_analysis={approval_config.require_query_analysis_approval}, "
         f"tools={approval_config.require_tool_approval}"
     )
 

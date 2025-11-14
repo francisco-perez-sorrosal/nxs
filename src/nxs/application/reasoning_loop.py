@@ -11,7 +11,7 @@ This module implements the core self-correcting reasoning system that:
 from typing import Any, Callable, Optional
 
 from nxs.application.agentic_loop import AgentLoop
-from nxs.application.approval import ApprovalManager, ApprovalType, create_approval_request
+from nxs.application.approval import ApprovalManager
 from nxs.application.claude import Claude
 from nxs.application.conversation import Conversation
 from nxs.application.progress_tracker import ResearchProgressTracker
@@ -125,6 +125,9 @@ class AdaptiveReasoningLoop(AgentLoop):
         self.force_strategy = force_strategy
         self.approval_manager = approval_manager
 
+        # Callback to get reasoning enabled state from TUI
+        self.get_reasoning_enabled: Optional[Callable[[], bool]] = None
+
         # Recursion prevention flag for tool tracking integration
         #
         # ARCHITECTURAL NOTE:
@@ -204,58 +207,21 @@ class AdaptiveReasoningLoop(AgentLoop):
             # and execute directly via parent AgentLoop for tool tracking
             return await super().run(query, callbacks=callbacks, use_streaming=use_streaming)
 
-        # Human-in-the-Loop: Simple choice - execute directly or use reasoning
+        # Check reasoning enabled state from TUI checkbox
         use_reasoning = False
         initial_strategy = ExecutionStrategy.DIRECT  # Default
         complexity = None
 
-        if (
-            self.approval_manager
-            and self.approval_manager.config.require_query_analysis_approval
-        ):
-            # Check if we already have a remembered decision for query analysis
-            # If yes, use it without asking again
-            if self.approval_manager._remembered_query_analysis is not None:
-                logger.info(
-                    f"Using remembered query analysis decision: "
-                    f"{'Reasoning mode' if self.approval_manager._remembered_query_analysis else 'Direct execution'}"
-                )
-                use_reasoning = self.approval_manager._remembered_query_analysis
-            else:
-                logger.info("Requesting execution mode from user")
-
-                # Build approval request details - include query so user knows what they're approving
-                approval_details = {
-                    "mode": "execution_choice",  # Signal this is a simple mode choice
-                    "query": query,  # Include the actual query text
-                    "options": ["Execute Directly (fast)", "Analyze & Use Reasoning (automatic)"]
-                }
-
-                request = create_approval_request(
-                    approval_type=ApprovalType.QUERY_ANALYSIS,
-                    title="Choose Execution Mode",
-                    details=approval_details,
-                )
-
-                response = await self.approval_manager.request_approval(request)
-
-                if not response.approved:
-                    logger.info("Execution mode selection cancelled by user")
-                    return "Query cancelled by user."
-
-                # Check which mode user selected
-                use_reasoning = response.metadata.get("use_reasoning", False)
-                
-                # Remember the decision if requested (or auto-remember to prevent repeated prompts)
-                # The approval overlay automatically sets remember_for_session=True for query analysis
-                if response.metadata.get("remember_for_session", True):
-                    self.approval_manager._remembered_query_analysis = use_reasoning
-                    logger.debug(
-                        f"Remembered query analysis decision: "
-                        f"{'Reasoning mode' if use_reasoning else 'Direct execution'}"
-                    )
-                
-                logger.info(f"User selected: {'Reasoning mode' if use_reasoning else 'Direct execution'}")
+        # Get reasoning enabled state from TUI checkbox via callback
+        if self.get_reasoning_enabled:
+            use_reasoning = self.get_reasoning_enabled()
+            logger.info(
+                f"Reasoning mode: {'enabled' if use_reasoning else 'disabled'} (from TUI checkbox)"
+            )
+        else:
+            logger.warning(
+                "No reasoning enabled callback set, defaulting to direct execution"
+            )
 
         # Phase 0: COMPLEXITY ANALYSIS (only if user selected reasoning mode or forced)
         if self.force_strategy:
