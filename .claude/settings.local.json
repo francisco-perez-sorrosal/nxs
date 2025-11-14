@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(pixi install:*)",
+      "Bash(pixi run:*)"
     ],
     "deny": [],
     "ask": []

@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import typer
 
 # Import logger setup first to ensure logging is configured
+from nxs.application.local_tool_provider import LocalToolProvider
 from nxs.logger import get_logger, setup_logger
 from nxs.application.approval import ApprovalConfig, ApprovalManager
 from nxs.application.claude import Claude
@@ -21,8 +22,11 @@ from nxs.application.reasoning.analyzer import QueryComplexityAnalyzer
 from nxs.application.reasoning.planner import Planner
 from nxs.application.reasoning.evaluator import Evaluator
 from nxs.application.reasoning.synthesizer import Synthesizer
-from nxs.presentation.tui import NexusApp
 from nxs.application.summarization import SummarizationService
+from nxs.presentation.tui import NexusApp
+from nxs.tools.weather import get_weather
+from nxs.tools.location import get_current_location
+from nxs.tools.date_and_time import get_local_datetime
 
 load_dotenv()
 
@@ -121,7 +125,9 @@ async def main(
         """
         # Create ToolRegistry and register MCP tools
         tool_registry = ToolRegistry()
+        local_provider = LocalToolProvider([get_weather, get_current_location, get_local_datetime])
         mcp_provider = MCPToolProvider(artifact_manager.clients)
+        tool_registry.register_provider(local_provider)
         tool_registry.register_provider(mcp_provider)
         
         logger.debug(f"ToolRegistry initialized with {len(artifact_manager.clients)} MCP clients")
