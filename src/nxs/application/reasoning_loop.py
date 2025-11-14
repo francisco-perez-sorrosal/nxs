@@ -8,7 +8,7 @@ This module implements the core self-correcting reasoning system that:
 - Guarantees quality-approved responses reach users
 """
 
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from nxs.application.agentic_loop import AgentLoop
 from nxs.application.approval import ApprovalManager
@@ -25,27 +25,17 @@ from nxs.application.reasoning.types import (
     ComplexityLevel,
     EvaluationResult,
     ExecutionStrategy,
-    SubTask,
 )
+from nxs.application.strategies import (
+    DeepReasoningStrategy,
+    DirectExecutionStrategy,
+    LightPlanningStrategy,
+)
+from nxs.application.strategies.utils import call_callback
 from nxs.application.tool_registry import ToolRegistry
 from nxs.logger import get_logger
 
 logger = get_logger("adaptive_reasoning_loop")
-
-
-async def _call_callback(callbacks: dict, key: str, *args):
-    """Helper to call callbacks that may be sync or async.
-
-    Args:
-        callbacks: Callback dictionary
-        key: Callback key
-        *args: Arguments to pass to callback
-    """
-    if key in callbacks:
-        result = callbacks[key](*args)
-        # Handle both async and sync callbacks
-        if hasattr(result, "__await__"):
-            await result
 
 
 class AdaptiveReasoningLoop(AgentLoop):
@@ -127,6 +117,25 @@ class AdaptiveReasoningLoop(AgentLoop):
 
         # Callback to get reasoning enabled state from TUI
         self.get_reasoning_enabled: Optional[Callable[[], bool]] = None
+
+        # Initialize execution strategies
+        self.direct_strategy = DirectExecutionStrategy(
+            execute_with_tracking=self._execute_with_tool_tracking
+        )
+        self.light_planning_strategy = LightPlanningStrategy(
+            planner=self.planner,
+            synthesizer=self.synthesizer,
+            tool_registry=self.tool_registry,
+            execute_with_tracking=self._execute_with_tool_tracking,
+        )
+        self.deep_reasoning_strategy = DeepReasoningStrategy(
+            planner=self.planner,
+            evaluator=self.evaluator,
+            synthesizer=self.synthesizer,
+            tool_registry=self.tool_registry,
+            execute_with_tracking=self._execute_with_tool_tracking,
+            max_iterations=self.max_iterations,
+        )
 
         # Recursion prevention flag for tool tracking integration
         #
@@ -238,7 +247,7 @@ class AdaptiveReasoningLoop(AgentLoop):
         elif use_reasoning:
             # User wants reasoning - run analyzer to determine complexity and strategy
             logger.info("Running complexity analysis for reasoning mode")
-            await _call_callback(callbacks, "on_analysis_start")
+            await call_callback(callbacks, "on_analysis_start")
 
             # Get available tools for analysis
             tool_names = self.tool_registry.get_tool_names()
@@ -258,7 +267,7 @@ class AdaptiveReasoningLoop(AgentLoop):
                 f"iterations={complexity.estimated_iterations}"
             )
 
-            await _call_callback(callbacks, "on_analysis_complete", complexity)
+            await call_callback(callbacks, "on_analysis_complete", complexity)
         else:
             # Direct execution - skip analyzer
             logger.info("Using DIRECT execution - skipping complexity analysis")
@@ -286,7 +295,7 @@ class AdaptiveReasoningLoop(AgentLoop):
         while True:
             logger.info(f"Attempting strategy: {current_strategy.value}")
 
-            await _call_callback(
+            await call_callback(
                 callbacks,
                 "on_strategy_selected",
                 current_strategy,
@@ -298,17 +307,19 @@ class AdaptiveReasoningLoop(AgentLoop):
 
             # Execute with current strategy (buffered, not streamed to user yet)
             if current_strategy == ExecutionStrategy.DIRECT:
-                result = await self._execute_direct(query, complexity, tracker, callbacks)
+                result = await self.direct_strategy.execute(
+                    query, complexity, tracker, callbacks
+                )
                 execution_attempts.append(("DIRECT", result, 0.0))
 
             elif current_strategy == ExecutionStrategy.LIGHT_PLANNING:
-                result = await self._execute_light_planning(
+                result = await self.light_planning_strategy.execute(
                     query, complexity, tracker, callbacks
                 )
                 execution_attempts.append(("LIGHT", result, 0.0))
 
             else:  # DEEP_REASONING
-                result = await self._execute_deep_reasoning(
+                result = await self.deep_reasoning_strategy.execute(
                     query, complexity, tracker, callbacks
                 )
                 execution_attempts.append(("DEEP", result, 0.0))
@@ -317,9 +328,9 @@ class AdaptiveReasoningLoop(AgentLoop):
             logger.info("Phase 2: Evaluating response quality")
             
             # Show the response that will be judged
-            await _call_callback(callbacks, "on_response_for_judgment", result, current_strategy.value)
+            await call_callback(callbacks, "on_response_for_judgment", result, current_strategy.value)
             
-            await _call_callback(callbacks, "on_quality_check_start")
+            await call_callback(callbacks, "on_quality_check_start")
 
             evaluation = await self._evaluate_response_quality(
                 query=query,
@@ -340,7 +351,7 @@ class AdaptiveReasoningLoop(AgentLoop):
                 f"confidence={evaluation.confidence:.2f}"
             )
 
-            await _call_callback(callbacks, "on_quality_check_complete", evaluation)
+            await call_callback(callbacks, "on_quality_check_complete", evaluation)
 
             # NEW: Record attempt outcome in tracker (Phase 3)
             outcome = (
@@ -372,12 +383,12 @@ class AdaptiveReasoningLoop(AgentLoop):
                     # Stream the buffered response
                     for i in range(0, len(result), 20):
                         chunk = result[i : i + 20]
-                        await _call_callback(callbacks, "on_stream_chunk", chunk)
+                        await call_callback(callbacks, "on_stream_chunk", chunk)
                     
                     # Signal streaming completion so chat panel can render the buffered message
-                    await _call_callback(callbacks, "on_stream_complete")
+                    await call_callback(callbacks, "on_stream_complete")
 
-                await _call_callback(
+                await call_callback(
                     callbacks,
                     "on_final_response",
                     current_strategy,
@@ -387,7 +398,7 @@ class AdaptiveReasoningLoop(AgentLoop):
                 )
 
                 # Phase 6: Notify tracker completion for persistence
-                await _call_callback(callbacks, "on_tracker_complete", tracker, query)
+                await call_callback(callbacks, "on_tracker_complete", tracker, query)
 
                 return result
 
@@ -397,7 +408,7 @@ class AdaptiveReasoningLoop(AgentLoop):
                 f"escalating from {current_strategy.value}"
             )
 
-            await _call_callback(
+            await call_callback(
                 callbacks,
                 "on_auto_escalation",
                 current_strategy,
@@ -426,444 +437,6 @@ class AdaptiveReasoningLoop(AgentLoop):
         else:
             # Already at DEEP, return same (shouldn't reach here)
             return ExecutionStrategy.DEEP_REASONING
-
-    async def _execute_direct(
-        self,
-        query: str,
-        complexity: ComplexityAnalysis,  # Not used directly, kept for API consistency
-        tracker: ResearchProgressTracker,
-        callbacks: dict,
-    ) -> str:
-        """Execute with direct strategy (fast-path).
-
-        Modified for Phase 3:
-        - Adds compact context if this is an escalation
-        - Uses _execute_with_tool_tracking() for tool interception
-
-        Fast execution:
-        - No planning overhead
-        - Direct AgentLoop execution
-        - Good for simple, straightforward queries
-
-        Args:
-            query: User query
-            complexity: Complexity analysis
-            tracker: ResearchProgressTracker instance
-            callbacks: Callback dictionary
-
-        Returns:
-            Response text (buffered, not yet quality-checked)
-        """
-        logger.info("Direct execution (fast-path)")
-        await _call_callback(callbacks, "on_direct_execution")
-
-        # NEW: Add tracker context if this is an escalation (Phase 3)
-        if len(tracker.attempts) > 1:
-            # This is a retry after failed attempt
-            context_text = tracker.to_compact_context()
-            enhanced_query = f"{query}\n\n[Previous attempt context: {context_text}]"
-            logger.debug("Added compact tracker context to DIRECT execution")
-        else:
-            enhanced_query = query
-
-        # NEW: Use _execute_with_tool_tracking() for tool interception (Phase 3)
-        result = await self._execute_with_tool_tracking(
-            enhanced_query,
-            tracker=tracker,
-            use_streaming=False,
-            callbacks={
-                k: v
-                for k, v in callbacks.items()
-                if k not in ["on_stream_chunk"]  # Suppress streaming
-            },
-        )
-
-        logger.info(f"Direct execution complete: {len(result)} chars")
-        return result
-
-    async def _execute_light_planning(
-        self,
-        query: str,
-        complexity: ComplexityAnalysis,
-        tracker: ResearchProgressTracker,
-        callbacks: dict,
-    ) -> str:
-        """Execute with light planning (1-2 iterations, minimal overhead).
-
-        Modified for Phase 3:
-        - Uses plan skeleton from tracker
-        - Tracks step progress
-        - Skips completed steps
-        - Uses _execute_with_tool_tracking() for tool interception
-
-        Light planning:
-        - Quick analysis of query parts
-        - Execute 1-2 steps
-        - No deep evaluation/synthesis
-        - Good for medium-complexity queries
-
-        Args:
-            query: User query
-            complexity: Complexity analysis
-            tracker: ResearchProgressTracker instance
-            callbacks: Callback dictionary
-
-        Returns:
-            Synthesized response (buffered, not yet quality-checked)
-        """
-        logger.info("Light planning execution")
-        await _call_callback(callbacks, "on_light_planning")
-
-        # Phase 4: Generate or refine plan with full tracker context
-        plan_context = {
-            "mode": "light",
-            "complexity": complexity,
-            "available_tools": self.tool_registry.get_tool_names(),
-        }
-
-        # Phase 4: Add tracker context if this is a refinement (plan exists or has previous attempts)
-        if tracker.plan is not None or len(tracker.attempts) > 1:
-            # Include previous attempts for context
-            if len(tracker.attempts) > 1:
-                plan_context["previous_attempts"] = [
-                    {
-                        "strategy": a.strategy.value,
-                        "quality": a.quality_score,
-                        "evaluation": a.evaluation.reasoning if a.evaluation else None,
-                    }
-                    for a in tracker.attempts[:-1]  # Exclude current
-                ]
-
-            # Include knowledge gaps
-            if tracker.insights.knowledge_gaps:
-                plan_context["knowledge_gaps"] = tracker.insights.knowledge_gaps
-
-            # Include completed steps if plan exists
-            if tracker.plan:
-                plan_context["completed_steps"] = [
-                    s.description for s in tracker.plan.get_completed_steps()
-                ]
-
-        plan = await self.planner.generate_plan(query, context=plan_context)
-        tracker.set_plan(plan, ExecutionStrategy.LIGHT_PLANNING)
-
-        await _call_callback(callbacks, "on_planning_complete", plan, "light")
-
-        # If no subtasks were generated, fall back to direct execution
-        if not plan.subtasks or len(plan.subtasks) == 0:
-            logger.warning("No subtasks generated, falling back to direct execution")
-            return await self._execute_with_tool_tracking(
-                query,
-                tracker=tracker,
-                use_streaming=False,
-                callbacks={k: v for k, v in callbacks.items() if k not in ["on_stream_chunk"]},
-            )
-
-        # Limit iterations for light planning
-        max_iters = min(2, complexity.estimated_iterations or 2)
-
-        accumulated_results = []
-
-        # NEW: Execute plan steps with tracker integration (Phase 3)
-        if not tracker.plan:
-            logger.warning("No plan in tracker, falling back to direct execution")
-            return await self._execute_with_tool_tracking(
-                query,
-                tracker=tracker,
-                use_streaming=False,
-                callbacks={k: v for k, v in callbacks.items() if k not in ["on_stream_chunk"]},
-            )
-
-        for iteration in range(max_iters):
-            if iteration >= len(tracker.plan.steps):
-                break
-
-            step = tracker.plan.steps[iteration]
-
-            # NEW: Skip already completed steps (Phase 3)
-            if step.status == "completed":
-                logger.debug(f"Skipping completed step: {step.description}")
-                accumulated_results.append(
-                    f"[Cached] {step.description}: {'; '.join(step.findings)}"
-                )
-                continue
-
-            # NEW: Update step status (Phase 3)
-            tracker.update_step_status(step.id, "in_progress")
-
-            # Phase 6: Notify step progress for real-time display
-            await _call_callback(
-                callbacks, "on_step_progress", step.id, "in_progress", step.description
-            )
-
-            logger.debug(f"Light iteration {iteration + 1}/{max_iters}")
-
-            await _call_callback(
-                callbacks,
-                "on_iteration",
-                iteration + 1,
-                max_iters,
-                step.description,
-            )
-
-            # NEW: Build subtask query with tracker context (Phase 3)
-            subtask_query = self._build_subtask_query(step, tracker)
-
-            # NEW: Use _execute_with_tool_tracking() (Phase 3)
-            result = await self._execute_with_tool_tracking(
-                subtask_query,
-                tracker=tracker,
-                use_streaming=False,
-                callbacks={k: v for k, v in callbacks.items() if k not in ["on_stream_chunk"]},
-            )
-
-            accumulated_results.append(
-                {"query": step.description, "result": result, "iteration": iteration}
-            )
-
-            # NEW: Mark step as completed with findings (Phase 3)
-            tracker.update_step_status(step.id, "completed", findings=[result])
-
-            # Phase 6: Notify step completion for real-time display
-            await _call_callback(
-                callbacks, "on_step_progress", step.id, "completed", step.description
-            )
-
-            plan.subtasks.pop(0) if plan.subtasks else None
-
-        # Simple synthesis (no filtering, just combine)
-        if len(accumulated_results) == 0:
-            logger.warning("No results accumulated, returning original query execution")
-            return await self._execute_with_tool_tracking(
-                query,
-                tracker=tracker,
-                use_streaming=False,
-                callbacks={k: v for k, v in callbacks.items() if k not in ["on_stream_chunk"]},
-            )
-        elif len(accumulated_results) == 1:
-            return accumulated_results[0]["result"]
-        else:
-            # Quick synthesis without filtering
-            return await self.synthesizer.synthesize(query, accumulated_results)
-
-    async def _execute_deep_reasoning(
-        self,
-        query: str,
-        complexity: ComplexityAnalysis,
-        tracker: ResearchProgressTracker,
-        callbacks: dict,
-    ) -> str:
-        """Execute with full reasoning cycle (original ReasoningLoop logic).
-
-        Modified for Phase 3:
-        - Uses plan skeleton from tracker
-        - Full context integration for escalations
-        - Tracks step progress and adds dynamic steps
-        - Uses _execute_with_tool_tracking() for tool interception
-
-        Deep reasoning:
-        - Full planning phase
-        - Iterative execution with evaluation
-        - Gap identification and additional queries
-        - Result filtering and synthesis
-        - Good for complex research queries
-
-        Args:
-            query: User query
-            complexity: Complexity analysis
-            tracker: ResearchProgressTracker instance
-            callbacks: Callback dictionary
-
-        Returns:
-            Synthesized final answer (buffered, not yet quality-checked)
-        """
-        logger.info("Deep reasoning execution")
-        await _call_callback(callbacks, "on_deep_reasoning")
-
-        # Phase 1: Planning (full detail)
-        logger.info(f"Phase 1: Planning for query: {query[:100]}")
-        await _call_callback(callbacks, "on_planning")
-
-        # Phase 4: Generate comprehensive plan with full tracker context
-        plan_context = {
-            "mode": "deep",
-            "complexity": complexity,
-            "available_tools": self.tool_registry.get_tool_names(),
-        }
-
-        # Phase 4: Add tracker context if this is a refinement (plan exists or has previous attempts)
-        if tracker.plan is not None or len(tracker.attempts) > 1:
-            # Include previous attempts for context
-            if len(tracker.attempts) > 1:
-                plan_context["previous_attempts"] = [
-                    {
-                        "strategy": a.strategy.value,
-                        "quality": a.quality_score,
-                        "evaluation": a.evaluation.reasoning if a.evaluation else None,
-                    }
-                    for a in tracker.attempts[:-1]  # Exclude current
-                ]
-
-            # Include knowledge gaps
-            if tracker.insights.knowledge_gaps:
-                plan_context["knowledge_gaps"] = tracker.insights.knowledge_gaps
-
-            # Include completed steps if plan exists
-            if tracker.plan:
-                plan_context["completed_steps"] = [
-                    s.description for s in tracker.plan.get_completed_steps()
-                ]
-
-        plan = await self.planner.generate_plan(query, context=plan_context)
-        plan.complexity_analysis = complexity
-        logger.info(f"Generated plan with {len(plan.subtasks)} subtasks")
-
-        # NEW: Set or refine plan in tracker (Phase 3)
-        if tracker.plan is None:
-            tracker.set_plan(plan, ExecutionStrategy.DEEP_REASONING)
-        else:
-            # Refine existing plan
-            tracker.set_plan(plan, ExecutionStrategy.DEEP_REASONING)
-
-        await _call_callback(callbacks, "on_planning_complete", plan, "deep")
-
-        # Phase 2: Iterative execution and evaluation
-        accumulated_results = []
-        executed_queries = []
-
-        # NEW: Use tracker plan steps instead of plan.subtasks (Phase 3)
-        if not tracker.plan:
-            logger.error("No plan in tracker for deep reasoning")
-            return "Error: No plan available for deep reasoning execution"
-
-        max_iterations = min(self.max_iterations, len(tracker.plan.steps))
-
-        for iteration in range(max_iterations):
-            logger.info(f"Phase 2: Iteration {iteration + 1}/{max_iterations}")
-
-            # NEW: Find next pending step from tracker (Phase 3)
-            pending_steps = tracker.plan.get_pending_steps()
-            if not pending_steps:
-                break
-
-            step = pending_steps[0]
-            tracker.update_step_status(step.id, "in_progress")
-
-            # Phase 6: Notify step progress for real-time display
-            await _call_callback(
-                callbacks, "on_step_progress", step.id, "in_progress", step.description
-            )
-
-            subtask_query = step.description
-            await _call_callback(
-                callbacks,
-                "on_iteration",
-                iteration + 1,
-                max_iterations,
-                subtask_query,
-            )
-
-            # NEW: Execute step with full context (Phase 3)
-            subtask_query_with_context = self._build_subtask_query_with_full_context(
-                step, tracker
-            )
-
-            logger.debug(f"Executing subtask: {subtask_query}")
-
-            # NEW: Use _execute_with_tool_tracking() (Phase 3)
-            result = await self._execute_with_tool_tracking(
-                subtask_query_with_context,
-                tracker=tracker,
-                use_streaming=False,
-                callbacks={k: v for k, v in callbacks.items() if k not in ["on_stream_chunk"]},
-            )
-
-            accumulated_results.append(
-                {
-                    "query": subtask_query,
-                    "result": result,
-                    "iteration": iteration,
-                }
-            )
-            executed_queries.append(subtask_query)
-
-            # NEW: Mark step as completed (Phase 3)
-            tracker.update_step_status(step.id, "completed", findings=[result])
-
-            # Phase 6: Notify step completion for real-time display
-            await _call_callback(
-                callbacks, "on_step_progress", step.id, "completed", step.description
-            )
-
-            # Phase 3: Evaluation
-            logger.info("Phase 3: Evaluating completeness")
-            await _call_callback(callbacks, "on_evaluation")
-
-            evaluation = await self.evaluator.evaluate(
-                query=query, results=accumulated_results, current_plan=plan
-            )
-
-            logger.info(
-                f"Evaluation: complete={evaluation.is_complete}, "
-                f"confidence={evaluation.confidence:.2f}"
-            )
-
-            # NEW: Store evaluation insights in tracker (Phase 3)
-            tracker.insights.add_from_evaluation(evaluation)
-
-            # Check if we're done
-            if evaluation.is_complete:
-                logger.info("Query fully answered, proceeding to synthesis")
-                break
-
-            # Phase 4: Plan adjustment if needed
-            if (
-                evaluation.additional_queries
-                and iteration < max_iterations - 1
-            ):
-                logger.info(
-                    f"Adding {len(evaluation.additional_queries)} additional queries"
-                )
-                # NEW: Add dynamic steps to tracker plan (Phase 3)
-                if tracker.plan:
-                    from nxs.application.progress_tracker import PlanStep
-
-                    for additional_query in evaluation.additional_queries:
-                        if additional_query not in executed_queries:
-                            new_step = PlanStep(
-                                id=f"step_dynamic_{iteration}_{len(tracker.plan.steps)}",
-                                description=additional_query,
-                                status="pending",
-                                started_at=None,
-                                completed_at=None,
-                                findings=[],
-                                tools_used=[],
-                                depends_on=[step.id],
-                                spawned_from=step.id,
-                            )
-                            tracker.plan.add_dynamic_step(new_step, step.id)
-                        # Also add to plan.subtasks for backward compatibility
-                        plan.subtasks.append(
-                            SubTask(query=additional_query, priority=1)
-                        )
-
-        # Phase 5: Synthesis
-        logger.info("Phase 5: Synthesizing final answer")
-        await _call_callback(callbacks, "on_synthesis")
-
-        # Filter results first
-        filtered_results = await self.synthesizer.filter_results(
-            query, accumulated_results
-        )
-
-        # Generate final answer
-        final_answer = await self.synthesizer.synthesize(query, filtered_results)
-
-        logger.info(
-            f"Deep reasoning complete: {len(final_answer)} chars generated"
-        )
-
-        return final_answer
 
     async def _evaluate_response_quality(
         self,
@@ -926,68 +499,6 @@ class AdaptiveReasoningLoop(AgentLoop):
             )
 
         return evaluation
-
-    def _build_subtask_query(
-        self, step: Any, tracker: ResearchProgressTracker
-    ) -> str:
-        """Build query for a subtask incorporating tracker context.
-
-        Args:
-            step: PlanStep from tracker plan
-            tracker: ResearchProgressTracker instance
-
-        Returns:
-            Enhanced query with context from completed steps and knowledge gaps
-        """
-        base_query = step.description
-
-        # Add context from completed steps
-        if tracker.plan:
-            completed = tracker.plan.get_completed_steps()
-            if completed:
-                context_parts = [
-                    f"- {s.description}: {'; '.join(s.findings)}"
-                    for s in completed[-3:]
-                ]
-                context = "\n".join(context_parts)
-                base_query = (
-                    f"{base_query}\n\nRelevant findings from previous steps:\n{context}"
-                )
-
-        # Add knowledge gaps to address
-        if tracker.insights.knowledge_gaps:
-            gaps = "\n".join(f"- {g}" for g in tracker.insights.knowledge_gaps[:3])
-            base_query = (
-                f"{base_query}\n\nAddress these knowledge gaps if relevant:\n{gaps}"
-            )
-
-        return base_query
-
-    def _build_subtask_query_with_full_context(
-        self, step: Any, tracker: ResearchProgressTracker
-    ) -> str:
-        """Build subtask query with comprehensive tracker context.
-
-        Args:
-            step: PlanStep from tracker plan
-            tracker: ResearchProgressTracker instance
-
-        Returns:
-            Enhanced query with full tracker context
-        """
-        # Use full context serialization
-        context_text = tracker.to_context_text(ExecutionStrategy.DEEP_REASONING)
-
-        subtask_query = f"""
-{step.description}
-
-{context_text}
-
-Focus on addressing the identified knowledge gaps and building upon completed work.
-Avoid redundant tool calls - check the tool execution history above.
-"""
-
-        return subtask_query
 
     # Note: Prompt caching for tracker context is handled by the Conversation class
     #
