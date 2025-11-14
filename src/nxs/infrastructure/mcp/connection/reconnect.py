@@ -50,31 +50,51 @@ class ReconnectionStrategy(ABC):
 
 
 class ExponentialBackoffStrategy(ReconnectionStrategy):
-    """Reconnection strategy with exponential backoff."""
+    """Reconnection strategy with exponential backoff.
+
+    Supports infinite retries (max_attempts=-1) for serverless backends
+    that may shut down and restart frequently.
+    """
 
     def __init__(
         self,
-        max_attempts: int = 10,
-        initial_delay: float = 1.0,
-        max_delay: float = 60.0,
-        backoff_multiplier: float = 2.0,
+        max_attempts: int = -1,
+        initial_delay: float = 2.0,
+        max_delay: float = 30.0,
+        backoff_multiplier: float = 1.5,
         progress_update_interval: float = 2.0,
+        serverless_mode: bool = True,
     ):
         """
         Initialize exponential backoff strategy.
 
         Args:
-            max_attempts: Maximum number of reconnection attempts
-            initial_delay: Initial delay in seconds
-            max_delay: Maximum delay in seconds
-            backoff_multiplier: Multiplier for each retry
+            max_attempts: Maximum number of reconnection attempts (-1 for infinite, recommended for serverless)
+            initial_delay: Initial delay in seconds (default: 2.0s for faster recovery)
+            max_delay: Maximum delay in seconds (default: 30.0s, lower cap for serverless)
+            backoff_multiplier: Multiplier for each retry (default: 1.5 for slower growth)
             progress_update_interval: How often to update progress during wait (seconds)
+            serverless_mode: If True, optimizes settings for serverless backends (infinite retries, faster recovery)
         """
+        # Apply serverless optimizations if enabled
+        if serverless_mode and max_attempts > 0:
+            logger.info("Serverless mode enabled: setting infinite reconnection attempts")
+            max_attempts = -1
+
         self._max_attempts = max_attempts
         self._initial_delay = initial_delay
         self._max_delay = max_delay
         self._backoff_multiplier = backoff_multiplier
         self._progress_update_interval = progress_update_interval
+        self._serverless_mode = serverless_mode
+
+        # Log configuration
+        attempts_str = "infinite" if max_attempts == -1 else str(max_attempts)
+        logger.info(
+            f"Reconnection strategy configured: max_attempts={attempts_str}, "
+            f"initial_delay={initial_delay}s, max_delay={max_delay}s, "
+            f"backoff={backoff_multiplier}x, serverless_mode={serverless_mode}"
+        )
 
     @property
     def max_attempts(self) -> int:
@@ -98,7 +118,17 @@ class ExponentialBackoffStrategy(ReconnectionStrategy):
         return min(delay, self._max_delay)
 
     def should_retry(self, attempt: int) -> bool:
-        """Check if reconnection should be attempted."""
+        """Check if reconnection should be attempted.
+
+        Args:
+            attempt: Current attempt number (1-indexed)
+
+        Returns:
+            True if should retry, False otherwise
+        """
+        # Infinite retries when max_attempts is -1
+        if self._max_attempts == -1:
+            return True
         return attempt <= self._max_attempts
 
     async def wait_before_retry(
@@ -122,7 +152,14 @@ class ExponentialBackoffStrategy(ReconnectionStrategy):
             return False
 
         delay = self.calculate_delay(attempt)
-        logger.info(f"Waiting {delay:.1f}s before retry (attempt {attempt}/{self._max_attempts})")
+
+        # Format attempt info for logging
+        if self._max_attempts == -1:
+            attempt_str = f"attempt {attempt} (infinite retries)"
+        else:
+            attempt_str = f"attempt {attempt}/{self._max_attempts}"
+
+        logger.info(f"Waiting {delay:.1f}s before retry ({attempt_str})")
 
         # Notify initial progress
         if on_progress:
@@ -153,7 +190,10 @@ class ExponentialBackoffStrategy(ReconnectionStrategy):
             # Update progress
             remaining = delay - elapsed
             if remaining > 0:
-                logger.debug(f"Reconnection in {remaining:.1f}s (attempt {attempt}/{self._max_attempts})")
+                if self._max_attempts == -1:
+                    logger.debug(f"Reconnection in {remaining:.1f}s (attempt {attempt}, infinite retries)")
+                else:
+                    logger.debug(f"Reconnection in {remaining:.1f}s (attempt {attempt}/{self._max_attempts})")
                 if on_progress:
                     try:
                         on_progress(attempt, self._max_attempts, remaining)

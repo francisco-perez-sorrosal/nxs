@@ -399,8 +399,15 @@ class RefreshService:
             return  # Skip this update to avoid too many refresh tasks
 
         self._last_reconnect_progress_update[server_name] = current_time
+
+        # Format attempt info for logging
+        if event.max_attempts == -1:
+            attempt_str = f"attempt {event.attempts} (infinite retries)"
+        else:
+            attempt_str = f"attempt {event.attempts}/{event.max_attempts}"
+
         logger.debug(
-            f"Reconnection progress for {server_name}: attempt {event.attempts}/{event.max_attempts}, "
+            f"Reconnection progress for {server_name}: {attempt_str}, "
             f"retry in {event.next_retry_delay:.1f}s"
         )
 

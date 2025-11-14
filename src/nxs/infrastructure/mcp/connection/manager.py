@@ -87,7 +87,10 @@ class SingleConnectionManager:
         """
         self._session = session
         if session:
-            # Reset reconnect attempts and error on successful connection
+            # Reset reconnect attempts on successful connection
+            # This is crucial for serverless backends that may disconnect and reconnect frequently
+            if self._reconnect_attempts > 0:
+                logger.info(f"Connection successful after {self._reconnect_attempts} attempt(s) - resetting counter")
             self._reconnect_attempts = 0
             self._lifecycle.set_status(ConnectionStatus.CONNECTED)
             self._lifecycle.mark_ready()
@@ -217,18 +220,26 @@ class SingleConnectionManager:
                 else:
                     self._lifecycle.set_status(ConnectionStatus.RECONNECTING)
 
-                logger.info(
-                    f"Connection attempt {self._reconnect_attempts + 1} "
-                    f"(max={self._reconnect_strategy.max_attempts})"
-                )
+                # Log connection attempt with proper formatting
+                if self._reconnect_strategy.max_attempts == -1:
+                    logger.info(f"Connection attempt {self._reconnect_attempts + 1} (infinite retries)")
+                else:
+                    logger.info(
+                        f"Connection attempt {self._reconnect_attempts + 1} "
+                        f"(max={self._reconnect_strategy.max_attempts})"
+                    )
 
                 # Execute connection function (passes stop_event)
                 await connect_fn(stop_event)
 
                 # If we get here, connection was lost (not an error)
-                logger.warning("Connection lost")
+                # This is normal for serverless backends that close idle connections
+                logger.info("Connection closed (likely server-side idle timeout or shutdown)")
                 self._session = None
                 self._reconnect_attempts += 1
+
+                # Set status to RECONNECTING (not ERROR - this is expected for serverless)
+                self._lifecycle.set_status(ConnectionStatus.RECONNECTING)
 
                 # Wait before reconnecting
                 should_continue = await self._reconnect_strategy.wait_before_retry(
@@ -238,7 +249,7 @@ class SingleConnectionManager:
                 )
 
                 if not should_continue:
-                    logger.info("Stopping reconnection")
+                    logger.info("Stopping reconnection (stop requested or max attempts reached)")
                     break
 
             except asyncio.CancelledError:
@@ -247,7 +258,17 @@ class SingleConnectionManager:
                 raise
 
             except Exception as e:
-                logger.error(f"Connection error: {e}")
+                # Differentiate between error types
+                error_str = str(e).lower()
+                is_network_error = any(
+                    keyword in error_str
+                    for keyword in ["connection refused", "timeout", "network", "unreachable", "reset"]
+                )
+
+                if is_network_error:
+                    logger.warning(f"Network error (will retry): {e}")
+                else:
+                    logger.error(f"Connection error (will retry): {e}")
 
                 # Mark ready even on failure (non-blocking mode)
                 self._lifecycle.mark_ready()
@@ -261,7 +282,8 @@ class SingleConnectionManager:
 
                 # Check if we should retry
                 if not self._reconnect_strategy.should_retry(self._reconnect_attempts):
-                    error_msg = f"Connection failed after {self._reconnect_strategy.max_attempts} attempts"
+                    # Only reach here if max_attempts is not -1 (not infinite)
+                    error_msg = f"Connection failed after {self._reconnect_strategy.max_attempts} attempts: {e}"
                     logger.error(error_msg)
                     self._lifecycle.set_status(ConnectionStatus.ERROR, error_msg)
                     break
@@ -275,7 +297,7 @@ class SingleConnectionManager:
                 )
 
                 if not should_continue:
-                    logger.info("Stopping reconnection")
+                    logger.info("Stopping reconnection (stop requested)")
                     break
 
             finally:
@@ -289,10 +311,13 @@ class SingleConnectionManager:
 
     def _on_unhealthy(self) -> None:
         """Handle unhealthy connection detected by health checker."""
-        logger.warning("Health check detected unhealthy connection")
+        logger.warning("Health check detected unhealthy connection - triggering reconnection")
         self._session = None
         if self._lifecycle.status == ConnectionStatus.CONNECTED:
+            logger.info("Transitioning from CONNECTED to RECONNECTING due to health check failure")
             self._lifecycle.set_status(ConnectionStatus.RECONNECTING)
+        else:
+            logger.debug(f"Health check failed but status is already {self._lifecycle.status.value}")
 
     async def _cleanup(self) -> None:
         """Clean up connection resources."""

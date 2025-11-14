@@ -17,24 +17,39 @@ class SessionProtocol(Protocol):
 
 
 class HealthChecker:
-    """Monitors connection health and detects failures."""
+    """Monitors connection health and detects failures.
+
+    This checker serves dual purposes:
+    1. Keep-alive: Sends periodic requests to keep serverless backends active
+    2. Health monitoring: Detects connection failures and triggers reconnection
+    """
 
     def __init__(
         self,
-        check_interval: float = 30.0,
+        check_interval: float = 10.0,
         timeout: float = 5.0,
+        keep_alive_enabled: bool = True,
+        failure_threshold: int = 2,
+        health_check_operation: str = "list_tools",
     ):
         """
         Initialize health checker.
 
         Args:
-            check_interval: Seconds between health checks
+            check_interval: Seconds between health checks (default: 10s for serverless)
             timeout: Timeout for health check operations (seconds)
+            keep_alive_enabled: If True, proactively sends requests to keep server alive
+            failure_threshold: Number of consecutive failures before marking unhealthy
+            health_check_operation: MCP operation to use for health checks (list_tools, list_prompts, list_resources)
         """
         self._check_interval = check_interval
         self._timeout = timeout
+        self._keep_alive_enabled = keep_alive_enabled
+        self._failure_threshold = failure_threshold
+        self._health_check_operation = health_check_operation
         self._task: Optional[asyncio.Task] = None
         self._stop_event: Optional[asyncio.Event] = None
+        self._consecutive_failures = 0
 
     async def start(
         self,
@@ -55,8 +70,10 @@ class HealthChecker:
             return
 
         self._stop_event = stop_event
+        self._consecutive_failures = 0
         self._task = asyncio.create_task(self._health_check_loop(get_session, on_unhealthy, stop_event))
-        logger.info(f"Health checker started (interval={self._check_interval}s)")
+        mode = "keep-alive + health monitoring" if self._keep_alive_enabled else "health monitoring only"
+        logger.info(f"Health checker started (interval={self._check_interval}s, mode={mode}, operation={self._health_check_operation})")
 
     async def stop(self) -> None:
         """Stop health check monitoring."""
@@ -75,6 +92,7 @@ class HealthChecker:
 
         self._task = None
         self._stop_event = None
+        self._consecutive_failures = 0
         logger.info("Health checker stopped")
 
     async def _health_check_loop(
@@ -101,12 +119,23 @@ class HealthChecker:
                 # Perform health check
                 is_healthy = await self._check_health(get_session)
 
-                if not is_healthy:
-                    logger.warning("Connection unhealthy, triggering callback")
-                    try:
-                        on_unhealthy()
-                    except Exception as e:
-                        logger.error(f"Error in unhealthy callback: {e}")
+                if is_healthy:
+                    # Reset failure counter on successful check
+                    if self._consecutive_failures > 0:
+                        logger.info(f"Connection recovered after {self._consecutive_failures} failure(s)")
+                    self._consecutive_failures = 0
+                else:
+                    # Increment failure counter
+                    self._consecutive_failures += 1
+                    logger.warning(f"Health check failed ({self._consecutive_failures}/{self._failure_threshold})")
+
+                    # Only trigger unhealthy callback after threshold is reached
+                    if self._consecutive_failures >= self._failure_threshold:
+                        logger.warning(f"Connection unhealthy after {self._consecutive_failures} consecutive failures, triggering callback")
+                        try:
+                            on_unhealthy()
+                        except Exception as e:
+                            logger.error(f"Error in unhealthy callback: {e}")
 
         except asyncio.CancelledError:
             logger.info("Health check loop cancelled")
@@ -130,13 +159,24 @@ class HealthChecker:
         session = get_session()
 
         if session is None:
-            logger.warning("Health check: Session is None")
+            logger.debug("Health check: Session is None")
             return False
 
         try:
-            # Use list_tools as a lightweight health check
-            await asyncio.wait_for(session.list_tools(), timeout=self._timeout)
-            logger.debug("Health check passed")
+            # Execute the configured health check operation
+            operation = getattr(session, self._health_check_operation, None)
+            if operation is None:
+                logger.error(f"Invalid health check operation: {self._health_check_operation}")
+                # Fallback to list_tools
+                operation = session.list_tools
+
+            await asyncio.wait_for(operation(), timeout=self._timeout)
+
+            # Log differently based on mode
+            if self._keep_alive_enabled:
+                logger.debug(f"Health check passed (keep-alive ping sent via {self._health_check_operation})")
+            else:
+                logger.debug("Health check passed")
             return True
         except asyncio.TimeoutError:
             logger.warning(f"Health check timed out after {self._timeout}s")
