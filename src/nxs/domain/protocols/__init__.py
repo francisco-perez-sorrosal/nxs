@@ -10,6 +10,7 @@ from nxs.domain.protocols.mcp_client import MCPClient
 from nxs.domain.protocols.cache import Cache, K, V
 from nxs.domain.protocols.parser import ArgumentParser
 from nxs.domain.protocols.factory import ClientProvider
+from nxs.domain.protocols.state import StateProvider
 
 __all__ = [
     "MCPClient",
@@ -18,4 +19,5 @@ __all__ = [
     "V",
     "ArgumentParser",
     "ClientProvider",
+    "StateProvider",
 ]
