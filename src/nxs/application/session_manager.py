@@ -5,7 +5,7 @@ This module provides SessionManager for managing conversation sessions.
 Multi-Session Support:
 - Multiple concurrent sessions (like browser tabs)
 - Session creation, switching, and deletion
-- Session persistence to JSON (one file per session)
+- Session persistence via StateProvider (pluggable backends)
 - Auto-save and auto-restore
 - Active session management
 
@@ -18,7 +18,7 @@ TUI Integration (Future):
 import asyncio
 import json
 from pathlib import Path
-from typing import Callable, Optional, Dict, cast
+from typing import Callable, Optional, Dict, cast, Any
 
 from nxs.application.agentic_loop import AgentLoop
 from nxs.application.claude import Claude
@@ -26,6 +26,7 @@ from nxs.application.conversation import Conversation
 from nxs.application.session import Session, SessionMetadata, AgentProtocol
 from nxs.application.tool_registry import ToolRegistry
 from nxs.application.summarization import SummarizationService, SummaryResult
+from nxs.domain.protocols import StateProvider
 from nxs.logger import get_logger
 
 logger = get_logger(__name__)
@@ -94,6 +95,7 @@ class SessionManager:
         enable_caching: bool = True,
         callbacks: Optional[dict[str, Callable]] = None,
         agent_factory: Optional[Callable[[Conversation], AgentProtocol]] = None,
+        state_provider: Optional[StateProvider] = None,
     ):
         """Initialize session manager.
 
@@ -102,12 +104,15 @@ class SessionManager:
             summarizer: Shared summarization service instance used to summarize sessions.
             tool_registry: ToolRegistry for tools (optional if using agent_factory).
             storage_dir: Directory for session persistence (defaults to ~/.nxs/sessions).
+                        Ignored if state_provider is provided.
             system_message: Default system message for new conversations.
             enable_caching: Enable prompt caching (default True).
             callbacks: Default callbacks for agent loop.
             agent_factory: Optional factory function to create custom agent loops.
                           Signature: (conversation: Conversation) -> AgentLoop
                           If provided, tool_registry is optional.
+            state_provider: Optional StateProvider for pluggable persistence backends.
+                           If None, creates FileStateProvider with storage_dir.
 
         Example (with custom agent factory):
             >>> def create_command_agent(conversation):
@@ -118,10 +123,18 @@ class SessionManager:
             ...     llm=claude,
             ...     agent_factory=create_command_agent
             ... )
+
+        Example (with custom state provider):
+            >>> from nxs.infrastructure.state import InMemoryStateProvider
+            >>> provider = InMemoryStateProvider()
+            >>> manager = SessionManager(
+            ...     llm=claude,
+            ...     tool_registry=registry,
+            ...     state_provider=provider
+            ... )
         """
         self.llm = llm
         self.tool_registry = tool_registry
-        self.storage_dir = Path(storage_dir or Path.home() / ".nxs" / "sessions").expanduser()
         self.system_message = system_message
         self.enable_caching = enable_caching
         self.callbacks = callbacks or {}
@@ -135,17 +148,36 @@ class SessionManager:
                 "SessionManager requires either tool_registry or agent_factory"
             )
 
+        # Phase 0: StateProvider integration
+        # If no state provider given, create FileStateProvider for backward compatibility
+        if state_provider is None:
+            from nxs.infrastructure.state import FileStateProvider
+
+            self.storage_dir = Path(storage_dir or Path.home() / ".nxs" / "sessions").expanduser()
+            self.state_provider = FileStateProvider(base_dir=self.storage_dir)
+            logger.debug(f"Created FileStateProvider: base_dir={self.storage_dir}")
+        else:
+            self.state_provider = state_provider
+            # For backward compatibility, set storage_dir if provider is FileStateProvider
+            if hasattr(state_provider, 'base_dir'):
+                self.storage_dir = Path(state_provider.base_dir)
+            else:
+                # Use default path for non-file providers
+                self.storage_dir = Path(storage_dir or Path.home() / ".nxs" / "sessions").expanduser()
+            logger.debug(f"Using provided StateProvider: {type(state_provider).__name__}")
+
         # Multi-session support
         self._sessions: Dict[str, Session] = {}
         self._active_session_id: Optional[str] = None
 
-        # Ensure storage directory exists
-        self.storage_dir.mkdir(parents=True, exist_ok=True)
-
         # Migrate old session.json to new default.json format if needed
-        self._migrate_legacy_session_file()
+        # Only needed for FileStateProvider
+        if isinstance(self.state_provider, type) and hasattr(self.state_provider, 'base_dir'):
+            self._migrate_legacy_session_file()
 
-        logger.info(f"SessionManager initialized: storage_dir={self.storage_dir}")
+        logger.info(
+            f"SessionManager initialized: provider={type(self.state_provider).__name__}"
+        )
 
     def _migrate_legacy_session_file(self) -> None:
         """Migrate legacy session.json to new default.json format.
@@ -186,7 +218,7 @@ class SessionManager:
     async def get_or_create_default_session(self) -> Session:
         """Get or create the default session.
 
-        Attempts to restore from disk. If not found, creates new session.
+        Attempts to restore from storage. If not found, creates new session.
         Backward compatible with single-session usage.
 
         Returns:
@@ -203,13 +235,13 @@ class SessionManager:
                 self._active_session_id = self.DEFAULT_SESSION_ID
             return self._sessions[self.DEFAULT_SESSION_ID]
 
-        # Try to restore from disk
-        session_path = self.storage_dir / f"{self.DEFAULT_SESSION_ID}.json"
+        # Try to restore from storage using StateProvider
+        session_key = f"session:{self.DEFAULT_SESSION_ID}"
 
-        if session_path.exists():
-            logger.info(f"Restoring session from {session_path}")
+        if await self.state_provider.exists(session_key):
+            logger.info(f"Restoring session from storage: key={session_key}")
             try:
-                session = await self._load_session_from_file(session_path)
+                session = await self._load_session(session_key)
                 self._sessions[self.DEFAULT_SESSION_ID] = session
                 self._active_session_id = self.DEFAULT_SESSION_ID
                 logger.info(
@@ -274,11 +306,11 @@ class SessionManager:
 
         return session
 
-    async def _load_session_from_file(self, path: Path) -> Session:
-        """Load session from JSON file.
+    async def _load_session(self, session_key: str) -> Session:
+        """Load session from storage using StateProvider.
 
         Args:
-            path: Path to session JSON file.
+            session_key: State key for the session (e.g., "session:default").
 
         Returns:
             Restored Session instance.
@@ -286,8 +318,10 @@ class SessionManager:
         Raises:
             Exception: If loading fails.
         """
-        with open(path, "r") as f:
-            data = json.load(f)
+        # Load data from StateProvider
+        data = await self.state_provider.load(session_key)
+        if data is None:
+            raise ValueError(f"Session not found: {session_key}")
 
         # Restore conversation from saved data
         conversation = Conversation.from_dict(data["conversation"])
@@ -310,26 +344,37 @@ class SessionManager:
 
         return session
 
+    async def _save_session_async(self, session: Session) -> None:
+        """Save a specific session using StateProvider (async).
+
+        Args:
+            session: The Session instance to save.
+
+        Internal async helper for saving individual sessions.
+        """
+        session_key = f"session:{session.session_id}"
+
+        try:
+            data = session.to_dict()
+            await self.state_provider.save(session_key, data)
+
+            logger.info(f"Session saved: {session.session_id} (key={session_key})")
+        except Exception as e:
+            logger.error(
+                f"Failed to save session {session.session_id}: {e}", exc_info=True
+            )
+
     def _save_session(self, session: Session) -> None:
-        """Save a specific session to disk.
+        """Save a specific session (synchronous wrapper).
 
         Args:
             session: The Session instance to save.
 
         Internal helper for saving individual sessions.
+        Fire-and-forget async save for backward compatibility.
         """
-        session_file = self.storage_dir / f"{session.session_id}.json"
-
-        try:
-            data = session.to_dict()
-            with open(session_file, "w") as f:
-                json.dump(data, f, indent=2)
-
-            logger.info(f"Session saved: {session.session_id} -> {session_file}")
-        except Exception as e:
-            logger.error(
-                f"Failed to save session {session.session_id}: {e}", exc_info=True
-            )
+        # Fire-and-forget async save
+        asyncio.create_task(self._save_session_async(session))
 
     def save_active_session(self) -> None:
         """Save the active session to disk.
@@ -577,10 +622,10 @@ class SessionManager:
         logger.info(f"Switched to session: {session_id}")
         return self._sessions[session_id]
 
-    def delete_session(self, session_id: str) -> None:
-        """Delete a session.
+    async def delete_session_async(self, session_id: str) -> None:
+        """Delete a session (async).
 
-        Removes session from memory and deletes its file from disk.
+        Removes session from memory and deletes from storage.
         If the deleted session was active, automatically switches to
         another session if available.
 
@@ -591,19 +636,18 @@ class SessionManager:
             ValueError: If session_id does not exist.
 
         Example:
-            >>> manager.delete_session("work")
+            >>> await manager.delete_session_async("work")
         """
         if session_id not in self._sessions:
             raise ValueError(f"Session '{session_id}' does not exist")
 
-        # Delete session file if exists
-        session_file = self.storage_dir / f"{session_id}.json"
-        if session_file.exists():
-            try:
-                session_file.unlink()
-                logger.debug(f"Deleted session file: {session_file}")
-            except Exception as e:
-                logger.error(f"Failed to delete session file {session_file}: {e}")
+        # Delete session from storage using StateProvider
+        session_key = f"session:{session_id}"
+        try:
+            await self.state_provider.delete(session_key)
+            logger.debug(f"Deleted session from storage: {session_key}")
+        except Exception as e:
+            logger.error(f"Failed to delete session from storage {session_key}: {e}")
 
         # Remove from memory
         del self._sessions[session_id]
@@ -617,6 +661,24 @@ class SessionManager:
                 logger.info(f"Auto-switched to session: {self._active_session_id}")
 
         logger.info(f"Deleted session: {session_id}")
+
+    def delete_session(self, session_id: str) -> None:
+        """Delete a session (synchronous wrapper).
+
+        Removes session from memory and deletes from storage.
+        Fire-and-forget for backward compatibility.
+
+        Args:
+            session_id: ID of the session to delete.
+
+        Raises:
+            ValueError: If session_id does not exist.
+
+        Example:
+            >>> manager.delete_session("work")
+        """
+        # Fire-and-forget async delete
+        asyncio.create_task(self.delete_session_async(session_id))
 
     def list_sessions(self) -> list[SessionMetadata]:
         """List all sessions.
@@ -656,33 +718,41 @@ class SessionManager:
         logger.info(f"Saved {len(self._sessions)} session(s)")
 
     async def restore_all_sessions(self) -> None:
-        """Restore all sessions from storage directory.
+        """Restore all sessions from storage.
 
-        Loads all session JSON files found in storage directory.
+        Loads all session keys found via StateProvider.
         Sets default session as active if it exists, otherwise
         sets the first session found as active.
 
         Example:
             >>> await manager.restore_all_sessions()
         """
-        if not self.storage_dir.exists():
-            logger.debug("Storage directory does not exist, no sessions to restore")
-            return
+        try:
+            # List all session keys using StateProvider
+            session_keys = await self.state_provider.list_keys(prefix="session:")
 
-        for session_file in self.storage_dir.glob("*.json"):
-            try:
-                session = await self._load_session_from_file(session_file)
-                self._sessions[session.session_id] = session
-                logger.info(f"Restored session: {session.session_id}")
-            except Exception as e:
-                logger.error(
-                    f"Failed to restore {session_file}: {e}", exc_info=True
-                )
+            if not session_keys:
+                logger.debug("No sessions found in storage")
+                return
 
-        # Set default as active if it exists
-        if self.DEFAULT_SESSION_ID in self._sessions:
-            self._active_session_id = self.DEFAULT_SESSION_ID
-            logger.debug(f"Set default session as active")
-        elif self._sessions:
-            self._active_session_id = next(iter(self._sessions.keys()))
-            logger.debug(f"Set first session as active: {self._active_session_id}")
+            # Load each session
+            for session_key in session_keys:
+                try:
+                    session = await self._load_session(session_key)
+                    self._sessions[session.session_id] = session
+                    logger.info(f"Restored session: {session.session_id}")
+                except Exception as e:
+                    logger.error(
+                        f"Failed to restore {session_key}: {e}", exc_info=True
+                    )
+
+            # Set default as active if it exists
+            if self.DEFAULT_SESSION_ID in self._sessions:
+                self._active_session_id = self.DEFAULT_SESSION_ID
+                logger.debug(f"Set default session as active")
+            elif self._sessions:
+                self._active_session_id = next(iter(self._sessions.keys()))
+                logger.debug(f"Set first session as active: {self._active_session_id}")
+
+        except Exception as e:
+            logger.error(f"Error during session restoration: {e}", exc_info=True)
