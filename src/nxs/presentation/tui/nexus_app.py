@@ -251,7 +251,15 @@ class NexusApp(App):
 
             metadata = self.session.metadata if self.session else None
             session_header = f"[bold cyan]Session Loaded:[/] {self._session_name}"
-            if metadata and metadata.conversation_summary:
+
+            # Check if we have a valid summary to display
+            has_valid_summary = (
+                metadata
+                and metadata.conversation_summary
+                and metadata.conversation_summary.strip()  # Ensure not just whitespace
+            )
+
+            if has_valid_summary:
                 summarised_up_to = min(metadata.summary_last_message_index or 0, conversation_msg_count)
                 if metadata.summary_last_message_index and metadata.summary_last_message_index > conversation_msg_count:
                     metadata.summary_last_message_index = conversation_msg_count
@@ -271,7 +279,15 @@ class NexusApp(App):
                 if summarised_up_to < conversation_msg_count:
                     self._start_summary_update()
             else:
+                # No valid summary - generate and display basic summary
+                logger.debug("No valid summary found, generating basic summary")
                 basic_summary = self._generate_basic_summary()
+
+                # Defensive check: ensure we have something to display
+                if not basic_summary or not basic_summary.strip():
+                    basic_summary = f"[bold]Session Messages:[/] {conversation_msg_count} total"
+                    logger.warning("Basic summary was empty, using fallback message")
+
                 self._display_summary(
                     basic_summary,
                     summarized_messages=0,
