@@ -1,15 +1,430 @@
 # Session State Architecture - Implementation Plan
 
-## Executive Summary
+## I. ARCHITECTURAL REVIEW & REFACTORING RECOMMENDATIONS
 
-This document outlines the design and implementation of a **SessionState** system that serves as the comprehensive state management layer for the Nexus agent. Unlike the stateless nature of LLM conversations, SessionState maintains a rich, structured representation of the entire session, including:
+### 1.1 Current Architecture Analysis
 
-1. **Conversation history** (message sequences)
-2. **User profile** (extracted information about the user)
-3. **Research progress** (complex reasoning task tracking via ResearchProgressTracker)
-4. **Knowledge base** (facts and insights learned during the session)
-5. **Interaction context** (current conversation context and intent)
-6. **Session metadata** (costs, performance, statistics)
+The Nexus application demonstrates several **strong architectural patterns** that should guide the Session State implementation:
+
+#### **Existing Architectural Strengths:**
+
+1. **Protocol-Based Extensibility**
+   - `ToolProvider` protocol enables pluggable tool sources (MCPToolProvider, LocalToolProvider)
+   - `Cache` protocol abstracts storage backends (MemoryCache, etc.)
+   - `MCPClient` protocol defines client contracts
+   - **Recommendation**: Session State should follow this pattern with `SessionStateProvider` protocol
+
+2. **State Management Patterns**
+   - **Conversation** (`conversation.py`): Manages message history with `to_dict()`/`from_dict()` serialization
+   - **ToolRegistry** (`tool_registry.py`): Manages tool state with lazy loading and caching
+   - **Proven pattern**: These classes demonstrate successful state management with persistence support
+   - **Recommendation**: Session State should extend these patterns, not reinvent them
+
+3. **Service Container Pattern** (`container.py`)
+   - Lazy initialization of services via properties
+   - Dependency injection through constructor lambdas
+   - Clear lifecycle management (`start()`, `stop()`, `initialize_mcp()`)
+   - **Recommendation**: SessionState should integrate as a service managed by ServiceContainer
+
+4. **Queue-Based Async Processing** (`queue_processor.py`)
+   - `AsyncQueueProcessor<T>` provides reusable FIFO processing pattern
+   - Used successfully by StatusQueue and QueryQueue
+   - **Recommendation**: State updates could use this pattern for async persistence
+
+5. **Event-Driven Communication** (`events.py`, `EventBus`)
+   - Decoupled communication via events (ConnectionStatusChanged, ArtifactsFetched, etc.)
+   - **Recommendation**: Session State updates should publish StateChanged events
+
+#### **Current Architecture Limitations:**
+
+1. **No Holistic Session State**
+   - **Issue**: Conversation manages messages, but no unified session state container
+   - **Impact**: Cost tracking, reasoning history, user context scattered across components
+   - **Evidence**: SessionManager has session metadata, but it's not integrated with conversation state
+
+2. **Implicit Dependencies**
+   - **Issue**: ServiceContainer uses lambdas for app state access (`self._session_getter = lambda: getattr(app, "session", None)`)
+   - **Impact**: Tight coupling between services and TUI app
+   - **Example**: `query_handler.py` line 226 creates session_getter callback
+   - **Recommendation**: Make session state explicit, not accessed via app introspection
+
+3. **No Persistence Strategy**
+   - **Issue**: While Conversation has serialization, there's no unified persistence layer
+   - **Impact**: Session resumption is incomplete (conversation exists, but cost/metadata lost)
+   - **Evidence**: Conversation has `to_dict()`/`from_dict()`, but no file I/O or storage backend
+
+4. **State Update Lifecycle Not Defined**
+   - **Issue**: When should state be updated? After each message? After tool calls? On demand?
+   - **Impact**: Inconsistent state updates, potential race conditions
+   - **Recommendation**: Define clear state update triggers and lifecycle hooks
+
+### 1.2 Architectural Refactoring Recommendations
+
+#### **BEFORE Implementing Session State**
+
+Before building Session State, consider these **strategic refactorings** to create a cleaner foundation:
+
+#### **Refactoring 1: Introduce StateProvider Protocol**
+
+**Current**: Direct instantiation of state objects (Conversation, ToolRegistry)
+
+**Proposed**: Protocol-based state management
+
+```python
+# Location: src/nxs/domain/protocols/state.py
+
+from typing import Protocol, Any, Optional
+
+class StateProvider(Protocol):
+    """Protocol for state providers (in-memory, file, database, etc.)."""
+
+    async def save(self, key: str, data: dict[str, Any]) -> None:
+        """Save state data under a key."""
+        ...
+
+    async def load(self, key: str) -> Optional[dict[str, Any]]:
+        """Load state data by key. Returns None if not found."""
+        ...
+
+    async def exists(self, key: str) -> bool:
+        """Check if state exists for a key."""
+        ...
+
+    async def delete(self, key: str) -> None:
+        """Delete state by key."""
+        ...
+
+    async def list_keys(self) -> list[str]:
+        """List all available state keys."""
+        ...
+```
+
+**Benefits**:
+- Multiple backends: InMemoryStateProvider, FileStateProvider, DatabaseStateProvider
+- Testable with MockStateProvider
+- Matches existing protocol patterns (ToolProvider, Cache)
+
+**Integration**:
+```python
+# Conversation becomes state-provider aware
+conversation = Conversation(...)
+await state_provider.save(f"session:{session_id}:conversation", conversation.to_dict())
+
+# Session State uses the same provider
+session_state = SessionState(session_id=session_id, state_provider=state_provider)
+await session_state.save()  # Delegates to provider
+```
+
+#### **Refactoring 2: Extract State Update Service**
+
+**Current**: State updates happen implicitly in AgentLoop callbacks
+
+**Proposed**: Dedicated `StateUpdateService` for coordinated state updates
+
+```python
+# Location: src/nxs/application/state_update_service.py
+
+class StateUpdateService:
+    """Coordinates state updates from agent loop events.
+
+    Listens to:
+    - Message additions (conversation updates)
+    - Tool executions (metadata updates)
+    - Reasoning completions (research history updates)
+
+    Updates:
+    - SessionState
+    - Publishes StateChanged events
+    """
+
+    def __init__(
+        self,
+        session_state: SessionState,
+        event_bus: EventBus,
+        state_provider: StateProvider,
+    ):
+        self.session_state = session_state
+        self.event_bus = event_bus
+        self.state_provider = state_provider
+
+    async def on_message_added(self, role: str, content: str) -> None:
+        """Called when a message is added to the conversation."""
+        # Update interaction context
+        await self.session_state.interaction_context.add_exchange(...)
+
+        # Publish event
+        self.event_bus.publish(StateChanged(session_id=..., component="conversation"))
+
+        # Async persistence (fire and forget)
+        asyncio.create_task(self.session_state.save())
+
+    async def on_tool_executed(self, tool_name: str, result: str, metadata: dict) -> None:
+        """Called when a tool is executed."""
+        # Update metadata
+        self.session_state.metadata.record_tool_call(...)
+
+        # Potentially extract facts from tool results
+        if should_extract_facts(tool_name, result):
+            await self._extract_facts_from_tool_result(result)
+
+    async def on_reasoning_complete(self, tracker: ResearchProgressTracker) -> None:
+        """Called when adaptive reasoning completes."""
+        # Move tracker to history
+        self.session_state.research_history.append(tracker)
+
+        # Extract confirmed facts to knowledge base
+        for fact in tracker.insights.confirmed_facts:
+            self.session_state.knowledge_base.add_fact(fact, source="research")
+```
+
+**Benefits**:
+- Single responsibility: State updates isolated from orchestration
+- Testable: Mock the service to verify state update logic
+- Event-driven: Integrates naturally with existing EventBus
+- Async persistence: Updates don't block agent loop
+
+**Integration**:
+```python
+# In ServiceContainer
+@property
+def state_update_service(self) -> StateUpdateService:
+    if self._state_update_service is None:
+        self._state_update_service = StateUpdateService(
+            session_state=self.session_state,  # From SessionManager
+            event_bus=self.event_bus,
+            state_provider=self.state_provider,
+        )
+    return self._state_update_service
+
+# In QueryHandler
+# Add state update hooks to callbacks
+callbacks = {
+    "on_tool_result": lambda name, result, success:
+        await self.state_update_service.on_tool_executed(name, result, metadata),
+}
+```
+
+#### **Refactoring 3: Unify SessionManager and SessionState**
+
+**Current**: SessionManager and SessionState are conceptually separate
+
+**Proposed**: SessionManager orchestrates SessionState lifecycle
+
+```python
+# Location: src/nxs/application/session_manager.py
+
+class SessionManager:
+    """Manages session lifecycle and state persistence.
+
+    Responsibilities:
+    - Create new sessions with SessionState
+    - Load existing sessions from StateProvider
+    - Manage session switching (future: multi-session support)
+    - Coordinate state persistence
+    - Track session metadata (cost, duration, etc.)
+    """
+
+    def __init__(
+        self,
+        state_provider: StateProvider,
+        event_bus: EventBus,
+        *,
+        conversation_factory: Callable[[], Conversation],
+    ):
+        self.state_provider = state_provider
+        self.event_bus = event_bus
+        self._conversation_factory = conversation_factory
+
+        self._current_session: Optional[Session] = None
+        self._session_state: Optional[SessionState] = None
+
+    async def create_session(self, session_id: str | None = None) -> Session:
+        """Create a new session with fresh state."""
+        session_id = session_id or self._generate_session_id()
+
+        # Create conversation
+        conversation = self._conversation_factory()
+
+        # Create session state
+        session_state = SessionState(
+            session_id=session_id,
+            conversation=conversation,
+            state_provider=self.state_provider,
+        )
+
+        # Create session wrapper
+        session = Session(
+            id=session_id,
+            conversation=conversation,
+            state=session_state,
+        )
+
+        self._current_session = session
+        self._session_state = session_state
+
+        # Publish event
+        self.event_bus.publish(SessionCreated(session_id=session_id))
+
+        return session
+
+    async def load_session(self, session_id: str) -> Session:
+        """Load an existing session from storage."""
+        # Load state
+        state_data = await self.state_provider.load(f"session:{session_id}")
+        if not state_data:
+            raise ValueError(f"Session {session_id} not found")
+
+        # Deserialize
+        session_state = SessionState.from_dict(state_data, state_provider=self.state_provider)
+
+        # Create session wrapper
+        session = Session(
+            id=session_id,
+            conversation=session_state.conversation,
+            state=session_state,
+        )
+
+        self._current_session = session
+        self._session_state = session_state
+
+        # Publish event
+        self.event_bus.publish(SessionLoaded(session_id=session_id))
+
+        return session
+
+    @property
+    def current_session(self) -> Session:
+        """Get current active session."""
+        if not self._current_session:
+            raise RuntimeError("No active session. Call create_session() first.")
+        return self._current_session
+
+    @property
+    def session_state(self) -> SessionState:
+        """Get current session state."""
+        if not self._session_state:
+            raise RuntimeError("No active session state.")
+        return self._session_state
+```
+
+**Benefits**:
+- Clear separation: SessionManager = lifecycle, SessionState = data
+- Explicit session creation: No more implicit state creation
+- Future-ready: Easy to add multi-session support
+- Testable: Mock StateProvider for unit tests
+
+#### **Refactoring 4: ServiceContainer Integration**
+
+**Current**: ServiceContainer doesn't know about SessionState
+
+**Proposed**: Add SessionState as a managed service
+
+```python
+# In ServiceContainer.__init__()
+def __init__(
+    self,
+    app: "App",
+    session_manager: SessionManager,  # NEW: Explicitly passed
+    agent_loop,
+    artifact_manager: ArtifactManager,
+    event_bus: EventBus,
+    ...
+):
+    self.session_manager = session_manager  # Store reference
+    # ... rest of init
+
+# Add property
+@property
+def session_state(self) -> SessionState:
+    """Get current session state from SessionManager."""
+    return self.session_manager.session_state
+
+# Add state update service
+@property
+def state_update_service(self) -> StateUpdateService:
+    """Get StateUpdateService, creating it on first access."""
+    if self._state_update_service is None:
+        self._state_update_service = StateUpdateService(
+            session_state=self.session_state,
+            event_bus=self.event_bus,
+            state_provider=self.session_manager.state_provider,
+        )
+    return self._state_update_service
+```
+
+**Benefits**:
+- Explicit dependencies: No more lambdas reaching into app state
+- Lazy initialization maintained: Services created on first access
+- Clear lifecycle: SessionManager creates state before ServiceContainer
+- Type-safe: mypy can verify session_state exists
+
+### 1.3 Recommended Implementation Order
+
+To minimize disruption and maintain working code, implement Session State in **phases**:
+
+#### **Phase 0: Foundation Refactorings** (Do First!)
+1. ✅ Create `StateProvider` protocol (`src/nxs/domain/protocols/state.py`)
+2. ✅ Implement `InMemoryStateProvider` (`src/nxs/infrastructure/state/memory.py`)
+3. ✅ Implement `FileStateProvider` (`src/nxs/infrastructure/state/file.py`)
+4. ✅ Add `StateProvider` to SessionManager constructor
+5. ✅ Update ServiceContainer to explicitly pass SessionManager
+
+**Testing**: Unit tests for StateProvider implementations
+
+#### **Phase 1: Core SessionState** (Build State Container)
+1. ✅ Create SessionState class with `to_dict()`/`from_dict()` (follows Conversation pattern)
+2. ✅ Create component classes: UserProfile, KnowledgeBase, InteractionContext, SessionMetadata
+3. ✅ Integrate SessionState into SessionManager
+4. ✅ Add SessionState property to ServiceContainer
+
+**Testing**: Unit tests for SessionState serialization, ServiceContainer integration test
+
+#### **Phase 2: State Update Service** (Connect State to Agent Loop)
+1. ✅ Create StateUpdateService with event handlers
+2. ✅ Wire StateUpdateService to agent loop callbacks
+3. ✅ Add StateChanged event to EventBus
+4. ✅ Implement async persistence in StateUpdateService
+
+**Testing**: Integration tests for state updates during conversations
+
+#### **Phase 3: State Extraction** (LLM-Powered State Population)
+1. ✅ Create StateExtractor for user profile extraction
+2. ✅ Create StateExtractor for fact extraction
+3. ✅ Wire extractors to StateUpdateService
+4. ✅ Add extraction configuration (enable/disable)
+
+**Testing**: Integration tests with real conversations, verify extraction accuracy
+
+#### **Phase 4: Context Injection** (Use State in Prompts)
+1. ✅ Implement `SessionState.get_context_for_prompt()`
+2. ✅ Integrate context injection into CommandControlAgent
+3. ✅ Add context verbosity controls
+4. ✅ Optimize token usage with relevance filtering
+
+**Testing**: Integration tests verifying context improves responses
+
+#### **Phase 5: Persistence & Resumption** (Save/Load Sessions)
+1. ✅ Implement session save on app exit
+2. ✅ Implement session load on app start
+3. ✅ Add session list UI
+4. ✅ Add session switching support
+
+**Testing**: End-to-end tests for session save/load/resume
+
+---
+
+## II. SESSION STATE SUB-ARCHITECTURE
+
+### 2.1 Executive Summary
+
+This section outlines the design and implementation of the **SessionState** sub-system that serves as the comprehensive state management layer for the Nexus agent. Building on the architectural refactorings above, SessionState maintains a rich, structured representation of the entire session, including:
+
+1. **Conversation history** (message sequences) - Reuses existing Conversation class
+2. **User profile** (extracted information about the user) - NEW
+3. **Research progress** (complex reasoning task tracking via ResearchProgressTracker) - NEW
+4. **Knowledge base** (facts and insights learned during the session) - NEW
+5. **Interaction context** (current conversation context and intent) - NEW
+6. **Session metadata** (costs, performance, statistics) - NEW
 
 The State system transforms the session from a flat message sequence into a **semantic, queryable knowledge structure** that enables:
 - Context-aware responses
