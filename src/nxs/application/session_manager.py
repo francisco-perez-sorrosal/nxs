@@ -206,6 +206,12 @@ class SessionManager:
         # Try to restore from disk
         session_path = self.storage_dir / f"{self.DEFAULT_SESSION_ID}.json"
 
+        logger.info(
+            f"Session path: {session_path}, "
+            f"exists={session_path.exists()}, "
+            f"storage_dir={self.storage_dir}"
+        )
+
         if session_path.exists():
             logger.info(f"Restoring session from {session_path}")
             try:
