@@ -539,6 +539,114 @@ class SessionState:
         except Exception as e:
             logger.error(f"Failed to save SessionState {self.session_id}: {e}", exc_info=True)
 
+    def get_context_for_prompt(
+        self,
+        include_user_profile: bool = True,
+        include_knowledge: bool = True,
+        include_interaction: bool = True,
+        max_exchanges: int = 5,
+        max_facts: int = 10,
+    ) -> str:
+        """Generate context summary for prompt injection.
+
+        Phase 4: Basic context generation
+        Phase 5+: Relevance filtering and token optimization
+
+        Args:
+            include_user_profile: Include user profile information
+            include_knowledge: Include knowledge base facts
+            include_interaction: Include interaction context
+            max_exchanges: Maximum number of recent exchanges to include
+            max_facts: Maximum number of facts to include
+
+        Returns:
+            Formatted context string ready for prompt injection
+        """
+        sections = []
+
+        # User Profile Section
+        if include_user_profile and (
+            self.user_profile.name
+            or self.user_profile.preferences
+            or self.user_profile.facts
+        ):
+            profile_parts = []
+
+            if self.user_profile.name:
+                profile_parts.append(f"Name: {self.user_profile.name}")
+
+            if self.user_profile.preferences:
+                prefs = ", ".join(
+                    f"{k}: {v}" for k, v in self.user_profile.preferences.items()
+                )
+                profile_parts.append(f"Preferences: {prefs}")
+
+            if self.user_profile.facts:
+                facts_str = "; ".join(self.user_profile.facts[:5])  # Limit to 5 facts
+                profile_parts.append(f"About user: {facts_str}")
+
+            if profile_parts:
+                sections.append(
+                    "## User Profile\n" + "\n".join(profile_parts)
+                )
+
+        # Knowledge Base Section
+        if include_knowledge and self.knowledge_base.facts:
+            # Get recent facts (limited by max_facts)
+            recent_facts = self.knowledge_base.facts[-max_facts:]
+            if recent_facts:
+                facts_list = []
+                for fact in recent_facts:
+                    source = fact.get("source", "unknown")
+                    content = fact.get("content", "")
+                    confidence = fact.get("confidence", 1.0)
+                    facts_list.append(
+                        f"- {content} (source: {source}, confidence: {confidence:.2f})"
+                    )
+
+                sections.append(
+                    "## Known Facts\n" + "\n".join(facts_list)
+                )
+
+        # Interaction Context Section
+        if include_interaction:
+            context_parts = []
+
+            if self.interaction_context.current_topic:
+                context_parts.append(f"Current topic: {self.interaction_context.current_topic}")
+
+            if self.interaction_context.current_intent:
+                context_parts.append(f"User intent: {self.interaction_context.current_intent}")
+
+            # Include recent exchanges summary
+            if self.interaction_context.exchanges:
+                recent_exchanges = self.interaction_context.exchanges[-max_exchanges:]
+                if recent_exchanges:
+                    exchanges_summary = []
+                    for i, exchange in enumerate(recent_exchanges, 1):
+                        user_preview = exchange["user_message"][:100]
+                        if len(exchange["user_message"]) > 100:
+                            user_preview += "..."
+                        exchanges_summary.append(
+                            f"{i}. User asked about: {user_preview}"
+                        )
+
+                    context_parts.append(
+                        f"Recent conversation ({len(recent_exchanges)} exchanges):\n"
+                        + "\n".join(exchanges_summary)
+                    )
+
+            if context_parts:
+                sections.append(
+                    "## Conversation Context\n" + "\n".join(context_parts)
+                )
+
+        # Combine all sections
+        if sections:
+            return "\n\n".join(sections)
+        else:
+            return ""
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize session state to dictionary.
 

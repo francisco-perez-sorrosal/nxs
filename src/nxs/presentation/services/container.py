@@ -19,6 +19,7 @@ from nxs.presentation.handlers import QueryHandler
 from nxs.presentation.tui.query_queue import QueryQueue
 from nxs.application.artifact_manager import ArtifactManager
 from nxs.application.summarization import SummarizationService
+from nxs.application.state_update_service import StateUpdateService
 from nxs.domain.events import (
     EventBus,
     ConnectionStatusChanged,
@@ -131,7 +132,8 @@ class ServiceContainer:
         self._autocomplete_service: AutocompleteService | None = None
         self._query_handler: QueryHandler | None = None
         self._query_queue: QueryQueue | None = None
-        
+        self._state_update_service: StateUpdateService | None = None
+
         # MCP initialization state
         self._mcp_initialized = False
         self._events_subscribed = False
@@ -214,7 +216,7 @@ class ServiceContainer:
                 conversation_updated_callback = conversation_candidate
             else:
                 conversation_updated_callback = None
-            
+
             self._query_handler = QueryHandler(
                 agent_loop=self.agent_loop,
                 chat_panel_getter=self._get_chat_panel,
@@ -224,6 +226,7 @@ class ServiceContainer:
                 reasoning_callbacks=reasoning_callbacks,
                 on_conversation_updated=conversation_updated_callback,
                 session_getter=self._session_getter,
+                state_update_service_getter=lambda: self.state_update_service,  # Pass getter
             )
         return self._query_handler
 
@@ -240,6 +243,30 @@ class ServiceContainer:
     def summarization_service(self) -> SummarizationService:
         """Return the shared SummarizationService instance."""
         return self._summarization_service
+
+    @property
+    def state_update_service(self) -> StateUpdateService | None:
+        """Get StateUpdateService, creating it on first access if session has state.
+
+        Returns None if no active session or session has no state.
+        """
+        # Get current session
+        session = self._session_getter()
+        if session is None or session.state is None:
+            # No session or no state - service not available
+            return None
+
+        # Create service if not already created
+        if self._state_update_service is None:
+            self._state_update_service = StateUpdateService(
+                session_state=session.state,
+                event_bus=self.event_bus,
+                state_provider=session.state.state_provider,
+                enable_auto_save=True,
+            )
+            logger.debug(f"Created StateUpdateService for session: {session.session_id}")
+
+        return self._state_update_service
 
     # -------------------------------------------------------------------------
     # Lifecycle Management

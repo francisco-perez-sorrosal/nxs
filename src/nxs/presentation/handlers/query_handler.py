@@ -15,6 +15,7 @@ from nxs.logger import get_logger
 if TYPE_CHECKING:
     from nxs.application.agentic_loop import AgentLoop
     from nxs.application.session import Session
+    from nxs.application.state_update_service import StateUpdateService
     from nxs.presentation.widgets.chat_panel import ChatPanel
     from nxs.presentation.status_queue import StatusQueue
 
@@ -39,6 +40,7 @@ class QueryHandler:
         reasoning_callbacks: Optional[dict[str, Callable]] = None,
         on_conversation_updated: Optional[Callable[[], Awaitable[None]]] = None,
         session_getter: Optional[Callable[[], Optional["Session"]]] = None,
+        state_update_service_getter: Optional[Callable[[], Optional["StateUpdateService"]]] = None,
     ):
         """
         Initialize the QueryHandler.
@@ -52,6 +54,7 @@ class QueryHandler:
             reasoning_callbacks: Optional callbacks for reasoning trace events
             on_conversation_updated: Optional callback when conversation is updated
             session_getter: Optional function to get the current Session instance
+            state_update_service_getter: Optional function to get StateUpdateService instance
         """
         self.agent_loop = agent_loop
         self.chat_panel_getter = chat_panel_getter
@@ -61,6 +64,7 @@ class QueryHandler:
         self.reasoning_callbacks = reasoning_callbacks or {}
         self.on_conversation_updated = on_conversation_updated
         self.session_getter = session_getter
+        self.state_update_service_getter = state_update_service_getter
 
     async def process_query(self, query: str, query_id: int) -> None:
         """
@@ -166,6 +170,51 @@ class QueryHandler:
         chat = self.chat_panel_getter()
         chat.finish_assistant_message()  # Properly finish the assistant message
 
+        # Update session state with latest exchange if state service available
+        if self.state_update_service_getter:
+            state_service = self.state_update_service_getter()
+            if state_service:
+                # Extract latest user and assistant messages from conversation
+                messages = self.agent_loop.conversation._messages
+                if len(messages) >= 2:
+                    # Get last two messages (should be user + assistant)
+                    last_messages = messages[-2:]
+                    user_msg = None
+                    assistant_msg = None
+
+                    for msg in last_messages:
+                        if msg.get("role") == "user":
+                            # Extract text from user message
+                            content = msg.get("content", "")
+                            if isinstance(content, list):
+                                user_msg = " ".join([
+                                    block.get("text", "")
+                                    for block in content
+                                    if block.get("type") == "text"
+                                ])
+                            elif isinstance(content, str):
+                                user_msg = content
+                        elif msg.get("role") == "assistant":
+                            # Extract text from assistant message
+                            content = msg.get("content", "")
+                            if isinstance(content, list):
+                                assistant_msg = " ".join([
+                                    block.get("text", "")
+                                    for block in content
+                                    if block.get("type") == "text"
+                                ])
+                            elif isinstance(content, str):
+                                assistant_msg = content
+
+                    # If we found both user and assistant messages, record the exchange
+                    if user_msg and assistant_msg:
+                        try:
+                            await state_service.on_message_added("user", user_msg)
+                            await state_service.on_message_added("assistant", assistant_msg)
+                            logger.debug("Updated session state with latest exchange")
+                        except Exception as e:
+                            logger.error(f"Error updating session state: {e}", exc_info=True)
+
         if self.on_conversation_updated:
             asyncio.create_task(self.on_conversation_updated())
 
@@ -191,6 +240,24 @@ class QueryHandler:
         """
         logger.info(f"Tool result: {tool_name} - success={success}, result length={len(str(result))}")
         await self.status_queue.add_tool_result(tool_name, result, success)
+
+        # Update session state with tool execution if state service available
+        if self.state_update_service_getter:
+            state_service = self.state_update_service_getter()
+            if state_service:
+                try:
+                    # Record tool execution in session state
+                    # Note: We don't have token/cost info at this level,
+                    # so we pass empty metadata for now
+                    await state_service.on_tool_executed(
+                        tool_name=tool_name,
+                        result=result,
+                        success=success,
+                        metadata={},
+                    )
+                    logger.debug(f"Recorded tool execution in session state: {tool_name}")
+                except Exception as e:
+                    logger.error(f"Error recording tool execution in session state: {e}", exc_info=True)
 
     async def _on_usage(self, usage: dict, cost: float) -> None:
         """
