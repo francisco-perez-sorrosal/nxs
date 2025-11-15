@@ -297,11 +297,22 @@ class SessionManager:
             )
             logger.debug(f"Created session with default AgentLoop: {session_id}")
 
+        # Phase 1: Create SessionState
+        from nxs.application.session_state import SessionState
+
+        session_state = SessionState(
+            session_id=session_id,
+            conversation=conversation,
+            state_provider=self.state_provider,
+        )
+        logger.debug(f"Created SessionState for session: {session_id}")
+
         # Create session
         session = Session(
             metadata=metadata,
             conversation=conversation,
             agent_loop=cast(AgentProtocol, agent_loop),
+            state=session_state,
         )
 
         return session

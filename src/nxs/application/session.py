@@ -17,13 +17,17 @@ Sessions can be:
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Optional, Protocol, runtime_checkable, TYPE_CHECKING
 
 from nxs.application.agentic_loop import AgentLoop
 from nxs.application.conversation import Conversation
 from nxs.application.cost_tracker import CostTracker
 from nxs.application.progress_tracker import ResearchProgressTracker
 from nxs.logger import get_logger
+
+# Avoid circular import
+if TYPE_CHECKING:
+    from nxs.application.session_state import SessionState
 
 logger = get_logger(__name__)
 
@@ -148,6 +152,8 @@ class Session:
         cost_tracker: Optional[CostTracker] = None,
         # Phase 6: Tracker persistence
         trackers: Optional[dict[str, ResearchProgressTracker]] = None,
+        # Phase 1: SessionState integration
+        state: Optional["SessionState"] = None,
     ):
         """Initialize a session.
 
@@ -160,27 +166,32 @@ class Session:
             summarization_cost_tracker: Optional cost tracker for summarization costs (created if None).
             cost_tracker: Legacy parameter - if provided, used for conversation_cost_tracker.
             trackers: Phase 6: Optional dict of query_id -> ResearchProgressTracker for persistence.
+            state: Phase 1: Optional SessionState for rich session context (created if None).
         """
         self.metadata = metadata
         self.conversation = conversation
         self.agent_loop = agent_loop
-        
+
         # Support legacy cost_tracker parameter for backward compatibility
         if cost_tracker is not None:
             self.conversation_cost_tracker = cost_tracker
         else:
             self.conversation_cost_tracker = conversation_cost_tracker or CostTracker()
-        
+
         self.reasoning_cost_tracker = reasoning_cost_tracker or CostTracker()
         self.summarization_cost_tracker = summarization_cost_tracker or CostTracker()
 
         # Phase 6: Tracker persistence - store trackers by query ID
         self.trackers: dict[str, ResearchProgressTracker] = trackers or {}
 
+        # Phase 1: SessionState - optional rich session context
+        self.state = state
+
         logger.debug(
             f"Session initialized: {metadata.session_id}, "
             f"{conversation.get_message_count()} messages, "
-            f"{len(self.trackers)} tracker(s)"
+            f"{len(self.trackers)} tracker(s), "
+            f"state={'present' if state else 'none'}"
         )
 
     async def run_query(
@@ -342,6 +353,7 @@ class Session:
     def to_dict(self) -> dict[str, Any]:
         """Serialize session to dictionary for persistence.
 
+        Phase 1: Now includes SessionState persistence.
         Phase 6: Now includes tracker persistence.
 
         Returns:
@@ -353,6 +365,7 @@ class Session:
             - summarization_cost_tracker: Summarization cost tracking data
             - cost_tracker: Legacy field (conversation costs) for backward compatibility
             - trackers: Phase 6: Dict of query_id -> tracker state
+            - state: Phase 1: SessionState (if present)
             - Note: AgentLoop is NOT serialized (reconstructed on load)
 
         Example:
@@ -365,7 +378,7 @@ class Session:
             query_id: tracker.to_dict() for query_id, tracker in self.trackers.items()
         }
 
-        return {
+        result = {
             "metadata": self.metadata.to_dict(),
             "conversation": self.conversation.to_dict(),
             "conversation_cost_tracker": self.conversation_cost_tracker.to_dict(),
@@ -378,6 +391,12 @@ class Session:
             # Note: AgentLoop is not serialized - it's reconstructed on load
             # with fresh LLM and tool registry instances
         }
+
+        # Phase 1: Include SessionState if present
+        if self.state is not None:
+            result["state"] = self.state.to_dict()
+
+        return result
 
     @classmethod
     def from_dict(
@@ -456,6 +475,20 @@ class Session:
                         exc_info=True,
                     )
 
+        # Phase 1: Restore SessionState (if present)
+        state: Optional["SessionState"] = None
+        if "state" in data:
+            try:
+                from nxs.application.session_state import SessionState
+
+                state = SessionState.from_dict(data["state"])
+                logger.debug(f"Restored SessionState for session: {metadata.session_id}")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to restore SessionState for session {metadata.session_id}: {e}",
+                    exc_info=True,
+                )
+
         # Update agent_loop's conversation to use restored one
         agent_loop.conversation = conversation
 
@@ -467,6 +500,7 @@ class Session:
             reasoning_cost_tracker=reasoning_cost_tracker,
             summarization_cost_tracker=summarization_cost_tracker,
             trackers=trackers,
+            state=state,
         )
 
         total_cost = session.get_cost_summary()["total_cost"]
