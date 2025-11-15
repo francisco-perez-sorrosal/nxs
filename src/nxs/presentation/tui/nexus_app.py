@@ -233,6 +233,20 @@ class NexusApp(App):
         existing_messages = self.agent_loop.conversation.get_messages()
         conversation_msg_count = len(existing_messages)
 
+        # Diagnostic logging for debugging session loading
+        logger.info(
+            f"Session on_mount: agent_loop type={type(self.agent_loop).__name__}, "
+            f"conversation_msg_count={conversation_msg_count}, "
+            f"session={self.session.session_id if self.session else 'None'}"
+        )
+
+        if self.session and self.session.metadata:
+            logger.info(
+                f"Session metadata: summary_exists={bool(self.session.metadata.conversation_summary)}, "
+                f"summary_length={len(self.session.metadata.conversation_summary) if self.session.metadata.conversation_summary else 0}, "
+                f"summary_last_index={self.session.metadata.summary_last_message_index}"
+            )
+
         if conversation_msg_count == 0:
             # New session - show welcome message
             chat.add_panel(

@@ -322,10 +322,15 @@ class SessionManager:
 
         try:
             data = session.to_dict()
+            msg_count = len(data.get("conversation", {}).get("messages", []))
+
             with open(session_file, "w") as f:
                 json.dump(data, f, indent=2)
 
-            logger.info(f"Session saved: {session.session_id} -> {session_file}")
+            logger.info(
+                f"Session saved: {session.session_id} -> {session_file}, "
+                f"messages={msg_count}, summary_length={len(data.get('metadata', {}).get('conversation_summary', ''))}"
+            )
         except Exception as e:
             logger.error(
                 f"Failed to save session {session.session_id}: {e}", exc_info=True
