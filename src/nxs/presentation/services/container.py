@@ -58,7 +58,7 @@ class ServiceContainer:
         event_bus: EventBus,
         *,
         # Widget getters (lambdas that return widgets)
-        get_status_panel: Callable,
+        get_thinking_panel: Callable,
         get_mcp_panel: Callable,
         get_chat_panel: Callable,
         get_input: Callable,
@@ -84,7 +84,7 @@ class ServiceContainer:
             agent_loop: The agent loop instance
             artifact_manager: The ArtifactManager instance
             event_bus: The EventBus for event-driven communication
-            get_status_panel: Lambda to get status panel widget
+            get_thinking_panel: Lambda to get thinking panel widget
             get_mcp_panel: Lambda to get MCP panel widget
             get_chat_panel: Lambda to get chat panel widget
             get_input: Lambda to get input widget
@@ -104,7 +104,7 @@ class ServiceContainer:
         self.event_bus = event_bus
         
         # Widget getters (stored as lambdas)
-        self._get_status_panel = get_status_panel
+        self._get_thinking_panel = get_thinking_panel
         self._get_mcp_panel = get_mcp_panel
         self._get_chat_panel = get_chat_panel
         self._get_input = get_input
@@ -145,7 +145,7 @@ class ServiceContainer:
         """Get StatusQueue, creating it on first access."""
         if self._status_queue is None:
             self._status_queue = StatusQueue(
-                status_panel_getter=self._get_status_panel
+                thinking_panel_getter=self._get_thinking_panel
             )
         return self._status_queue
 
@@ -331,19 +331,14 @@ class ServiceContainer:
 
         try:
             # Initialize MCP connections
-            await self.status_queue.add_info_message("Connecting to MCP servers...")
+            # Note: Connection status is shown in the Artifacts Panel (not Thinking Panel)
             await self.artifact_manager.initialize(use_auth=use_auth)
 
             server_count = len(self.artifact_manager.clients)
-            if server_count > 0:
-                await self.status_queue.add_success_message(
-                    f"Connected to {server_count} MCP server(s)"
-                )
-            else:
-                await self.status_queue.add_info_message("No MCP servers configured")
+            # Connection status is already displayed in the Artifacts Panel via connection events
+            logger.info(f"MCP initialization: {server_count} server(s) configured")
 
             # Load resources and commands
-            await self.status_queue.add_info_message("Loading resources and commands...")
 
             try:
                 resources = await self.artifact_manager.get_resource_list()

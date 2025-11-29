@@ -1,7 +1,7 @@
 """
-StatusQueue - Manages asynchronous status updates for the status panel.
+StatusQueue - Manages asynchronous status updates for the thinking panel.
 
-This module provides a queue-based system for updating the status panel
+This module provides a queue-based system for updating the thinking panel
 without blocking the UI, allowing users to scroll while status updates are processed.
 
 Implementation:
@@ -23,46 +23,46 @@ StatusUpdate = namedtuple("StatusUpdate", ["update_type", "args", "kwargs"])
 
 class StatusQueue:
     """
-    Manages asynchronous status updates for the status panel.
+    Manages asynchronous status updates for the thinking panel.
 
     Status updates are queued and processed in the background, ensuring
     the UI remains responsive and scrollable during updates.
 
-    This class wraps AsyncQueueProcessor with a StatusPanel-specific API,
+    This class wraps AsyncQueueProcessor with a ThinkingPanel-specific API,
     providing methods like add_tool_call(), add_info_message(), etc.
     """
 
-    def __init__(self, status_panel_getter: Callable):
+    def __init__(self, thinking_panel_getter: Callable):
         """
         Initialize the StatusQueue.
 
         Args:
-            status_panel_getter: Function that returns the StatusPanel widget instance
+            thinking_panel_getter: Function that returns the ThinkingPanel widget instance
         """
-        self._status_panel_getter = status_panel_getter
+        self._thinking_panel_getter = thinking_panel_getter
 
         # Define processor function that applies status updates to the panel
         def apply_status_update(update: StatusUpdate) -> None:
-            """Apply a status update to the status panel."""
+            """Apply a status update to the thinking panel."""
             try:
-                status_panel = self._status_panel_getter()
-                if status_panel is None:
-                    logger.warning("StatusPanel not available, skipping update")
+                thinking_panel = self._thinking_panel_getter()
+                if thinking_panel is None:
+                    logger.warning("ThinkingPanel not available, skipping update")
                     return
             except Exception as e:
-                logger.error(f"Error getting status panel: {e}")
+                logger.error(f"Error getting thinking panel: {e}")
                 return
 
             # Apply the update by calling the appropriate method on the panel
             method_name = update.update_type
-            if hasattr(status_panel, method_name):
+            if hasattr(thinking_panel, method_name):
                 try:
-                    method = getattr(status_panel, method_name)
+                    method = getattr(thinking_panel, method_name)
                     method(*update.args, **update.kwargs)
                 except Exception as e:
                     logger.error(f"Error applying status update {method_name}: {e}")
             else:
-                logger.warning(f"StatusPanel has no method: {method_name}")
+                logger.warning(f"ThinkingPanel has no method: {method_name}")
 
         # Create the underlying queue processor
         self._processor = AsyncQueueProcessor[StatusUpdate](

@@ -32,6 +32,7 @@ from .types import (
     ConnectionStatusChanged,
     Event,
     ReconnectProgress,
+    StateChanged,
 )
 
 __all__ = [
@@ -41,4 +42,5 @@ __all__ = [
     "ConnectionStatusChanged",
     "ReconnectProgress",
     "ArtifactsFetched",
+    "StateChanged",
 ]

@@ -17,13 +17,20 @@ Sessions can be:
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Optional, Protocol, runtime_checkable, TYPE_CHECKING
 
 from nxs.application.agentic_loop import AgentLoop
 from nxs.application.conversation import Conversation
 from nxs.application.cost_tracker import CostTracker
 from nxs.application.progress_tracker import ResearchProgressTracker
+from nxs.application.session_state import SessionState
 from nxs.logger import get_logger
+
+if TYPE_CHECKING:
+    from anthropic import AsyncAnthropic
+    from nxs.application.state_update_service import StateUpdateService
+    from nxs.domain.events import EventBus
+    from nxs.domain.protocols.state import StateProvider
 
 logger = get_logger(__name__)
 
@@ -146,8 +153,16 @@ class Session:
         summarization_cost_tracker: Optional[CostTracker] = None,
         # Legacy support: if cost_tracker is provided, use it for conversation
         cost_tracker: Optional[CostTracker] = None,
-        # Phase 6: Tracker persistence
+        # Tracker persistence
         trackers: Optional[dict[str, ResearchProgressTracker]] = None,
+        # SessionState integration
+        session_state: Optional[SessionState] = None,
+        # StateUpdateService integration
+        event_bus: Optional["EventBus"] = None,
+        state_provider: Optional["StateProvider"] = None,
+        state_update_service: Optional["StateUpdateService"] = None,
+        # LLM-powered extraction
+        anthropic_client: Optional["AsyncAnthropic"] = None,
     ):
         """Initialize a session.
 
@@ -159,28 +174,89 @@ class Session:
             reasoning_cost_tracker: Optional cost tracker for reasoning costs (created if None).
             summarization_cost_tracker: Optional cost tracker for summarization costs (created if None).
             cost_tracker: Legacy parameter - if provided, used for conversation_cost_tracker.
-            trackers: Phase 6: Optional dict of query_id -> ResearchProgressTracker for persistence.
+            trackers: Optional dict of query_id -> ResearchProgressTracker for persistence.
+            session_state: Optional SessionState for semantic knowledge tracking.
+            event_bus: Optional EventBus for state change notifications.
+            state_provider: Optional StateProvider for async state persistence.
+            state_update_service: Optional StateUpdateService (created if event_bus and state_provider provided).
+            anthropic_client: Optional AsyncAnthropic client for StateExtractor (LLM-powered extraction).
         """
         self.metadata = metadata
         self.conversation = conversation
         self.agent_loop = agent_loop
-        
+
         # Support legacy cost_tracker parameter for backward compatibility
         if cost_tracker is not None:
             self.conversation_cost_tracker = cost_tracker
         else:
             self.conversation_cost_tracker = conversation_cost_tracker or CostTracker()
-        
+
         self.reasoning_cost_tracker = reasoning_cost_tracker or CostTracker()
         self.summarization_cost_tracker = summarization_cost_tracker or CostTracker()
 
-        # Phase 6: Tracker persistence - store trackers by query ID
+        # Tracker persistence - store trackers by query ID
         self.trackers: dict[str, ResearchProgressTracker] = trackers or {}
+
+        # SessionState - semantic knowledge tracking
+        # Create new SessionState if not provided (for backward compatibility)
+        self.state: SessionState = session_state or SessionState(session_id=metadata.session_id)
+
+        # Inject SessionState into CommandControlAgent for context injection
+        # Check if agent_loop has session_state attribute (CommandControlAgent does)
+        if hasattr(agent_loop, 'session_state'):
+            agent_loop.session_state = self.state
+            logger.debug(
+                f"Injected SessionState into agent for context injection"
+            )
+
+        # StateUpdateService - event-driven state updates
+        # StateExtractor - LLM-powered extraction (optional)
+        # Create StateUpdateService if not provided but dependencies are available
+        if state_update_service is not None:
+            self.state_update_service: Optional["StateUpdateService"] = state_update_service
+        elif event_bus is not None and state_provider is not None:
+            from nxs.application.state_update_service import StateUpdateService
+
+            # Create StateExtractor if Anthropic client is available
+            state_extractor = None
+            if anthropic_client is not None:
+                from nxs.application.state_extractor import StateExtractor
+
+                state_extractor = StateExtractor(
+                    client=anthropic_client,
+                    enable_user_extraction=True,
+                    enable_fact_extraction=True,
+                    enable_intent_extraction=True,
+                )
+                logger.debug(
+                    f"Created StateExtractor for session {metadata.session_id} "
+                    f"(user=True, facts=True, intent=True)"
+                )
+
+            self.state_update_service = StateUpdateService(
+                session_state=self.state,
+                event_bus=event_bus,
+                state_provider=state_provider,
+                session_id=metadata.session_id,
+                state_extractor=state_extractor,
+            )
+            logger.debug(
+                f"Created StateUpdateService for session {metadata.session_id} "
+                f"(extraction={'enabled' if state_extractor else 'disabled'})"
+            )
+        else:
+            self.state_update_service = None
+            logger.debug(
+                f"StateUpdateService not created (event_bus={event_bus is not None}, "
+                f"state_provider={state_provider is not None})"
+            )
 
         logger.debug(
             f"Session initialized: {metadata.session_id}, "
             f"{conversation.get_message_count()} messages, "
-            f"{len(self.trackers)} tracker(s)"
+            f"{len(self.trackers)} tracker(s), "
+            f"state={'restored' if session_state else 'new'}, "
+            f"state_update_service={'active' if self.state_update_service else 'inactive'}"
         )
 
     async def run_query(
@@ -342,7 +418,8 @@ class Session:
     def to_dict(self) -> dict[str, Any]:
         """Serialize session to dictionary for persistence.
 
-        Phase 6: Now includes tracker persistence.
+        Phase 1: Now includes SessionState for semantic knowledge tracking.
+        Phase 6: Includes tracker persistence.
 
         Returns:
             Dictionary containing:
@@ -352,7 +429,8 @@ class Session:
             - reasoning_cost_tracker: Reasoning cost tracking data
             - summarization_cost_tracker: Summarization cost tracking data
             - cost_tracker: Legacy field (conversation costs) for backward compatibility
-            - trackers: Phase 6: Dict of query_id -> tracker state
+            - trackers: Dict of query_id -> tracker state
+            - state: SessionState for semantic knowledge
             - Note: AgentLoop is NOT serialized (reconstructed on load)
 
         Example:
@@ -360,7 +438,7 @@ class Session:
             >>> with open("session.json", "w") as f:
             ...     json.dump(session_data, f, indent=2)
         """
-        # Phase 6: Serialize trackers
+        # Serialize trackers
         trackers_dict = {
             query_id: tracker.to_dict() for query_id, tracker in self.trackers.items()
         }
@@ -373,21 +451,31 @@ class Session:
             "summarization_cost_tracker": self.summarization_cost_tracker.to_dict(),
             # Legacy support: include cost_tracker for backward compatibility
             "cost_tracker": self.conversation_cost_tracker.to_dict(),
-            # Phase 6: Include trackers
+            # Include trackers
             "trackers": trackers_dict,
+            # Include SessionState
+            "state": self.state.to_dict(),
             # Note: AgentLoop is not serialized - it's reconstructed on load
             # with fresh LLM and tool registry instances
         }
 
     @classmethod
     def from_dict(
-        cls, data: dict[str, Any], agent_loop: AgentProtocol
+        cls,
+        data: dict[str, Any],
+        agent_loop: AgentProtocol,
+        event_bus: Optional["EventBus"] = None,
+        state_provider: Optional["StateProvider"] = None,
+        anthropic_client: Optional["AsyncAnthropic"] = None,
     ) -> "Session":
         """Deserialize session from dictionary.
 
         Args:
             data: Dictionary from to_dict().
             agent_loop: Agent instance to use (not persisted, can be AgentLoop or CommandControlAgent).
+            event_bus: Optional EventBus for state change notifications.
+            state_provider: Optional StateProvider for async state persistence.
+            anthropic_client: Optional AsyncAnthropic client for StateExtractor.
 
         Returns:
             Restored Session instance.
@@ -442,7 +530,7 @@ class Session:
         if "summarization_cost_tracker" in data:
             summarization_cost_tracker = CostTracker.from_dict(data["summarization_cost_tracker"])
 
-        # Phase 6: Restore trackers
+        # Restore trackers
         trackers: dict[str, ResearchProgressTracker] = {}
         if "trackers" in data:
             for query_id, tracker_data in data["trackers"].items():
@@ -456,6 +544,20 @@ class Session:
                         exc_info=True,
                     )
 
+        # Restore SessionState
+        session_state: Optional[SessionState] = None
+        if "state" in data:
+            try:
+                session_state = SessionState.from_dict(data["state"])
+                logger.debug(f"Restored SessionState with {len(session_state.knowledge_base.facts)} facts")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to restore SessionState: {e}, creating new state",
+                    exc_info=True,
+                )
+                # Fallback: create new state (for backward compatibility)
+                session_state = None
+
         # Update agent_loop's conversation to use restored one
         agent_loop.conversation = conversation
 
@@ -467,6 +569,10 @@ class Session:
             reasoning_cost_tracker=reasoning_cost_tracker,
             summarization_cost_tracker=summarization_cost_tracker,
             trackers=trackers,
+            session_state=session_state,
+            event_bus=event_bus,
+            state_provider=state_provider,
+            anthropic_client=anthropic_client,
         )
 
         total_cost = session.get_cost_summary()["total_cost"]
@@ -474,12 +580,13 @@ class Session:
             f"Session restored: {metadata.session_id}, "
             f"{conversation.get_message_count()} messages, "
             f"{len(trackers)} tracker(s), "
+            f"{len(session.state.knowledge_base.facts)} facts, "
             f"${total_cost:.6f} total cost"
         )
 
         return session
 
-    # Phase 6: Tracker management methods
+    # Tracker management methods
 
     def save_tracker(self, query_id: str, tracker: ResearchProgressTracker) -> None:
         """Save a tracker for a query.

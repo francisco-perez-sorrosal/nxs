@@ -1,4 +1,4 @@
-from typing import Any, List, Tuple, Optional, Callable, cast
+from typing import Any, List, Tuple, Optional, Callable, cast, TYPE_CHECKING
 from mcp.types import Prompt, PromptMessage
 from anthropic.types import MessageParam
 
@@ -9,6 +9,9 @@ from nxs.application.claude import Claude
 from nxs.application.artifact_manager import ArtifactManager
 from nxs.application.parsers import CompositeArgumentParser
 from nxs.logger import get_logger
+
+if TYPE_CHECKING:
+    from nxs.application.session_state import SessionState
 
 logger = get_logger("main")
 
@@ -33,6 +36,8 @@ class CommandControlAgent:
         artifact_manager: ArtifactManager,
         reasoning_loop: AdaptiveReasoningLoop,
         callbacks: Optional[dict[str, Callable]] = None,
+        session_state: Optional["SessionState"] = None,
+        context_mode: str = "auto",
     ):
         """Initialize CommandControlAgent with composition.
 
@@ -40,14 +45,24 @@ class CommandControlAgent:
             artifact_manager: Manages MCP servers, resources, prompts, and tools
             reasoning_loop: AdaptiveReasoningLoop for query execution
             callbacks: Optional callbacks for command/resource processing events
+            session_state: Optional SessionState for Phase 4 context injection
+            context_mode: Context verbosity mode ("minimal", "auto", "comprehensive")
         """
         self.artifact_manager = artifact_manager
         self.reasoning_loop = reasoning_loop
         self.callbacks = callbacks or {}
         self.argument_parser = CompositeArgumentParser()
+        self.session_state = session_state  # Phase 4: Context injection
+        self.context_mode = context_mode  # Phase 4: Verbosity control
 
         # Access tool clients from artifact manager for resource extraction
         self.tool_clients = artifact_manager.clients
+
+        logger.debug(
+            f"CommandControlAgent initialized with "
+            f"context_injection={'enabled' if session_state else 'disabled'}, "
+            f"mode={context_mode}"
+        )
 
     @property
     def conversation(self) -> "Conversation":
@@ -240,7 +255,26 @@ class CommandControlAgent:
         # Merge callbacks
         merged_callbacks = {**self.callbacks, **(callbacks or {})}
 
-        # Extract resources FIRST (before command processing)
+        # Extract session state context for prompt injection
+        # This provides semantic knowledge accumulated across the session
+        session_context = ""
+        if self.session_state:
+            try:
+                session_context = self.session_state.get_context_for_prompt(
+                    query=query,
+                    mode=self.context_mode,
+                )
+                if session_context:
+                    logger.info(
+                        f"Injecting session context ({len(session_context)} chars, "
+                        f"mode={self.context_mode})"
+                    )
+                    logger.debug(f"Session context preview: {session_context[:200]}...")
+            except Exception as e:
+                logger.error(f"Error extracting session context: {e}", exc_info=True)
+                session_context = ""  # Defensive: Continue without context on error
+
+        # Extract resources SECOND (after context extraction)
         # This ensures resources mentioned in commands (e.g., `/summary @resource`) are available
         logger.debug("Extracting resources from query")
         added_resources = await self._extract_resources(query)
@@ -251,18 +285,41 @@ class CommandControlAgent:
             logger.info("Query was processed as a command, executing directly via base AgentLoop")
             # Command messages already added to conversation
 
-            # If resources were mentioned, add them as context to the conversation
+            # Add session context and resources to the conversation
+            context_parts = []
+
+            # Add session state context first (user profile, facts, etc.)
+            if session_context:
+                context_parts.append(f"""
+# Session Context
+
+The following information has been learned about the user and session:
+
+{session_context}
+""")
+
+            # Add resource context second
             if added_resources:
                 logger.info(f"Adding {len(added_resources)} characters of resource context to command")
-                resource_context_message = f"""
-The following resources were referenced in your request and may be useful:
-<context>
+                context_parts.append(f"""
+# Referenced Resources
+
+The following resources were referenced in your request:
+
 {added_resources}
+""")
+
+            # Combine and add to conversation if we have any context
+            if context_parts:
+                combined_context = "\n".join(context_parts)
+                context_message = f"""
+<context>
+{combined_context}
 </context>
 
 Note: The content above is provided as reference material. Use it as needed to complete the task.
 """
-                self.reasoning_loop.conversation.add_user_message(resource_context_message)
+                self.reasoning_loop.conversation.add_user_message(context_message)
 
             # Execute directly via base AgentLoop (bypass reasoning loop overhead)
             return await self._execute_direct(
@@ -273,9 +330,39 @@ Note: The content above is provided as reference material. Use it as needed to c
 
         # Not a command - process as regular query with resources
 
-        if added_resources:
-            logger.info(f"Found {len(added_resources)} characters of resource content")
-            # Build enriched query with resources
+        # Build context-enriched query with session state + resources
+        if added_resources or session_context:
+            logger.info(
+                f"Building enriched query: "
+                f"session_context={len(session_context)} chars, "
+                f"resources={len(added_resources)} chars"
+            )
+
+            context_sections = []
+
+            # Add session state context (user profile, facts, etc.)
+            if session_context:
+                context_sections.append(f"""
+# Session Knowledge
+
+{session_context}
+""")
+
+            # Add resource context
+            if added_resources:
+                logger.info(f"Found {len(added_resources)} characters of resource content")
+                context_sections.append(f"""
+# Referenced Documents
+
+{added_resources}
+
+Note: The user's query might contain references like "@report.docx". The "@" is only
+included as a way of mentioning the doc. The actual name would be "report.docx".
+If the document content is included above, you don't need to use an additional tool to read it.
+""")
+
+            # Build enriched query with all context
+            combined_context = "\n".join(context_sections)
             enriched_query = f"""
 The user has a question:
 <query>
@@ -284,24 +371,21 @@ The user has a question:
 
 The following context may be useful in answering their question:
 <context>
-{added_resources}
+{combined_context}
 </context>
 
-Note the user's query might contain references to documents like "@report.docx". The "@" is only
-included as a way of mentioning the doc. The actual name of the document would be "report.docx".
-If the document content is included in this prompt, you don't need to use an additional tool to read the document.
 Answer the user's question directly and concisely. Start with the exact information they need.
 Don't refer to or mention the provided context in any way - just use it to inform your answer.
 """
-            # Resources provide context - execute directly without reasoning overhead
-            logger.info("Executing resource-enriched query directly via base AgentLoop")
+            # Context-enriched queries execute directly without reasoning overhead
+            logger.info("Executing context-enriched query directly via base AgentLoop")
             return await self._execute_direct(
                 query=enriched_query,
                 use_streaming=use_streaming,
                 callbacks=merged_callbacks,
             )
         else:
-            logger.debug("No resources found in query")
+            logger.debug("No resources or session context found - using plain query")
             # Regular query - use adaptive reasoning loop
             logger.debug("Delegating to AdaptiveReasoningLoop for adaptive execution")
             return await self.reasoning_loop.run(

@@ -166,6 +166,27 @@ class QueryHandler:
         chat = self.chat_panel_getter()
         chat.finish_assistant_message()  # Properly finish the assistant message
 
+        # Update session state with completed exchange
+        if self.session_getter:
+            session = self.session_getter()
+            if session and hasattr(session, "state_update_service") and session.state_update_service:
+                try:
+                    # Get the last user and assistant messages from conversation
+                    messages = self.agent_loop.conversation.get_messages(start=-2)
+                    if len(messages) >= 2:
+                        # Extract text content from messages
+                        user_msg = self._extract_text_content(messages[-2])
+                        assistant_msg = self._extract_text_content(messages[-1])
+
+                        if user_msg and assistant_msg:
+                            await session.state_update_service.on_exchange_complete(
+                                user_msg=user_msg,
+                                assistant_msg=assistant_msg,
+                            )
+                            logger.debug("Updated session state with completed exchange")
+                except Exception as e:
+                    logger.error(f"Error updating session state on exchange complete: {e}", exc_info=True)
+
         if self.on_conversation_updated:
             asyncio.create_task(self.on_conversation_updated())
 
@@ -191,6 +212,20 @@ class QueryHandler:
         """
         logger.info(f"Tool result: {tool_name} - success={success}, result length={len(str(result))}")
         await self.status_queue.add_tool_result(tool_name, result, success)
+
+        # Update session state with tool execution
+        if self.session_getter:
+            session = self.session_getter()
+            if session and hasattr(session, "state_update_service") and session.state_update_service:
+                try:
+                    await session.state_update_service.on_tool_executed(
+                        tool_name=tool_name,
+                        success=success,
+                        result=result,
+                    )
+                    logger.debug(f"Updated session state with tool execution: {tool_name}")
+                except Exception as e:
+                    logger.error(f"Error updating session state on tool executed: {e}", exc_info=True)
 
     async def _on_usage(self, usage: dict, cost: float) -> None:
         """
@@ -223,3 +258,30 @@ class QueryHandler:
                     reasoning_summary=session.get_reasoning_cost_summary(),
                     summarization_summary=session.get_summarization_cost_summary(),
                 )
+
+    def _extract_text_content(self, message: dict) -> str:
+        """Extract text content from a message.
+
+        Handles both simple text content and complex content blocks.
+
+        Args:
+            message: Message dictionary with 'content' field
+
+        Returns:
+            Extracted text content, or empty string if not found
+        """
+        content = message.get("content", "")
+
+        # Handle simple text content
+        if isinstance(content, str):
+            return content
+
+        # Handle content blocks (list of dicts)
+        if isinstance(content, list):
+            text_parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text_parts.append(block.get("text", ""))
+            return " ".join(text_parts)
+
+        return ""

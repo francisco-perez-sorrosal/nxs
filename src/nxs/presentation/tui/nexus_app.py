@@ -16,12 +16,13 @@ from rich.panel import Panel
 from rich.text import Text
 
 from nxs.presentation.widgets.chat_panel import ChatPanel
-from nxs.presentation.widgets.status_panel import StatusPanel
-from nxs.presentation.widgets.reasoning_trace_panel import ReasoningTracePanel
+from nxs.presentation.widgets.thinking_panel import ThinkingPanel
 from nxs.presentation.widgets.input_field import NexusInput
 from nxs.presentation.widgets.artifact_panel import ArtifactPanel
 from nxs.presentation.widgets.approval_overlay import ApprovalOverlay
 from nxs.presentation.widgets.custom_footer import CustomFooter
+from nxs.presentation.widgets.left_sidebar import LeftSidebar
+from nxs.presentation.widgets.session_panel import SessionSelected, SessionCreated
 from nxs.presentation.services import ServiceContainer
 from nxs.application.artifact_manager import ArtifactManager
 from nxs.application.approval import ApprovalManager, ApprovalRequest
@@ -79,7 +80,9 @@ class NexusApp(App):
         Binding("tab", "focus_next", "Next Field", show=False),
         Binding("shift+tab", "focus_previous", "Previous Field", show=False),
         Binding("ctrl+l", "clear_chat", "Clear Chat"),
-        Binding("ctrl+r", "toggle_reasoning", "Toggle Reasoning", show=True),
+        Binding("ctrl+t", "toggle_thinking", "Toggle Thinking", show=True),
+        Binding("ctrl+s", "toggle_sidebar", "Toggle Sidebar", show=True),
+        Binding("ctrl+n", "new_session", "New Session", show=False),
     ]
 
     def __init__(
@@ -153,7 +156,7 @@ class NexusApp(App):
             artifact_manager=artifact_manager,
             event_bus=self.event_bus,
             # Widget getters (lambdas that return widgets after compose())
-            get_status_panel=self._get_status_panel,
+            get_thinking_panel=self._get_thinking_panel,
             get_mcp_panel=self._get_mcp_panel,
             get_chat_panel=self._get_chat_panel,
             get_input=self._get_input,
@@ -173,19 +176,19 @@ class NexusApp(App):
         self.services.subscribe_events()
 
     def compose(self) -> ComposeResult:
-        """Create the UI layout."""
+        """Create the UI layout with session management sidebar."""
         yield Header()
 
         with Container(id="app-container"):
             with Horizontal(id="main-horizontal"):
+                # Left sidebar for session management + state visualization
+                yield LeftSidebar(id="left-sidebar")
+
                 with Vertical(id="main-content"):
                     yield ChatPanel(session_name=self._session_name, id="chat")
 
-                    # Reasoning trace panel (collapsible with Ctrl+R)
-                    yield ReasoningTracePanel(id="reasoning-trace")
-
-                    # Status panel for tool execution
-                    yield StatusPanel(id="status")
+                    # Unified thinking panel: reasoning + tool execution (collapsible with Ctrl+T)
+                    yield ThinkingPanel(id="thinking")
 
                     # Create input widget
                     yield NexusInput(
@@ -290,6 +293,11 @@ class NexusApp(App):
         # Mount AutoComplete overlay after the app is fully mounted
         self.call_after_refresh(self.services.autocomplete_service.mount_autocomplete)
 
+        # Initialize sidebar with sessions and state
+        if self.session_manager:
+            await self._update_sidebar()
+            logger.info("Sidebar initialized with session list and state")
+
         # Focus the input field after the first render
         self.call_after_refresh(self._focus_input)
 
@@ -345,9 +353,9 @@ class NexusApp(App):
         except Exception as e:
             logger.warning(f"Could not focus input field: {e}")
 
-    def _get_status_panel(self) -> StatusPanel:
-        """Helper to get the status panel widget."""
-        return self.query_one("#status", StatusPanel)
+    def _get_thinking_panel(self) -> ThinkingPanel:
+        """Helper to get the thinking panel widget."""
+        return self.query_one("#thinking", ThinkingPanel)
 
     def _get_mcp_panel(self) -> ArtifactPanel:
         """Helper to get the MCP panel widget."""
@@ -458,21 +466,146 @@ class NexusApp(App):
         chat.clear_chat()
         chat.add_panel("Chat history cleared", style="dim")
 
-    def action_toggle_reasoning(self) -> None:
-        """Toggle the reasoning trace panel visibility (Ctrl+R)."""
-        reasoning_panel = self.query_one("#reasoning-trace", ReasoningTracePanel)
-        reasoning_panel.display = not reasoning_panel.display
+    def action_toggle_thinking(self) -> None:
+        """Toggle the thinking panel visibility (Ctrl+T)."""
+        thinking_panel = self.query_one("#thinking", ThinkingPanel)
+        thinking_panel.display = not thinking_panel.display
+
+    # ====================================================================
+    # Session Management Actions
+    # ====================================================================
+
+    def action_toggle_sidebar(self) -> None:
+        """Toggle the left sidebar visibility (Ctrl+S)."""
+        sidebar = self.query_one("#left-sidebar", LeftSidebar)
+        sidebar.toggle_visibility()
+        logger.info("Toggled sidebar visibility")
+
+    async def action_new_session(self) -> None:
+        """Create a new session (Ctrl+N)."""
+        if not self.session_manager:
+            logger.warning("Cannot create session: no SessionManager available")
+            return
+
+        # Create a unique session ID
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        session_id = f"session_{timestamp}"
+        title = f"Session {timestamp}"
+
+        logger.info(f"Creating new session: {session_id}")
+
+        # Create the new session
+        new_session = self.session_manager.create_session(session_id, title=title)
+
+        # Switch to the new session
+        await self._switch_to_session(session_id)
+
+    async def on_session_selected(self, message: SessionSelected) -> None:
+        """Handle session selection from sidebar."""
+        await self._switch_to_session(message.session_id)
+
+    async def on_session_created(self, message: SessionCreated) -> None:
+        """Handle session creation request from sidebar."""
+        await self.action_new_session()
+
+    async def _switch_to_session(self, session_id: str) -> None:
+        """Switch to a different session.
+
+        Args:
+            session_id: ID of the session to switch to
+        """
+        if not self.session_manager:
+            logger.warning("Cannot switch session: no SessionManager available")
+            return
+
+        logger.info(f"Switching to session: {session_id}")
+
+        try:
+            # Save current session first
+            if self.session:
+                logger.info(f"Saving current session: {self.session.session_id}")
+                self.session_manager.save_active_session()
+
+            # Load the target session
+            new_session = await self.session_manager.get_or_create_session(session_id)
+
+            # Update app state
+            self.session = new_session
+            self._session_name = session_id
+            self.agent_loop = new_session.agent_loop
+
+            # Clear and reload chat with new session's conversation
+            chat = self._get_chat_panel()
+            chat.clear_chat()
+            chat.update_session_name(session_id)
+
+            # Display session loaded message
+            chat.add_panel(
+                f"[bold cyan]Switched to session:[/] {session_id}\n\n"
+                f"Messages: {new_session.get_message_count()}\n"
+                f"Created: {new_session.metadata.created_at.strftime('%Y-%m-%d %H:%M')}",
+                title="Session Loaded",
+                style="green",
+            )
+
+            # Update sidebar
+            await self._update_sidebar()
+
+            logger.info(f"Successfully switched to session: {session_id}")
+
+        except Exception as e:
+            logger.error(f"Error switching to session {session_id}: {e}", exc_info=True)
+            chat = self._get_chat_panel()
+            chat.add_panel(
+                f"[bold red]Error switching to session:[/] {session_id}\n\n{str(e)}",
+                title="Error",
+                style="red",
+            )
+
+    async def _update_sidebar(self) -> None:
+        """Update the sidebar with current sessions and state."""
+        if not self.session_manager:
+            return
+
+        sidebar = self.query_one("#left-sidebar", LeftSidebar)
+
+        # Get all sessions
+        all_sessions = self.session_manager.get_all_sessions_info()
+
+        # Convert to format expected by sidebar
+        sessions_list = [
+            (
+                info["session_id"],
+                info["title"],
+                info["message_count"],
+                info["last_active"],
+            )
+            for info in all_sessions
+        ]
+
+        # Update session list
+        active_session_id = self.session.session_id if self.session else "default"
+        sidebar.update_sessions(sessions_list, active_session_id)
+
+        # Update state viewer with current session's state
+        if self.session and hasattr(self.session, "state"):
+            sidebar.update_state(self.session.state)
+        else:
+            sidebar.update_state(None)
+
+        logger.debug(f"Updated sidebar: {len(sessions_list)} sessions")
 
     # ====================================================================
     # Reasoning Callback Routing
     # ====================================================================
     # These methods route reasoning events from AdaptiveReasoningLoop
-    # to the ReasoningTracePanel widget
+    # to the ThinkingPanel widget (unified reasoning + tool execution display)
     # ====================================================================
 
-    def _get_reasoning_trace_panel(self) -> ReasoningTracePanel:
-        """Helper to get the reasoning trace panel widget."""
-        return self.query_one("#reasoning-trace", ReasoningTracePanel)
+    def _get_thinking_panel_for_reasoning(self) -> ThinkingPanel:
+        """Helper to get the thinking panel widget for reasoning callbacks."""
+        return self.query_one("#thinking", ThinkingPanel)
 
     def _setup_reasoning_enabled_callback(self) -> None:
         """Set up callback to provide reasoning enabled state to the reasoning loop.
@@ -600,29 +733,29 @@ class NexusApp(App):
         Returns:
             Dictionary of callback functions for AdaptiveReasoningLoop
         """
-        # Get the reasoning panel
-        reasoning_panel = self._get_reasoning_trace_panel()
+        # Get the thinking panel (unified reasoning + tool execution)
+        thinking_panel = self._get_thinking_panel_for_reasoning()
 
-        # Return callback dictionary that routes events to the panel
+        # Return callback dictionary that routes reasoning events to the thinking panel
         return {
             # Complexity analysis
-            "on_analysis_start": lambda: reasoning_panel.on_analysis_start(),
-            "on_analysis_complete": lambda complexity: reasoning_panel.on_analysis_complete(complexity),
+            "on_analysis_start": lambda: thinking_panel.on_analysis_start(),
+            "on_analysis_complete": lambda complexity: thinking_panel.on_analysis_complete(complexity),
             # Strategy selection
-            "on_strategy_selected": lambda strategy, reason: reasoning_panel.on_strategy_selected(strategy, reason),
+            "on_strategy_selected": lambda strategy, reason: thinking_panel.on_strategy_selected(strategy, reason),
             # Planning
-            "on_planning_start": lambda: reasoning_panel.on_planning_start(),
-            "on_planning_complete": lambda count, mode: reasoning_panel.on_planning_complete(count, mode),
+            "on_planning_start": lambda: thinking_panel.on_planning_start(),
+            "on_planning_complete": lambda count, mode: thinking_panel.on_planning_complete(count, mode),
             # Quality evaluation
-            "on_response_for_judgment": lambda response, strategy: reasoning_panel.on_response_for_judgment(response, strategy),
-            "on_quality_check_start": lambda: reasoning_panel.on_quality_check_start(),
-            "on_quality_check_complete": lambda evaluation: reasoning_panel.on_quality_check_complete(evaluation),
+            "on_response_for_judgment": lambda response, strategy: thinking_panel.on_response_for_judgment(response, strategy),
+            "on_quality_check_start": lambda: thinking_panel.on_quality_check_start(),
+            "on_quality_check_complete": lambda evaluation: thinking_panel.on_quality_check_complete(evaluation),
             # Auto-escalation
-            "on_auto_escalation": lambda from_s, to_s, reason, conf: reasoning_panel.on_auto_escalation(
+            "on_auto_escalation": lambda from_s, to_s, reason, conf: thinking_panel.on_auto_escalation(
                 from_s, to_s, reason, conf
             ),
             # Final response
-            "on_final_response": lambda strategy, attempts, quality, escalated: reasoning_panel.on_final_response(
+            "on_final_response": lambda strategy, attempts, quality, escalated: thinking_panel.on_final_response(
                 strategy, attempts, quality, escalated
             ),
             # Phase 6: Tracker completion for persistence

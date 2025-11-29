@@ -218,6 +218,7 @@ async def main(
 Be concise, efficient, and transparent. Use tools purposefully, not performatively. Never fake results.
 """
     # Create SessionManager with custom agent factory
+    # Phase 3: Pass async_client for StateExtractor (LLM-powered extraction)
     session_manager = SessionManager(
         llm=claude_service,
         storage_dir=Path.home() / ".nxs" / "sessions",
@@ -225,6 +226,8 @@ Be concise, efficient, and transparent. Use tools purposefully, not performative
         enable_caching=True,
         agent_factory=create_command_control_agent,
         summarizer=summarization_service,
+        event_bus=artifact_manager.event_bus,  # Phase 2: Enable StateUpdateService
+        anthropic_client=claude_service.async_client,  # Phase 3: Enable StateExtractor
     )
     
     logger.info("SessionManager initialized with CommandControlAgent factory")

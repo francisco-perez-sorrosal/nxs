@@ -18,7 +18,7 @@ TUI Integration (Future):
 import asyncio
 import json
 from pathlib import Path
-from typing import Callable, Optional, Dict, cast, Any
+from typing import Callable, Optional, Dict, cast, Any, TYPE_CHECKING
 
 from nxs.application.agentic_loop import AgentLoop
 from nxs.application.claude import Claude
@@ -27,7 +27,11 @@ from nxs.application.session import Session, SessionMetadata, AgentProtocol
 from nxs.application.tool_registry import ToolRegistry
 from nxs.application.summarization import SummarizationService, SummaryResult
 from nxs.domain.protocols import StateProvider
+from nxs.domain.events import EventBus
 from nxs.logger import get_logger
+
+if TYPE_CHECKING:
+    from anthropic import AsyncAnthropic
 
 logger = get_logger(__name__)
 
@@ -96,6 +100,8 @@ class SessionManager:
         callbacks: Optional[dict[str, Callable]] = None,
         agent_factory: Optional[Callable[[Conversation], AgentProtocol]] = None,
         state_provider: Optional[StateProvider] = None,
+        event_bus: Optional[EventBus] = None,
+        anthropic_client: Optional["AsyncAnthropic"] = None,
     ):
         """Initialize session manager.
 
@@ -113,6 +119,8 @@ class SessionManager:
                           If provided, tool_registry is optional.
             state_provider: Optional StateProvider for pluggable persistence backends.
                            If None, creates FileStateProvider with storage_dir.
+            event_bus: Optional EventBus for state change notifications (Phase 2).
+            anthropic_client: Optional AsyncAnthropic client for StateExtractor (Phase 3).
 
         Example (with custom agent factory):
             >>> def create_command_agent(conversation):
@@ -141,6 +149,8 @@ class SessionManager:
         self._agent_factory = agent_factory
         self._summarizer = summarizer
         self._summary_locks: Dict[str, asyncio.Lock] = {}
+        self.event_bus = event_bus
+        self.anthropic_client = anthropic_client  # Phase 3
 
         # Validate: need either tool_registry or agent_factory
         if tool_registry is None and agent_factory is None:
@@ -148,7 +158,7 @@ class SessionManager:
                 "SessionManager requires either tool_registry or agent_factory"
             )
 
-        # Phase 0: StateProvider integration
+        # StateProvider integration
         # If no state provider given, create FileStateProvider for backward compatibility
         if state_provider is None:
             from nxs.infrastructure.state import FileStateProvider
@@ -297,11 +307,14 @@ class SessionManager:
             )
             logger.debug(f"Created session with default AgentLoop: {session_id}")
 
-        # Create session
+        # Create session (Phase 3: pass anthropic_client for StateExtractor)
         session = Session(
             metadata=metadata,
             conversation=conversation,
             agent_loop=cast(AgentProtocol, agent_loop),
+            event_bus=self.event_bus,
+            state_provider=self.state_provider,
+            anthropic_client=self.anthropic_client,  # Phase 3
         )
 
         return session
@@ -339,8 +352,14 @@ class SessionManager:
             )
             logger.debug("Restored session with default AgentLoop")
 
-        # Restore session
-        session = Session.from_dict(data, cast(AgentProtocol, agent_loop))
+        # Restore session with state management dependencies
+        session = Session.from_dict(
+            data,
+            cast(AgentProtocol, agent_loop),
+            event_bus=self.event_bus,
+            state_provider=self.state_provider,
+            anthropic_client=self.anthropic_client,
+        )
 
         return session
 
@@ -556,6 +575,34 @@ class SessionManager:
             "created_at": session.created_at.isoformat(),
             "last_active_at": session.last_active_at.isoformat(),
         }
+
+    def get_all_sessions_info(self) -> list[dict[str, Any]]:
+        """Get information about all sessions.
+
+        Returns:
+            List of dictionaries with session info, sorted by last_active descending.
+
+        Example:
+            >>> sessions = manager.get_all_sessions_info()
+            >>> for session in sessions:
+            ...     print(f"{session['title']}: {session['message_count']} messages")
+        """
+        from datetime import datetime
+
+        sessions_info = []
+        for session_id, session in self._sessions.items():
+            sessions_info.append({
+                "session_id": session.session_id,
+                "title": session.title,
+                "message_count": session.get_message_count(),
+                "created_at": session.created_at,
+                "last_active": session.last_active_at,
+            })
+
+        # Sort by last_active descending (most recent first)
+        sessions_info.sort(key=lambda x: x["last_active"], reverse=True)
+
+        return sessions_info
 
     def create_session(self, session_id: str, title: str = "New Conversation") -> Session:
         """Create a new session and add to sessions dict.

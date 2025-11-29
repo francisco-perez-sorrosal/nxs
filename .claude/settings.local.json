@@ -7,7 +7,8 @@
       "Bash(python -m py_compile:*)",
       "Bash(timeout 10 pixi run start:*)",
       "Bash(reset)",
-      "Bash(timeout 8 pixi run start:*)"
+      "Bash(timeout 8 pixi run start:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

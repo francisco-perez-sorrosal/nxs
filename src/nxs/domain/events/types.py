@@ -89,3 +89,30 @@ class ArtifactsFetched(Event):
     """Fetched artifacts dictionary with keys: tools, prompts, resources."""
     changed: bool = False
     """Whether the artifacts changed compared to the cached version."""
+
+
+@dataclass
+class StateChanged(Event):
+    """Event published when session state is updated.
+
+    This event is published by StateUpdateService whenever the semantic
+    state of a session changes (e.g., user profile updated, new fact learned,
+    interaction context modified). This enables reactive UI updates and
+    cross-component coordination.
+
+    Attributes:
+        session_id: ID of the session whose state changed
+        component: State component that changed ("user_profile", "knowledge_base",
+                  "interaction_context", "metadata", or "all")
+        change_type: Type of change ("update", "add", "remove")
+        details: Optional additional details about the change
+    """
+
+    session_id: str
+    """ID of the session whose state changed."""
+    component: str
+    """State component that changed (user_profile, knowledge_base, interaction_context, metadata, all)."""
+    change_type: str = "update"
+    """Type of change (update, add, remove)."""
+    details: dict[str, str] | None = None
+    """Optional additional details about the change."""
