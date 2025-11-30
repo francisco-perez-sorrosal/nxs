@@ -561,6 +561,19 @@ class Session:
         # Update agent_loop's conversation to use restored one
         agent_loop.conversation = conversation
 
+        # Verify conversation was set correctly
+        loaded_msg_count = len(conversation._messages)
+        agent_msg_count = len(agent_loop.conversation.get_messages())
+        logger.debug(
+            f"Session.from_dict: conversation messages loaded={loaded_msg_count}, "
+            f"agent_loop.conversation messages={agent_msg_count}"
+        )
+        if loaded_msg_count != agent_msg_count:
+            logger.error(
+                f"Conversation mismatch! Loaded {loaded_msg_count} messages but "
+                f"agent_loop has {agent_msg_count} messages"
+            )
+
         session = cls(
             metadata=metadata,
             conversation=conversation,

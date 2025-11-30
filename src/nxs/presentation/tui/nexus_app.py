@@ -236,6 +236,20 @@ class NexusApp(App):
         existing_messages = self.agent_loop.conversation.get_messages()
         conversation_msg_count = len(existing_messages)
 
+        # Diagnostic logging for debugging session loading
+        logger.info(
+            f"Session on_mount: agent_loop type={type(self.agent_loop).__name__}, "
+            f"conversation_msg_count={conversation_msg_count}, "
+            f"session={self.session.session_id if self.session else 'None'}"
+        )
+
+        if self.session and self.session.metadata:
+            logger.info(
+                f"Session metadata: summary_exists={bool(self.session.metadata.conversation_summary)}, "
+                f"summary_length={len(self.session.metadata.conversation_summary) if self.session.metadata.conversation_summary else 0}, "
+                f"summary_last_index={self.session.metadata.summary_last_message_index}"
+            )
+
         if conversation_msg_count == 0:
             # New session - show welcome message
             chat.add_panel(
@@ -254,7 +268,15 @@ class NexusApp(App):
 
             metadata = self.session.metadata if self.session else None
             session_header = f"[bold cyan]Session Loaded:[/] {self._session_name}"
-            if metadata and metadata.conversation_summary:
+
+            # Check if we have a valid summary to display
+            has_valid_summary = (
+                metadata
+                and metadata.conversation_summary
+                and metadata.conversation_summary.strip()  # Ensure not just whitespace
+            )
+
+            if has_valid_summary:
                 summarised_up_to = min(metadata.summary_last_message_index or 0, conversation_msg_count)
                 if metadata.summary_last_message_index and metadata.summary_last_message_index > conversation_msg_count:
                     metadata.summary_last_message_index = conversation_msg_count
@@ -274,7 +296,15 @@ class NexusApp(App):
                 if summarised_up_to < conversation_msg_count:
                     self._start_summary_update()
             else:
+                # No valid summary - generate and display basic summary
+                logger.debug("No valid summary found, generating basic summary")
                 basic_summary = self._generate_basic_summary()
+
+                # Defensive check: ensure we have something to display
+                if not basic_summary or not basic_summary.strip():
+                    basic_summary = f"[bold]Session Messages:[/] {conversation_msg_count} total"
+                    logger.warning("Basic summary was empty, using fallback message")
+
                 self._display_summary(
                     basic_summary,
                     summarized_messages=0,

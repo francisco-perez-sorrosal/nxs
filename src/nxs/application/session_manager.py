@@ -248,7 +248,14 @@ class SessionManager:
         # Try to restore from storage using StateProvider
         session_key = f"session:{self.DEFAULT_SESSION_ID}"
 
-        if await self.state_provider.exists(session_key):
+        session_exists = await self.state_provider.exists(session_key)
+        logger.info(
+            f"Session key: {session_key}, "
+            f"exists={session_exists}, "
+            f"storage_dir={self.storage_dir}"
+        )
+
+        if session_exists:
             logger.info(f"Restoring session from storage: key={session_key}")
             try:
                 session = await self._load_session(session_key)
@@ -375,9 +382,16 @@ class SessionManager:
 
         try:
             data = session.to_dict()
+            msg_count = len(data.get("conversation", {}).get("messages", []))
+
             await self.state_provider.save(session_key, data)
 
-            logger.info(f"Session saved: {session.session_id} (key={session_key})")
+            summary = data.get('metadata', {}).get('conversation_summary', '')
+            summary_length = len(summary) if summary else 0
+            logger.info(
+                f"Session saved: {session.session_id} (key={session_key}), "
+                f"messages={msg_count}, summary_length={summary_length}"
+            )
         except Exception as e:
             logger.error(
                 f"Failed to save session {session.session_id}: {e}", exc_info=True

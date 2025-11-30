@@ -235,11 +235,24 @@ Be concise, efficient, and transparent. Use tools purposefully, not performative
     # Get or restore the default session
     # This will either restore from ~/.nxs/sessions/session.json or create new
     session = await session_manager.get_or_create_default_session()
-    
+
+    # Diagnostic logging for session loading
+    msg_count = session.get_message_count()
+    conv_msg_count = len(session.conversation.get_messages())
+    agent_msg_count = len(session.agent_loop.conversation.get_messages())
+
     logger.info(
         f"Session ready: {session.session_id} "
-        f"({session.get_message_count()} messages in history)"
+        f"(session.get_message_count()={msg_count}, "
+        f"session.conversation messages={conv_msg_count}, "
+        f"session.agent_loop.conversation messages={agent_msg_count})"
     )
+
+    if msg_count != conv_msg_count or msg_count != agent_msg_count:
+        logger.error(
+            f"MESSAGE COUNT MISMATCH! "
+            f"session={msg_count}, conversation={conv_msg_count}, agent_loop={agent_msg_count}"
+        )
 
     # Launch Textual TUI with session's agent_loop
     # The agent_loop is CommandControlAgent with session-managed conversation
