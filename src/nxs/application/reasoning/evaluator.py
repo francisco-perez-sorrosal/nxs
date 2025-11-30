@@ -135,6 +135,7 @@ class Evaluator:
         response: str,
         strategy_used: str,
         expected_complexity: Optional[ComplexityAnalysis] = None,
+        conversation_context: Optional[str] = None,
     ) -> EvaluationResult:
         """Evaluate response quality for self-correction.
 
@@ -145,6 +146,7 @@ class Evaluator:
             response: Generated response to evaluate
             strategy_used: Which strategy produced this response
             expected_complexity: Initial complexity analysis
+            conversation_context: Optional conversation history showing tool executions
 
         Returns:
             EvaluationResult with:
@@ -165,6 +167,7 @@ class Evaluator:
             response=response[:2000],  # Truncate if too long
             strategy_used=strategy_used,
             expected_complexity=complexity_str,
+            conversation_context=conversation_context or "No conversation context available.",
         )
 
         try:

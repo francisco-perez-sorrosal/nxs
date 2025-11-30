@@ -116,3 +116,30 @@ ${response}
 - Dates, times, locations, or other factual data obtained via tools (trust the tools)
 - Forecasted/predictive data (weather, stocks) that is uncertain by nature
 
+# Response to Evaluate
+
+**Query**: ${query}
+
+**Strategy Used**: ${strategy_used}
+
+**Expected Complexity**: ${expected_complexity}
+
+**Response**:
+${response}
+
+---
+
+# Conversation Context (Tool Executions)
+
+${conversation_context}
+
+**CRITICAL**: This shows what tools the agent ACTUALLY executed during this conversation.
+- If you see tool executions listed here, the agent DID use those tools successfully
+- DO NOT criticize the agent for "not using the right tools" when the tool calls are clearly shown above
+- TRUST the methodology if tools were used appropriately, even if specific values don't match your assumptions
+- Focus on whether the approach was sound, not whether you agree with tool results
+
+---
+
+# Your Evaluation
+

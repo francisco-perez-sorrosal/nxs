@@ -71,7 +71,7 @@ User: "What are the main causes of climate change?"
 ✓ PASSES: Plan extracts the specific information requested
 
 ## Example 4: Mathematical/Analytical Query
-User: "Calculate the ROI of investing $10k in index funds over 10 years"
+User: "Calculate the ROI of investing 10k in index funds over 10 years"
 
 ❌ INCOMPLETE (gathers data but doesn't calculate):
 1. Get historical index fund returns
@@ -81,7 +81,7 @@ User: "Calculate the ROI of investing $10k in index funds over 10 years"
 ✅ COMPLETE (performs calculation and presents result):
 1. Get historical average returns for index funds (e.g., S&P 500)
 2. Research typical expense ratios and fees
-3. **Calculate compound growth with $10k initial investment**
+3. **Calculate compound growth with 10k initial investment**
 4. **Compute final value and ROI percentage**
 5. **Present clear ROI calculation with assumptions**
 ✓ PASSES: Plan performs the requested calculation

@@ -472,12 +472,16 @@ class AdaptiveReasoningLoop(AgentLoop):
             f"response_length={len(response)}"
         )
 
+        # Extract conversation context showing tool executions
+        conversation_context = self._extract_conversation_context()
+
         # Use evaluator to assess response quality
         evaluation = await self.evaluator.evaluate_response_quality(
             query=query,
             response=response,
             strategy_used=strategy_used.value,
             expected_complexity=complexity,
+            conversation_context=conversation_context,
         )
 
         # Apply minimum confidence threshold based on strategy
@@ -500,6 +504,64 @@ class AdaptiveReasoningLoop(AgentLoop):
             )
 
         return evaluation
+
+    def _extract_conversation_context(self) -> str:
+        """Extract tool executions from conversation for judge context.
+
+        Returns a formatted string showing what tools were actually executed,
+        so the judge can see the agent DID use tools and avoid false negatives.
+
+        Returns:
+            Formatted string showing tool executions, or a message if none found
+        """
+        messages = self.conversation.get_messages()
+        tool_executions = []
+
+        # Extract tool calls from assistant messages and results from user messages
+        for i, msg in enumerate(messages[-10:]):  # Last 10 messages for context
+            if msg.get("role") == "assistant" and "content" in msg:
+                # Check for tool use blocks
+                for block in msg.get("content", []):
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        tool_name = block.get("name", "unknown_tool")
+                        tool_input = block.get("input", {})
+                        tool_id = block.get("id")
+
+                        # Look ahead for the result
+                        result_preview = None
+                        if i + 1 < len(messages):
+                            next_msg = messages[i + 1]
+                            if next_msg.get("role") == "user":
+                                for result_block in next_msg.get("content", []):
+                                    if isinstance(result_block, dict) and result_block.get("type") == "tool_result":
+                                        if result_block.get("tool_use_id") == tool_id:
+                                            result_content = result_block.get("content", "")
+                                            # Get preview of result
+                                            if isinstance(result_content, str):
+                                                result_preview = result_content[:150] + "..." if len(result_content) > 150 else result_content
+                                            elif isinstance(result_content, list):
+                                                result_preview = str(result_content)[:150] + "..."
+
+                        tool_executions.append({
+                            "tool": tool_name,
+                            "input": tool_input,
+                            "result": result_preview
+                        })
+
+        if not tool_executions:
+            return "No tool executions found in recent conversation."
+
+        # Format for the judge
+        formatted = ["Tool Executions in this Conversation:"]
+        for i, execution in enumerate(tool_executions, 1):
+            formatted.append(f"\n{i}. Tool: {execution['tool']}")
+            formatted.append(f"   Input: {execution['input']}")
+            if execution['result']:
+                formatted.append(f"   Result: {execution['result']}")
+            else:
+                formatted.append(f"   Result: (pending or not captured)")
+
+        return "\n".join(formatted)
 
     # Note: Prompt caching for tracker context is handled by the Conversation class
     #
