@@ -484,6 +484,11 @@ class NexusApp(App):
         # Ensure summary metadata is synced before shutting down
         await self.ensure_summary_synced()
 
+        # Save active session before exit
+        if self.session_manager:
+            await self.session_manager.save_active_session_async()
+            logger.info("Saved active session on quit")
+
         # Stop all services (QueryQueue, StatusQueue, etc.)
         await self.services.stop()
 
@@ -570,11 +575,21 @@ class NexusApp(App):
             chat.clear_chat()
             chat.update_session_name(session_id)
 
-            # Display session loaded message
-            chat.add_panel(
+            # Display session loaded message with summary
+            session_info = (
                 f"[bold cyan]Switched to session:[/] {session_id}\n\n"
                 f"Messages: {new_session.get_message_count()}\n"
-                f"Created: {new_session.metadata.created_at.strftime('%Y-%m-%d %H:%M')}",
+                f"Created: {new_session.metadata.created_at.strftime('%Y-%m-%d %H:%M')}"
+            )
+
+            # Add summary if available
+            if new_session.metadata.conversation_summary:
+                summary = new_session.metadata.conversation_summary.strip()
+                if summary:
+                    session_info += f"\n\n[bold yellow]Summary:[/]\n{summary}"
+
+            chat.add_panel(
+                session_info,
                 title="Session Loaded",
                 style="green",
             )

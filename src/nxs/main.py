@@ -131,7 +131,13 @@ async def main(
         # Create ToolRegistry with ToolStateManager for dynamic tool control
         tool_registry = ToolRegistry(tool_state_manager=tool_state_manager)
         local_provider = LocalToolProvider([get_weather, get_current_location, get_local_datetime])
-        mcp_provider = MCPToolProvider(artifact_manager.clients)
+
+        # Create MCP provider with status callback for UI feedback
+        def mcp_status_callback(message: str):
+            """Callback to display MCP tool loading status."""
+            logger.info(f"MCP Status: {message}")
+
+        mcp_provider = MCPToolProvider(artifact_manager.clients, status_callback=mcp_status_callback)
         tool_registry.register_provider(local_provider)
         tool_registry.register_provider(mcp_provider)
 

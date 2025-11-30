@@ -35,15 +35,17 @@ class MCPToolProvider:
         >>> registry.register_provider(provider)
     """
 
-    def __init__(self, clients: Mapping[str, MCPClient]):
+    def __init__(self, clients: Mapping[str, MCPClient], status_callback: Any = None):
         """Initialize MCP tool provider.
 
         Args:
             clients: Mapping of server_name -> MCPClient instances.
                 Tools from all clients will be aggregated.
+            status_callback: Optional callback for status updates (callable).
         """
         self._clients = clients
         self._tool_to_client: dict[str, str] = {}  # tool_name -> server_name
+        self._status_callback = status_callback
 
         logger.debug(f"MCPToolProvider initialized with {len(clients)} clients")
 
@@ -94,6 +96,15 @@ class MCPToolProvider:
                     f"Retrieved {len(client_tools)} tools from MCP server '{server_name}'"
                 )
 
+                # Notify UI about tools loaded
+                if self._status_callback and len(client_tools) > 0:
+                    try:
+                        self._status_callback(
+                            f"Loaded {len(client_tools)} tool(s) from MCP server '{server_name}'"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Status callback failed: {e}")
+
             except Exception as e:
                 logger.error(
                     f"Error fetching tools from MCP server '{server_name}': {e}",
@@ -105,6 +116,15 @@ class MCPToolProvider:
             f"MCPToolProvider: Retrieved {len(all_tools)} tools from "
             f"{len(self._clients)} MCP clients"
         )
+
+        # Notify UI about total tools loaded
+        if self._status_callback and len(all_tools) > 0:
+            try:
+                self._status_callback(
+                    f"[bold green]MCP Tools Ready:[/] {len(all_tools)} total tool(s) from {len(self._clients)} server(s)"
+                )
+            except Exception as e:
+                logger.warning(f"Status callback failed: {e}")
 
         return all_tools
 

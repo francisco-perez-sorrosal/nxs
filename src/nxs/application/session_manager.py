@@ -182,7 +182,8 @@ class SessionManager:
 
         # Migrate old session.json to new default.json format if needed
         # Only needed for FileStateProvider
-        if isinstance(self.state_provider, type) and hasattr(self.state_provider, 'base_dir'):
+        from nxs.infrastructure.state import FileStateProvider
+        if isinstance(self.state_provider, FileStateProvider):
             self._migrate_legacy_session_file()
 
         logger.info(
@@ -423,6 +424,22 @@ class SessionManager:
             return
 
         self._save_session(session)
+
+    async def save_active_session_async(self) -> None:
+        """Save the active session to disk (async).
+
+        Async version that ensures save completes before returning.
+        Use this on shutdown to ensure saves complete.
+
+        Example:
+            >>> await manager.save_active_session_async()
+        """
+        session = self.get_active_session()
+        if session is None:
+            logger.debug("No active session to save")
+            return
+
+        await self._save_session_async(session)
 
     @property
     def summarizer(self) -> SummarizationService:

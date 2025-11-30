@@ -160,15 +160,10 @@ class ThinkingPanel(RichLog):
             response: Assistant's response to judge
             strategy: Strategy used to generate response
         """
-        # Show a preview of the response being judged
-        max_length = 300
-        preview = response[:max_length]
-        if len(response) > max_length:
-            preview += f"\n[dim]... (+{len(response) - max_length} chars)[/]"
-
+        # Show the full response being judged (no truncation)
         text = Text()
-        text.append("Response Preview:\n", style="cyan bold")
-        text.append(preview, style="white")
+        text.append("Response for Evaluation:\n", style="cyan bold")
+        text.append(response, style="white")
 
         panel = Panel(
             text,

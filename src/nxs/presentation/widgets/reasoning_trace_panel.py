@@ -162,17 +162,12 @@ class ReasoningTracePanel(RichLog):
 
     def on_response_for_judgment(self, response: str, strategy: str):
         """Display the assistant response that will be evaluated.
-        
+
         Args:
             response: The assistant's response to be judged
             strategy: The strategy used to generate this response
         """
-        # Truncate very long responses but show substantial content
-        max_preview_length = 500
-        response_preview = response[:max_preview_length]
-        if len(response) > max_preview_length:
-            response_preview += f"\n[dim]... ({len(response) - max_preview_length} more characters)[/]"
-        
+        # Show full response (no truncation)
         table = Table(
             title=f"Response to Judge ({strategy} strategy)",
             show_header=False,
@@ -180,8 +175,8 @@ class ReasoningTracePanel(RichLog):
             expand=False,
         )
         table.add_column("Content", style="white", overflow="fold")
-        table.add_row(response_preview)
-        
+        table.add_row(response)
+
         panel = Panel(table, border_style="yellow", expand=False)
         self.write(panel)
         self.write("\n")
