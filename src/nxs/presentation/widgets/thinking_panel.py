@@ -239,7 +239,7 @@ class ThinkingPanel(RichLog):
         text.append(" → ", style="white")
         text.append(f"{to_strategy.value}\n", style="red bold")
         text.append(f"\nQuality: {confidence:.2f}\n", style="dim")
-        text.append(reason[:100], style="white")
+        text.append(reason, style="white")  # Show full reason, no truncation
 
         panel = Panel(
             text,

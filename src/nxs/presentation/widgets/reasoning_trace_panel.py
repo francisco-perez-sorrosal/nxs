@@ -248,11 +248,12 @@ class ReasoningTracePanel(RichLog):
         text.append("⚡ AUTO-ESCALATION ", style="bold red blink")
         text.append(f"{from_strategy.value}", style="yellow")
         text.append(" → ", style="white")
-        text.append(f"{to_strategy.value}\n", style="red")
+        text.append(f"{to_strategy.value}\n\n", style="red")
+        text.append(f"Quality: {confidence:.2f}\n", style="dim")
+        text.append(f"Reason: {reason}", style="white")  # Show full reason, no truncation
 
         panel = Panel(
             text,
-            subtitle=f"Quality: {confidence:.2f} | {reason[:80]}",
             border_style="red",
             expand=False,
         )

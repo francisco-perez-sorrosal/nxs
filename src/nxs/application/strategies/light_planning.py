@@ -35,6 +35,7 @@ class LightPlanningStrategy(BaseExecutionStrategy):
     - Simple synthesis without filtering
     - Skips already completed steps (caching)
     - Falls back to direct execution if no plan generated
+    - Avoids re-executing tools when results exist in conversation
 
     Use Cases:
     - Multi-part questions with clear structure
@@ -47,7 +48,8 @@ class LightPlanningStrategy(BaseExecutionStrategy):
         ...     planner=planner,
         ...     synthesizer=synthesizer,
         ...     tool_registry=registry,
-        ...     execute_with_tracking=loop._execute_with_tool_tracking
+        ...     execute_with_tracking=loop._execute_with_tool_tracking,
+        ...     get_conversation_history=loop.conversation.get_messages
         ... )
         >>> result = await strategy.execute(query, complexity, tracker, callbacks)
     """
@@ -58,6 +60,7 @@ class LightPlanningStrategy(BaseExecutionStrategy):
         synthesizer: Synthesizer,
         tool_registry: ToolRegistry,
         execute_with_tracking: Callable,
+        get_conversation_history: Callable | None = None,
     ):
         """Initialize light planning strategy.
 
@@ -68,11 +71,14 @@ class LightPlanningStrategy(BaseExecutionStrategy):
             execute_with_tracking: Async callable that executes queries with tool tracking.
                 Signature: async (query, tracker, use_streaming, callbacks) -> str
                 This handles the actual LLM execution with tool call interception.
+            get_conversation_history: Optional callable to get conversation messages
+                for context-aware planning (avoids re-execution of tools).
         """
         self.planner = planner
         self.synthesizer = synthesizer
         self.tool_registry = tool_registry
         self.execute_with_tracking = execute_with_tracking
+        self.get_conversation_history = get_conversation_history
 
     async def execute(
         self,
@@ -119,12 +125,18 @@ class LightPlanningStrategy(BaseExecutionStrategy):
         logger.info("Light planning execution")
         await call_callback(callbacks, "on_light_planning")
 
-        # Generate or refine plan with full tracker context
+        # Get conversation history to avoid re-execution of tools
+        conversation_history = None
+        if self.get_conversation_history:
+            conversation_history = self.get_conversation_history()
+
+        # Generate or refine plan with full tracker context and conversation history
         plan_context = build_plan_context(
             complexity=complexity,
             tool_names=self.tool_registry.get_tool_names(),
             tracker=tracker,
             mode="light",
+            conversation_history=conversation_history,
         )
 
         plan = await self.planner.generate_plan(query, context=plan_context)

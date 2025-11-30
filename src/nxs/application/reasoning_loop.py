@@ -127,6 +127,7 @@ class AdaptiveReasoningLoop(AgentLoop):
             synthesizer=self.synthesizer,
             tool_registry=self.tool_registry,
             execute_with_tracking=self._execute_with_tool_tracking,
+            get_conversation_history=self.conversation.get_messages,  # Pass conversation history for context
         )
         self.deep_reasoning_strategy = DeepReasoningStrategy(
             planner=self.planner,

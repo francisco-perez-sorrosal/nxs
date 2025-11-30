@@ -97,6 +97,7 @@ def build_plan_context(
     tool_names: list[str],
     tracker: ResearchProgressTracker,
     mode: str,
+    conversation_history: list[dict] | None = None,
 ) -> dict:
     """Build context dictionary for plan generation.
 
@@ -105,6 +106,7 @@ def build_plan_context(
         tool_names: Available tool names
         tracker: ResearchProgressTracker instance
         mode: Planning mode ("light" or "deep")
+        conversation_history: Optional recent conversation messages with tool results
 
     Returns:
         Context dictionary for planner
@@ -137,5 +139,31 @@ def build_plan_context(
             plan_context["completed_steps"] = [
                 s.description for s in tracker.plan.get_completed_steps()
             ]
+
+    # Include recent conversation history to avoid re-execution
+    # This allows the planner to see what tools were already called and their results
+    if conversation_history:
+        # Extract tool calls and results from recent messages
+        tool_executions = []
+        for msg in conversation_history[-10:]:  # Last 10 messages for context
+            if msg.get("role") == "assistant" and "content" in msg:
+                # Check for tool use blocks
+                for block in msg.get("content", []):
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        tool_executions.append({
+                            "tool": block.get("name"),
+                            "input": block.get("input"),
+                        })
+            # Check for tool results
+            if msg.get("role") == "user" and "content" in msg:
+                for block in msg.get("content", []):
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        # Add result to most recent tool execution
+                        if tool_executions:
+                            # Add result to last tool execution
+                            tool_executions[-1]["result"] = block.get("content", "")[:200]  # Truncate for context
+
+        if tool_executions:
+            plan_context["recent_tool_executions"] = tool_executions
 
     return plan_context
