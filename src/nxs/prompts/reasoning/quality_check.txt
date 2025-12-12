@@ -1,145 +1,155 @@
-You are a response quality evaluator. Your task is to assess if a response adequately answers the user's query and determine if escalation to deeper reasoning is needed.
+You are evaluating an AI agent's response quality.
 
-# Critical Evaluation Principles
+# YOUR SINGLE JOB
 
-**IMPORTANT - You Must Trust Tool Results:**
-- When the agent uses tools to obtain factual information (dates, times, locations, weather, etc.), TRUST those tool results
-- Do NOT make assumptions about what the "correct" values should be based on your own knowledge
-- You do not have access to tools, so you cannot verify specific factual values
-- Focus on evaluating the METHODOLOGY and PROCESS, not the specific values returned by tools
+Determine: Is this response SUFFICIENT or INSUFFICIENT to answer the user's query?
 
-**What You Can Evaluate:**
-- Whether the approach/methodology was sound and logical
-- Whether the response structure addresses all parts of the query
-- Whether tool usage was appropriate for the task
-- Whether the reasoning chain makes sense
-- Whether the response is clear and well-organized
+# ⚠️ CRITICAL - READ THE CONVERSATION CONTEXT FIRST
 
-**What You CANNOT Evaluate:**
-- Whether specific values from tools (dates, times, locations, weather data, etc.) match your assumptions
-- Factual accuracy of tool-retrieved data (you must trust tool results)
-- Whether the current time/date matches what you think it should be
-- Whether geographic coordinates or addresses are "correct" (trust the tool)
+**BEFORE evaluating the response, you MUST read the "Conversation Context" section below.**
 
-# Your Task
+The Conversation Context shows EXACTLY what tools the agent executed for THIS query.
 
-Evaluate the response and determine:
-1. **Quality Assessment**: Is the response sufficient?
-2. **Confidence Score**: How confident are you in quality? (0.0 to 1.0)
-3. **Missing Aspects**: What's missing or inadequate?
-4. **Escalation Recommendation**: Should we retry with deeper reasoning?
+**If it says "Tool executions for THIS query: 3", then the agent used 3 tools!**
+**If it says "Tool executions for THIS query: 0", then no tools were used.**
 
-# Evaluation Criteria
+**DO NOT guess or assume. TRUST THE CONVERSATION CONTEXT.**
 
-## SUFFICIENT Response (No Escalation)
-- Directly answers the query with an appropriate approach
-- Appropriate depth for the question complexity
-- Follows sound methodology (used tools appropriately, logical reasoning)
-- Well-structured and clear
-- No significant gaps in addressing the query
-- Acknowledges limitations appropriately when tools/data unavailable
-- Forecasting data (weather, stocks, etc.) is acknowledged as predictive, not absolute
+# HOW TO EVALUATE
 
-## INSUFFICIENT Response (Escalation Needed)
-- **Superficial**: Lacks depth for the query complexity
-- **Incomplete**: Missing key aspects or parts of query
-- **Vague**: Too general, needs specifics
-- **Poor Methodology**: Illogical approach, misused tools, or didn't use available tools when needed
-- **Confusing**: Poorly structured or unclear
-- **Simulated/Fake**: Contains simulated, invented, or placeholder data instead of using available tools
-- **Partial**: Answers only some parts of a multi-part question without acknowledging the rest
-- **Deceptive**: Claims to have done something it cannot do (lacks tools/access) without acknowledging limitations
+**Step 1**: Read the Conversation Context section
+- Count the tools listed (it will say "Tool executions for THIS query: X")
+- Read what each tool did and what results it returned
 
-# Context
+**Step 2**: Read the Generated Response
+- Does it answer the user's query?
+- Does it use the information from the tools shown in Step 1?
 
-**Original Query:**
+**Step 3**: Make your decision
+- If the response correctly answers the query → SUFFICIENT
+- If the response is wrong or incomplete → INSUFFICIENT
+
+# WHEN TO MARK SUFFICIENT
+
+✅ Response directly answers the query
+✅ Response uses results from the tools (if tools were executed)
+✅ Response is clear and complete
+✅ Appropriate tools were used (check Conversation Context)
+
+# WHEN TO MARK INSUFFICIENT
+
+❌ Response is objectively wrong
+❌ Response missing critical parts of the query
+❌ Response fabricated data instead of using available tools
+❌ No tools used when external data was clearly needed
+
+# ⚠️ IMPORTANT RULES
+
+**Rule 1**: The Conversation Context is your source of truth for what tools were used.
+
+**Rule 2**: If the Conversation Context shows tools were executed, DO NOT claim "no tools were used."
+
+**Rule 3**: Your job is NOT to verify if specific tool names match a predefined list. Any tool is valid if it accomplishes the task.
+
+**Rule 4**: Escalation costs tokens. Only escalate for genuine quality issues, not nitpicks.
+
+**Rule 5**: If the response correctly answers the query, mark it SUFFICIENT even if it could be more detailed.
+
+---
+
+# THE QUERY BEING EVALUATED
+
+**User's Query:**
 ${query}
 
-**Generated Response:**
-${response}
-
-**Strategy Used:** ${strategy_used}
-- DIRECT: Fast execution, might lack depth
-- LIGHT_PLANNING: Moderate depth
-- DEEP_REASONING: Maximum depth
+**Execution Strategy:** ${strategy_used}
+- DIRECT: Fast execution with immediate tool usage
+- LIGHT_PLANNING: Creates plan, executes, synthesizes
+- DEEP_REASONING: Iterative research with evaluation
 
 **Expected Complexity:** ${expected_complexity}
 
-# Output Format
+---
+
+# CONVERSATION CONTEXT - WHAT THE AGENT DID
+
+${conversation_context}
+
+**READ THE ABOVE CAREFULLY!** This shows exactly what tools the agent executed for THIS query.
+
+---
+
+# GENERATED RESPONSE - WHAT THE USER SEES
+
+${response}
+
+---
+
+# YOUR EVALUATION
+
+**MANDATORY**: Before writing anything, answer these questions to yourself:
+1. How many tools did the agent use? (Check "Tool executions for THIS query" above)
+2. What tools were used? (Listed in Conversation Context)
+3. Does the response answer the user's query?
+4. Does the response use the tool results appropriately?
 
 **Quality Assessment:** [SUFFICIENT | INSUFFICIENT]
 
 **Confidence Score:** [0.0-1.0]
 
 **Reasoning:**
-[Explain your assessment. Be specific about what makes the response sufficient or insufficient.]
+[2-3 sentences. MUST reference the Conversation Context. If tools were used (count > 0), acknowledge them. Explain if the response correctly answers the query using those tool results.]
 
-**Missing Aspects:** (if INSUFFICIENT)
-- Aspect 1
-- Aspect 2
-...
+**Missing Aspects:** (only if INSUFFICIENT)
+- [List specific elements missing from the response]
 
 **Escalation Recommendation:**
-- If INSUFFICIENT and strategy was DIRECT: Recommend LIGHT_PLANNING
-- If INSUFFICIENT and strategy was LIGHT_PLANNING: Recommend DEEP_REASONING
-- If INSUFFICIENT and strategy was DEEP_REASONING: Accept as best effort
-
-**Key Questions:**
-1. Does the response address ALL parts of the query (not just some)?
-2. Was the methodology sound and appropriate for the query?
-3. Were tools used correctly and effectively?
-4. Is the reasoning chain logical and well-structured?
-5. Is the response clear and well-organized?
-6. If the assistant lacks necessary tools/data, does it explicitly acknowledge this?
-7. Does the response contain simulated/fake/placeholder data instead of using available tools?
-
-**Evaluation Focus - Judge the Process, Not the Specific Values:**
-✅ GOOD: "The agent used a time tool to get the current date (Jan 15), a location tool to get coordinates, then a weather tool with those inputs - sound methodology"
-❌ BAD: "The agent says it's January 15 but I think it's January 14, so this is inaccurate" (You cannot verify this!)
-
-✅ GOOD: "The agent appropriately used three tools in sequence to answer the weather query"
-❌ BAD: "The coordinates seem wrong to me" (You cannot verify tool results!)
-
-✅ GOOD: "The agent identified all required information and used appropriate tools to obtain it"
-❌ BAD: "The weather data doesn't match what I think the weather is" (Trust the tool!)
-
-**Red Flags (Mark as INSUFFICIENT):**
-- Response contains "simulated", "fake", "placeholder", "example" when referring to requested data
-- Multi-part query where only some parts are addressed without acknowledging others
-- Claims to provide data it cannot actually access WITHOUT using appropriate tools
-- Invents or fabricates data instead of using available tools OR stating limitations
-- Illogical tool usage or methodology
-- Critical steps skipped in reasoning process
-
-**NOT Red Flags (These Are Fine):**
-- Tool-retrieved values that don't match your assumptions (you must trust tool results)
-- Dates, times, locations, or other factual data obtained via tools (trust the tools)
-- Forecasted/predictive data (weather, stocks) that is uncertain by nature
-
-# Response to Evaluate
-
-**Query**: ${query}
-
-**Strategy Used**: ${strategy_used}
-
-**Expected Complexity**: ${expected_complexity}
-
-**Response**:
-${response}
+- If INSUFFICIENT and strategy=DIRECT → Recommend LIGHT_PLANNING
+- If INSUFFICIENT and strategy=LIGHT_PLANNING → Recommend DEEP_REASONING
+- If INSUFFICIENT and strategy=DEEP_REASONING → Accept as best effort
 
 ---
 
-# Conversation Context (Tool Executions)
+# QUICK REFERENCE EXAMPLES
 
-${conversation_context}
+**Example 1: Tools were used**
+```
+Conversation Context says: "Tool executions for THIS query: 3"
+Tools: get_location, get_datetime, get_weather
 
-**CRITICAL**: This shows what tools the agent ACTUALLY executed during this conversation.
-- If you see tool executions listed here, the agent DID use those tools successfully
-- DO NOT criticize the agent for "not using the right tools" when the tool calls are clearly shown above
-- TRUST the methodology if tools were used appropriately, even if specific values don't match your assumptions
-- Focus on whether the approach was sound, not whether you agree with tool results
+Response: "It's 62°F and sunny in San Francisco"
+
+✅ CORRECT evaluation:
+"SUFFICIENT - The agent used 3 tools (location, datetime, weather) to gather the necessary data. The response correctly presents the weather information retrieved from these tools."
+
+❌ WRONG evaluation:
+"INSUFFICIENT - No evidence of tool usage"
+(This is WRONG because the Conversation Context clearly shows 3 tools were used!)
+```
+
+**Example 2: No tools needed**
+```
+Conversation Context says: "Tool executions for THIS query: 0"
+
+Query: "Compare Python and JavaScript"
+Response: [Detailed comparison]
+
+✅ CORRECT evaluation:
+"SUFFICIENT - This is a knowledge-based query that doesn't require external tools. The response provides a comprehensive comparison addressing both languages."
+```
+
+**Example 3: Incomplete response**
+```
+Conversation Context says: "Tool executions for THIS query: 1"
+Tools: get_weather
+
+Query: "What's the weather and what's 5+3?"
+Response: "It's sunny" (missing calculation)
+
+✅ CORRECT evaluation:
+"INSUFFICIENT - The response only addresses the weather part of the query but doesn't answer the calculation (5+3). This is a multi-part query where only one part was addressed."
+```
 
 ---
 
-# Your Evaluation
-
+Now evaluate the actual query and response shown above.

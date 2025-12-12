@@ -472,8 +472,14 @@ class AdaptiveReasoningLoop(AgentLoop):
             f"response_length={len(response)}"
         )
 
-        # Extract conversation context showing tool executions
-        conversation_context = self._extract_conversation_context()
+        # Extract conversation context showing tool executions and strategy
+        conversation_context = self._extract_conversation_context(strategy_used=strategy_used.value)
+
+        # DEBUG: Log the context being sent to judge
+        logger.info("=" * 80)
+        logger.info("CONTEXT BEING SENT TO JUDGE:")
+        logger.info(conversation_context)
+        logger.info("=" * 80)
 
         # Use evaluator to assess response quality
         evaluation = await self.evaluator.evaluate_response_quality(
@@ -505,63 +511,247 @@ class AdaptiveReasoningLoop(AgentLoop):
 
         return evaluation
 
-    def _extract_conversation_context(self) -> str:
-        """Extract tool executions from conversation for judge context.
+    def _extract_conversation_context(self, strategy_used: str = "UNKNOWN") -> str:
+        """Extract tool executions for the CURRENT QUERY ONLY.
 
-        Returns a formatted string showing what tools were actually executed,
-        so the judge can see the agent DID use tools and avoid false negatives.
+        CRITICAL: This method is called AFTER the agent has completed execution and BEFORE
+        the judge evaluates the response. All tool calls and results should already be in
+        the conversation messages at this point.
+
+        Args:
+            strategy_used: The strategy that generated the response (DIRECT/LIGHT_PLANNING/DEEP_REASONING)
 
         Returns:
-            Formatted string showing tool executions, or a message if none found
+            Formatted string showing execution context for CURRENT QUERY ONLY
         """
         messages = self.conversation.get_messages()
+
+        if not messages:
+            logger.warning("No messages in conversation - cannot extract context")
+            return "=== NO CONVERSATION CONTEXT ===\nNo messages in conversation yet."
+
+        logger.debug(f"Extracting context from {len(messages)} total conversation messages")
+
+        # Find the MOST RECENT user query message (not tool results)
+        last_query_idx = None
+        for i in range(len(messages) - 1, -1, -1):
+            msg = messages[i]
+            role = msg.get("role")
+            content = msg.get("content", "")
+
+            logger.debug(f"Message {i}: role={role}, content_type={type(content).__name__}")
+
+            if role == "user":
+                # User messages can be either text queries or tool results
+                # Text query: content is a string OR list with text blocks
+                # Tool result: content is a list with tool_result blocks
+
+                is_query = False
+                if isinstance(content, str) and len(content.strip()) > 0:
+                    # Direct string content - this is a query
+                    is_query = True
+                    logger.debug(f"  Found text query (string): {content[:50]}...")
+                elif isinstance(content, list):
+                    # List content - check what type of blocks it contains
+                    has_text = any(
+                        isinstance(block, dict) and block.get("type") == "text"
+                        for block in content
+                    )
+                    has_tool_results = any(
+                        isinstance(block, dict) and block.get("type") == "tool_result"
+                        for block in content
+                    )
+
+                    if has_text and not has_tool_results:
+                        # Has text blocks but no tool results - this is a query
+                        is_query = True
+                        logger.debug(f"  Found text query (list with text blocks)")
+                    elif has_tool_results:
+                        logger.debug(f"  Skipping tool result message")
+
+                if is_query:
+                    last_query_idx = i
+                    logger.info(f"Found last user query at message index {i}")
+                    break
+
+        if last_query_idx is None:
+            logger.error("Could not find user query message in conversation!")
+            logger.error(f"Total messages: {len(messages)}")
+            for i, msg in enumerate(messages[-5:]):  # Log last 5 messages
+                logger.error(f"  Message {i}: {msg.get('role')} - {type(msg.get('content'))}")
+            return "=== NO USER QUERY FOUND ===\nCould not identify the current user query."
+
+        # Extract messages from the current query onwards
+        current_query_messages = messages[last_query_idx:]
+        logger.info(
+            f"Extracting context from message {last_query_idx} onwards "
+            f"({len(current_query_messages)} messages in current query cycle)"
+        )
+
+        # Extract tool executions from current query cycle only
         tool_executions = []
 
-        # Extract tool calls from assistant messages and results from user messages
-        for i, msg in enumerate(messages[-10:]):  # Last 10 messages for context
-            if msg.get("role") == "assistant" and "content" in msg:
-                # Check for tool use blocks
-                for block in msg.get("content", []):
-                    if isinstance(block, dict) and block.get("type") == "tool_use":
-                        tool_name = block.get("name", "unknown_tool")
-                        tool_input = block.get("input", {})
-                        tool_id = block.get("id")
+        logger.info(f"Scanning {len(current_query_messages)} messages for tool executions...")
 
-                        # Look ahead for the result
+        for i, msg in enumerate(current_query_messages):
+            msg_role = msg.get("role")
+            msg_content = msg.get("content", [])
+
+            # ULTRA-DEBUG: Log message structure
+            logger.debug(f"[Message {i}] role={msg_role}, content_type={type(msg_content).__name__}")
+
+            if msg_role == "assistant":
+                logger.debug(f"[Message {i}] Assistant message - examining for tool uses")
+
+                # Content can be a list or a single ContentBlock
+                content_blocks = msg_content if isinstance(msg_content, list) else [msg_content]
+
+                logger.debug(f"[Message {i}] Found {len(content_blocks)} content blocks")
+
+                for block_idx, block in enumerate(content_blocks):
+                    # CRITICAL: Handle both dict and ContentBlock object
+                    block_type = None
+                    if isinstance(block, dict):
+                        block_type = block.get("type")
+                        logger.debug(f"[Message {i}][Block {block_idx}] Dict block, type={block_type}")
+                    elif hasattr(block, 'type'):
+                        # Anthropic ContentBlock object
+                        block_type = block.type
+                        logger.debug(f"[Message {i}][Block {block_idx}] ContentBlock object, type={block_type}")
+                    else:
+                        logger.warning(f"[Message {i}][Block {block_idx}] Unknown block type: {type(block)}")
+                        continue
+
+                    if block_type == "tool_use":
+                        # Extract tool info from either dict or object
+                        if isinstance(block, dict):
+                            tool_name = block.get("name", "unknown_tool")
+                            tool_input = block.get("input", {})
+                            tool_id = block.get("id")
+                        else:
+                            # ContentBlock object
+                            tool_name = getattr(block, 'name', 'unknown_tool')
+                            tool_input = getattr(block, 'input', {})
+                            tool_id = getattr(block, 'id', None)
+
+                        logger.info(f"✓ FOUND TOOL USE: {tool_name} (id={tool_id})")
+                        logger.debug(f"  Tool input: {tool_input}")
+
+                        # Look ahead for the result in current query cycle
                         result_preview = None
-                        if i + 1 < len(messages):
-                            next_msg = messages[i + 1]
+                        if i + 1 < len(current_query_messages):
+                            next_msg = current_query_messages[i + 1]
                             if next_msg.get("role") == "user":
-                                for result_block in next_msg.get("content", []):
-                                    if isinstance(result_block, dict) and result_block.get("type") == "tool_result":
-                                        if result_block.get("tool_use_id") == tool_id:
+                                next_content = next_msg.get("content", [])
+                                result_blocks = next_content if isinstance(next_content, list) else [next_content]
+
+                                logger.debug(f"  Searching next message for tool result (has {len(result_blocks)} blocks)")
+
+                                for result_block in result_blocks:
+                                    # Handle both dict and ContentBlock
+                                    result_block_type = None
+                                    if isinstance(result_block, dict):
+                                        result_block_type = result_block.get("type")
+                                    elif hasattr(result_block, 'type'):
+                                        result_block_type = result_block.type
+
+                                    if result_block_type == "tool_result":
+                                        # Extract tool_use_id from either dict or object
+                                        result_tool_id = None
+                                        if isinstance(result_block, dict):
+                                            result_tool_id = result_block.get("tool_use_id")
                                             result_content = result_block.get("content", "")
+                                        else:
+                                            result_tool_id = getattr(result_block, 'tool_use_id', None)
+                                            result_content = getattr(result_block, 'content', "")
+
+                                        if result_tool_id == tool_id:
+                                            logger.debug(f"  ✓ Found matching result for {tool_name}")
+
                                             # Get preview of result
                                             if isinstance(result_content, str):
-                                                result_preview = result_content[:150] + "..." if len(result_content) > 150 else result_content
+                                                result_preview = result_content[:300] + "..." if len(result_content) > 300 else result_content
                                             elif isinstance(result_content, list):
-                                                result_preview = str(result_content)[:150] + "..."
+                                                result_str = str(result_content)
+                                                result_preview = result_str[:300] + "..." if len(result_str) > 300 else result_str
+                                            else:
+                                                result_preview = str(result_content)[:300]
+
+                                            logger.debug(f"  Result preview: {result_preview[:100]}...")
+                                            break
 
                         tool_executions.append({
                             "tool": tool_name,
                             "input": tool_input,
-                            "result": result_preview
+                            "result": result_preview if result_preview else "(no result found)"
                         })
 
-        if not tool_executions:
-            return "No tool executions found in recent conversation."
+        logger.info(f"✓ Extracted {len(tool_executions)} tool executions for current query")
+        if tool_executions:
+            logger.info(f"  Tools: {[t['tool'] for t in tool_executions]}")
+        else:
+            # NO TOOLS FOUND - This is a problem! Dump message structure for diagnosis
+            logger.error("=" * 80)
+            logger.error("NO TOOLS FOUND IN CONVERSATION!")
+            logger.error(f"Examined {len(current_query_messages)} messages from index {last_query_idx}")
+            logger.error("Message structure dump:")
+            for i, msg in enumerate(current_query_messages):
+                role = msg.get("role")
+                content = msg.get("content", [])
+                logger.error(f"  [{i}] role={role}")
+                if isinstance(content, list):
+                    logger.error(f"      content: list with {len(content)} items")
+                    for j, block in enumerate(content[:3]):  # First 3 blocks
+                        if isinstance(block, dict):
+                            logger.error(f"        [{j}] dict: {block.get('type', 'no type')}")
+                        elif hasattr(block, 'type'):
+                            logger.error(f"        [{j}] object: {block.type} ({type(block).__name__})")
+                        else:
+                            logger.error(f"        [{j}] unknown: {type(block).__name__}")
+                else:
+                    logger.error(f"      content: {type(content).__name__}")
+            logger.error("=" * 80)
 
-        # Format for the judge
-        formatted = ["Tool Executions in this Conversation:"]
-        for i, execution in enumerate(tool_executions, 1):
-            formatted.append(f"\n{i}. Tool: {execution['tool']}")
-            formatted.append(f"   Input: {execution['input']}")
-            if execution['result']:
-                formatted.append(f"   Result: {execution['result']}")
-            else:
-                formatted.append(f"   Result: (pending or not captured)")
+        # Build comprehensive context
+        context_parts = []
 
-        return "\n".join(formatted)
+        # Header with strategy info
+        context_parts.append(f"=== EXECUTION CONTEXT FOR CURRENT QUERY ===")
+        context_parts.append(f"Strategy: {strategy_used}")
+        context_parts.append(f"Tool executions for THIS query: {len(tool_executions)}")
+        context_parts.append("")
+
+        if tool_executions:
+            context_parts.append("=== TOOL EXECUTIONS FOR THIS QUERY ===")
+            context_parts.append("The agent executed the following tools to answer THIS specific query:")
+            context_parts.append("(NOTE: Tools from previous queries are NOT shown here)")
+            context_parts.append("")
+
+            for i, execution in enumerate(tool_executions, 1):
+                context_parts.append(f"{i}. Tool: {execution['tool']}")
+                context_parts.append(f"   Input: {execution['input']}")
+                if execution['result']:
+                    context_parts.append(f"   Result: {execution['result']}")
+                else:
+                    context_parts.append(f"   Result: (no result captured)")
+                context_parts.append("")
+
+            context_parts.append("=== EVALUATION GUIDANCE ===")
+            context_parts.append("✓ The agent DID use the tools shown above for THIS query")
+            context_parts.append("✓ These tools are relevant to the CURRENT query being evaluated")
+            context_parts.append("✓ The final response should be based on these tool results")
+            context_parts.append("✓ The response doesn't need to repeat tool execution details")
+            context_parts.append("✓ Evaluate whether the response uses these tool results appropriately")
+        else:
+            context_parts.append("=== NO TOOL EXECUTIONS FOR THIS QUERY ===")
+            context_parts.append("No tools were executed to answer this specific query.")
+            context_parts.append("")
+            context_parts.append("=== EVALUATION GUIDANCE ===")
+            context_parts.append("- If the query required external data/tools and none were used, this IS a problem")
+            context_parts.append("- If the query could be answered from knowledge alone, no tools may be needed")
+            context_parts.append("- Evaluate whether the lack of tool usage was appropriate for THIS query")
+
+        return "\n".join(context_parts)
 
     # Note: Prompt caching for tracker context is handled by the Conversation class
     #

@@ -178,6 +178,25 @@ async def main(
     # System prompt with clear tool usage guidance
     system_prompt = """You are Nexus, an AI assistant with access to tools for complex tasks.
 
+**Conversation Context & Follow-Up Questions:**
+
+IMPORTANT: You have access to the full conversation history. Use it intelligently for follow-up questions.
+
+- **Pronouns and references** (it, that, them, there) usually refer to the most recent relevant context
+- **"What about X?"** often means "apply the same operation to X" from the previous query
+- **"And Y?"** typically extends the previous request to also include Y
+- **Vague references**: If unclear what the user is referring to, ask for clarification instead of guessing
+
+**Examples:**
+- User: "What's the weather in SF?" → You: [provide weather]
+- User: "What about tomorrow?" → You understand: weather in SF for tomorrow (use context)
+- User: "What about there?" → You understand: "there" = SF from previous query
+
+- User: "Calculate 5 * 7" → You: [use code tool, result = 35]
+- User: "And 6 * 8?" → You understand: another calculation (use code tool again)
+
+- User: "Tell me about it" (no prior context) → You: "What would you like to know about? Could you provide more context?"
+
 **Tool Usage Guidelines:**
 
 1. **Answer directly** when you can use your training knowledge:
