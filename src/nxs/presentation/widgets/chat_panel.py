@@ -3,14 +3,15 @@ ChatPanel - A scrollable chat display using RichLog with Rich markup support.
 Clean, simple version that works WITH Rich, not against it.
 """
 
-from textual.widgets import RichLog
-from rich.syntax import Syntax
-from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.padding import Padding
-from rich.text import Text
-from rich.console import Group
 import re
+
+from rich.console import Group
+from rich.markdown import Markdown
+from rich.padding import Padding
+from rich.panel import Panel
+from rich.syntax import Syntax
+from rich.text import Text
+from textual.widgets import RichLog
 
 
 class ChatPanel(RichLog):
@@ -26,6 +27,8 @@ class ChatPanel(RichLog):
     """
 
     BORDER_TITLE = "Chat"
+    # Standard indentation for assistant messages (left padding in chars)
+    ASSISTANT_INDENT = 40
 
     def __init__(self, session_name: str = "default", **kwargs):
         """Initialize the chat panel with Rich markup enabled.
@@ -180,8 +183,7 @@ class ChatPanel(RichLog):
             md = self._create_left_aligned_markdown(self._assistant_buffer)
 
             # Add left padding to create the indented right-side layout
-            # Using 40 chars for the left margin
-            padded_md = Padding(md, (0, 0, 0, 40))
+            padded_md = self._indent_for_assistant(md)
 
             # Write the formatted markdown
             self.write(padded_md)
@@ -205,7 +207,7 @@ class ChatPanel(RichLog):
 
         # Render as markdown with custom header handling to prevent centering
         md = self._create_left_aligned_markdown(text)
-        padded_md = Padding(md, (0, 0, 0, 40))
+        padded_md = self._indent_for_assistant(md)
         self.write(padded_md)
         self.write("\n\n")
 
@@ -219,7 +221,7 @@ class ChatPanel(RichLog):
             theme: Color theme for syntax highlighting
         """
         syntax = Syntax(code, language, theme=theme, line_numbers=True)
-        padded_syntax = Padding(syntax, (0, 0, 0, 40))
+        padded_syntax = self._indent_for_assistant(syntax)
         self.write(padded_syntax)
         self.write("\n")
 
@@ -231,7 +233,7 @@ class ChatPanel(RichLog):
             markdown_text: Markdown-formatted text
         """
         md = Markdown(markdown_text, justify="left")
-        padded_md = Padding(md, (0, 0, 0, 40))
+        padded_md = self._indent_for_assistant(md)
         self.write(padded_md)
         self.write("\n")
 
@@ -255,6 +257,18 @@ class ChatPanel(RichLog):
     def clear_chat(self):
         """Clear all chat history."""
         self.clear()
+
+    def _indent_for_assistant(self, renderable) -> Padding:
+        """
+        Apply standard indentation for assistant messages.
+
+        Args:
+            renderable: Rich renderable to indent
+
+        Returns:
+            Padded renderable with left indentation
+        """
+        return Padding(renderable, (0, 0, 0, self.ASSISTANT_INDENT))
 
     def _create_left_aligned_markdown(self, markdown_text: str):
         """
@@ -306,7 +320,7 @@ class ChatPanel(RichLog):
                     renderables.extend(self._process_markdown_section(markdown_section))
 
             # Render code block with Syntax highlighting
-            # Note: Padding is applied at the Group level in finish_assistant_message()
+            # Note: Padding is applied via _indent_for_assistant() in finish_assistant_message()
             syntax = Syntax(code, language, theme="monokai", line_numbers=True)
             renderables.append(syntax)
             renderables.append(Text())  # Add spacing after code block

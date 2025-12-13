@@ -144,7 +144,15 @@ class NexusAutoComplete(AutoComplete):
         self._rebuild_options(self._target_state, search_string)
 
     def _align_to_target(self) -> None:
-        """Align dropdown above the cursor when possible."""
+        """
+        Align dropdown above the cursor when possible.
+        
+        This custom implementation provides UX enhancement by preferring to position
+        the dropdown above the cursor, falling back to below if there's insufficient space.
+        
+        Note: With textual-autocomplete 4.0.6, consider testing if the default
+        alignment behavior is sufficient. If acceptable, this override can be removed.
+        """
         dropdown = self.option_list
         width, height = dropdown.outer_size
         if width == 0 and height == 0:

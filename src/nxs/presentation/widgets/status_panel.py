@@ -2,15 +2,16 @@
 StatusPanel - A scrollable status display for tool calls and results.
 """
 
-from textual.widgets import RichLog
-from rich.panel import Panel
-from rich.table import Table
-from rich.json import JSON
-from rich.console import Group
-from rich.syntax import Syntax
-from rich.text import Text
 import json
 from typing import Any, Iterable, Tuple
+
+from rich.console import Group
+from rich.json import JSON
+from rich.panel import Panel
+from rich.syntax import Syntax
+from rich.table import Table
+from rich.text import Text
+from textual.widgets import RichLog
 
 
 class StatusPanel(RichLog):
@@ -269,9 +270,6 @@ class StatusPanel(RichLog):
                 - tool_summary: Dict with successful/total tools
                 - knowledge_gaps: List of identified gaps
         """
-        from rich.panel import Panel
-        from rich.text import Text
-
         # Build summary text
         summary_parts = []
 
@@ -325,8 +323,6 @@ class StatusPanel(RichLog):
             completed_steps: List of completed step descriptions
             pending_steps: List of pending step descriptions
         """
-        from rich.table import Table
-
         table = Table(title="Plan Progress", show_header=True, header_style="bold cyan")
         table.add_column("Status", style="white")
         table.add_column("Step", style="cyan")
@@ -359,8 +355,6 @@ class StatusPanel(RichLog):
                 - execution_time_ms: Execution time in milliseconds
                 - result: Tool result (truncated)
         """
-        from rich.table import Table
-
         table = Table(
             title="Tool Execution Log", show_header=True, header_style="bold cyan"
         )

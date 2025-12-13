@@ -5,15 +5,16 @@ Combines the previous StatusPanel and ReasoningTracePanel into a single,
 chronological view of the agent's thinking process.
 """
 
-from textual.widgets import RichLog
-from rich.panel import Panel
-from rich.table import Table
-from rich.json import JSON
-from rich.console import Group
-from rich.syntax import Syntax
-from rich.text import Text
 import json
-from typing import Any, Iterable, Tuple, Optional
+from typing import Any, Iterable, Optional, Tuple
+
+from rich.console import Group
+from rich.json import JSON
+from rich.panel import Panel
+from rich.syntax import Syntax
+from rich.table import Table
+from rich.text import Text
+from textual.widgets import RichLog
 
 from nxs.application.reasoning.types import ComplexityAnalysis, ExecutionStrategy, EvaluationResult
 
