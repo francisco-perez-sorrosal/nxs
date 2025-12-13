@@ -8,7 +8,11 @@
       "Bash(timeout 10 pixi run start:*)",
       "Bash(reset)",
       "Bash(timeout 8 pixi run start:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:textual.textualize.io)",
+      "Bash(tput reset:*)"
     ],
     "deny": [],
     "ask": []

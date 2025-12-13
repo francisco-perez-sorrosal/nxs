@@ -491,7 +491,7 @@ class ThinkingPanel(RichLog):
     def _render_code_snippet(self, code: str) -> Syntax:
         """Render code with syntax highlighting."""
         normalized = self._normalize_multiline_text(code).strip("\n")
-        return Syntax(normalized, "python", theme="monokai", line_numbers=True)
+        return Syntax(normalized, "python", theme="monokai", line_numbers=True, padding=(1, 1))
 
     def _extract_code_snippets(self, data: Any, path: str = "") -> Iterable[Tuple[str, str]]:
         """Extract Python code snippets from data structures."""

@@ -22,6 +22,7 @@ from nxs.presentation.completion import (
     compute_search_string,
     should_show_dropdown as helper_should_show_dropdown,
 )
+from nxs.presentation.completion.schema_cache import PromptSchemaCache
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -44,25 +45,7 @@ class NexusAutoComplete(AutoComplete):
         self.input_widget = input_widget
         self.prompt_service = prompt_service
 
-        # Create inline schema cache for ArgumentSuggestionGenerator
-        # This provides a Mapping[str, tuple[Prompt, str]] interface over PromptService
-        class PromptSchemaCache:
-            """Lightweight mapping wrapper over PromptService for schema access."""
-
-            def __init__(self, service: "PromptService"):
-                self._service = service
-
-            def __getitem__(self, key: str) -> tuple[Any, str]:
-                cached = self._service.get_cached_schema(key)
-                if cached is None:
-                    raise KeyError(key)
-                return cached
-
-            def __contains__(self, key: object) -> bool:
-                if not isinstance(key, str):
-                    return False
-                return self._service.get_cached_schema(key) is not None
-
+        # Create schema cache for ArgumentSuggestionGenerator
         schema_cache: Mapping[str, tuple[Any, str]] = PromptSchemaCache(prompt_service)  # type: ignore[assignment]
         self._argument_generator = ArgumentSuggestionGenerator(schema_cache)
 
